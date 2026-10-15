@@ -1,6 +1,6 @@
 module nabka
 
-go 1.27.2
+go 1.27
 
 require (
 	github.com/andybalholm/brotli v1.1.1 // indirect
