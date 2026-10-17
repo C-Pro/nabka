@@ -1,6 +1,16 @@
 import { GAME_STATE, applyPOICompletion, startNpcDialogueSession, advanceNpcDialogue, resolveZoneName } from './state.js';
 import { SoundManager } from './audio.js';
 
+export function substitutePlayerMentions(text, username = (typeof GAME_STATE !== 'undefined' ? GAME_STATE.username : 'Игрок')) {
+    if (!text) return '';
+    const user = username || (typeof GAME_STATE !== 'undefined' ? GAME_STATE.username : 'Игрок');
+    return String(text)
+        .replaceAll('@cpro29a', '@' + user)
+        .replaceAll('cpro29a', user)
+        .replaceAll('@{username}', '@' + user)
+        .replaceAll('{username}', user);
+}
+
 export function showToast(text, theme = 'sky') {
     if (typeof document === 'undefined') return;
     const container = document.getElementById('toast-container');
@@ -12,7 +22,7 @@ export function showToast(text, theme = 'sky') {
         emerald: 'border-emerald-400 text-emerald-200'
     };
     toast.className = `hud-glass px-4 py-2 rounded-xl border-l-4 ${borderColors[theme] || borderColors.sky} text-xs sm:text-sm font-bold shadow-2xl transition-all duration-300`;
-    toast.textContent = text;
+    toast.textContent = substitutePlayerMentions(text);
     container.appendChild(toast);
 
     setTimeout(() => {
@@ -29,7 +39,7 @@ export function triggerPlayerSpeech(text) {
     if (typeof document === 'undefined') return;
     const bubble = document.getElementById('player-speech-bubble');
     if (!bubble) return;
-    bubble.textContent = text;
+    bubble.textContent = substitutePlayerMentions(text);
     bubble.classList.remove('hidden');
     clearTimeout(bubble._timer);
     bubble._timer = setTimeout(() => bubble.classList.add('hidden'), 3800);
@@ -222,40 +232,50 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
 
     const nametag = document.getElementById('player-nametag');
     if (nametag) {
-        const playerDist = camera.position.distanceTo(playerPos);
-        const pMetrics = getLabelDistanceMetrics(playerDist);
-        const headWorldPos = playerPos.clone().add(new THREE.Vector3(0, GAME_STATE.inVehicle ? 2.4 : 2.95, 0));
-        headWorldPos.project(camera);
-
-        if (pMetrics.visible && headWorldPos.z < 1) {
-            const sx = (headWorldPos.x * 0.5 + 0.5) * width;
-            const sy = (-headWorldPos.y * 0.5 + 0.5) * height;
-            nametag.style.display = '';
-            nametag.style.transform = `translate3d(${sx}px, ${sy}px, 0) translate(-50%, -100%)`;
-            nametag.style.opacity = pMetrics.opacity;
-            nametag.style.zIndex = pMetrics.zIndex;
-        } else {
+        if (!GAME_STATE.isConnected) {
             nametag.style.opacity = '0';
             nametag.style.display = 'none';
+        } else {
+            const playerDist = camera.position.distanceTo(playerPos);
+            const pMetrics = getLabelDistanceMetrics(playerDist);
+            const headWorldPos = playerPos.clone().add(new THREE.Vector3(0, GAME_STATE.inVehicle ? 2.4 : 2.95, 0));
+            headWorldPos.project(camera);
+
+            if (pMetrics.visible && headWorldPos.z < 1) {
+                const sx = (headWorldPos.x * 0.5 + 0.5) * width;
+                const sy = (-headWorldPos.y * 0.5 + 0.5) * height;
+                nametag.style.display = '';
+                nametag.style.transform = `translate3d(${sx}px, ${sy}px, 0) translate(-50%, -100%)`;
+                nametag.style.opacity = pMetrics.opacity;
+                nametag.style.zIndex = pMetrics.zIndex;
+            } else {
+                nametag.style.opacity = '0';
+                nametag.style.display = 'none';
+            }
         }
     }
 
     const dunyaTag = document.getElementById('dunya-nametag');
     if (dunyaTag && dunya && dunya.group) {
-        const dunyaDist = camera.position.distanceTo(dunya.position);
-        const dMetrics = getLabelDistanceMetrics(dunyaDist);
-        const dunyaHeadPos = dunya.position.clone().add(new THREE.Vector3(0, 1.05, 0));
-        dunyaHeadPos.project(camera);
-        if (dMetrics.visible && dunyaHeadPos.z < 1 && GAME_STATE.cameraMode !== 3) {
-            const dxScreen = (dunyaHeadPos.x * 0.5 + 0.5) * width;
-            const dyScreen = (-dunyaHeadPos.y * 0.5 + 0.5) * height;
-            dunyaTag.style.display = '';
-            dunyaTag.style.transform = `translate3d(${dxScreen}px, ${dyScreen}px, 0) translate(-50%, -100%)`;
-            dunyaTag.style.opacity = dMetrics.opacity;
-            dunyaTag.style.zIndex = dMetrics.zIndex;
-        } else {
+        if (!GAME_STATE.isConnected) {
             dunyaTag.style.opacity = '0';
             dunyaTag.style.display = 'none';
+        } else {
+            const dunyaDist = camera.position.distanceTo(dunya.position);
+            const dMetrics = getLabelDistanceMetrics(dunyaDist);
+            const dunyaHeadPos = dunya.position.clone().add(new THREE.Vector3(0, 1.05, 0));
+            dunyaHeadPos.project(camera);
+            if (dMetrics.visible && dunyaHeadPos.z < 1 && GAME_STATE.cameraMode !== 3) {
+                const dxScreen = (dunyaHeadPos.x * 0.5 + 0.5) * width;
+                const dyScreen = (-dunyaHeadPos.y * 0.5 + 0.5) * height;
+                dunyaTag.style.display = '';
+                dunyaTag.style.transform = `translate3d(${dxScreen}px, ${dyScreen}px, 0) translate(-50%, -100%)`;
+                dunyaTag.style.opacity = dMetrics.opacity;
+                dunyaTag.style.zIndex = dMetrics.zIndex;
+            } else {
+                dunyaTag.style.opacity = '0';
+                dunyaTag.style.display = 'none';
+            }
         }
     }
 
@@ -451,7 +471,7 @@ export function checkProximityInteractions({ playerPos, npcs, interactables, dun
                 name: 'Мальтийская болонка Дуня',
                 prompt: 'Погладить болонку Дуню 🐾🤍 (+Вайб)',
                 onInteract: () => {
-                    dunya.hopAndBark('Тяф! Люблю @cpro29a! 🐾💖');
+                    dunya.hopAndBark(`Тяф! Люблю @${GAME_STATE.username || 'Игрок'}! 🐾💖`);
                     triggerPlayerSpeech('Хорошая девочка, Дуня! 🐾🤍');
                     completePOI('dunya_pet', '🐾 Ты погладил мальтийскую болонку Дуню на Набке!', 250);
                 }
@@ -469,7 +489,7 @@ export function checkProximityInteractions({ playerPos, npcs, interactables, dun
             promptText.textContent = `Выйти из ${GAME_STATE.inVehicle.name} на Набку`;
         } else if (closest) {
             promptEl.classList.remove('hidden');
-            promptText.textContent = closest.prompt;
+            promptText.textContent = substitutePlayerMentions(closest.prompt);
         } else {
             promptEl.classList.add('hidden');
         }

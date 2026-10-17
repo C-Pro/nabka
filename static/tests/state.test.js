@@ -8,11 +8,15 @@ import {
     startNpcDialogueSession,
     advanceNpcDialogue,
     computePedestrianAnim,
-    deriveDefaultWsUrl
+    deriveDefaultWsUrl,
+    RUSSIAN_NAMES,
+    VLADIVOSTOK_LOCATION_SUFFIXES,
+    generateRandomVladivostokName,
+    getInitialUsername
 } from '../js/state.js';
 import { World, getVladivostokTime, getTimeOfDayPhase } from '../js/world.js';
 import { MultiplayerClient, showChatBox, hideChatBox, scheduleChatAutoHide } from '../js/network.js';
-import { getLabelDistanceMetrics } from '../js/ui.js';
+import { getLabelDistanceMetrics, substitutePlayerMentions } from '../js/ui.js';
 import { selectValidSpawnPoint, Player, revalidatePlayerSpawn } from '../js/entities.js';
 import { clearMovementInput } from '../js/input.js';
 import worldMap from '../data/world_map.json';
@@ -109,7 +113,7 @@ describe('Game State & Pure Logic', () => {
 
 describe('MultiplayerClient state replication', () => {
     beforeEach(() => {
-        GAME_STATE.username = 'cpro29a';
+        GAME_STATE.username = 'Костян-с-Луговой';
         GAME_STATE.inVehicle = null;
         MultiplayerClient.remotePlayers.clear();
         MultiplayerClient.onlineUsers.clear();
@@ -568,6 +572,184 @@ describe('Multiplayer Chat collapse, show/hide, and auto-hide', () => {
         // Since input is focused, chat must remain open
         expect(mockElements['mp-chat-panel'].classList.contains('hidden')).toBe(false);
         expect(GAME_STATE.chatCollapsed).toBe(false);
+    });
+});
+
+describe('Vladivostok Name Generation and Placeholder Handling', () => {
+    test('RUSSIAN_NAMES has exactly 50 common names (25 male, 25 female) all capitalized', () => {
+        expect(Array.isArray(RUSSIAN_NAMES.male)).toBe(true);
+        expect(Array.isArray(RUSSIAN_NAMES.female)).toBe(true);
+        expect(RUSSIAN_NAMES.male.length).toBe(25);
+        expect(RUSSIAN_NAMES.female.length).toBe(25);
+
+        const allNames = [...RUSSIAN_NAMES.male, ...RUSSIAN_NAMES.female];
+        expect(allNames.length).toBe(50);
+
+        for (const name of allNames) {
+            expect(typeof name).toBe('string');
+            expect(name.length).toBeGreaterThan(1);
+            // Verify first character is uppercase
+            expect(name[0]).toBe(name[0].toUpperCase());
+        }
+
+        // Verify key sample names from prompt requirements
+        expect(RUSSIAN_NAMES.male).toContain('Костян');
+        expect(RUSSIAN_NAMES.female).toContain('Люба');
+    });
+
+    test('VLADIVOSTOK_LOCATION_SUFFIXES contains local area names with prefixes', () => {
+        expect(Array.isArray(VLADIVOSTOK_LOCATION_SUFFIXES)).toBe(true);
+        expect(VLADIVOSTOK_LOCATION_SUFFIXES.length).toBeGreaterThanOrEqual(20);
+
+        for (const suffix of VLADIVOSTOK_LOCATION_SUFFIXES) {
+            expect(typeof suffix).toBe('string');
+            expect(suffix.startsWith('-')).toBe(true);
+        }
+
+        // Suffixes mentioned in user requirements
+        expect(VLADIVOSTOK_LOCATION_SUFFIXES).toContain('-с-Чуркина');
+        expect(VLADIVOSTOK_LOCATION_SUFFIXES).toContain('-со-Спортивки');
+        expect(VLADIVOSTOK_LOCATION_SUFFIXES).toContain('-из-Центра');
+        expect(VLADIVOSTOK_LOCATION_SUFFIXES).toContain('-с-Эгершельда');
+        expect(VLADIVOSTOK_LOCATION_SUFFIXES).toContain('-с-Зелёнки');
+        expect(VLADIVOSTOK_LOCATION_SUFFIXES).toContain('-с-Луговой');
+        expect(VLADIVOSTOK_LOCATION_SUFFIXES).toContain('-с-Первака');
+    });
+
+    test('generateRandomVladivostokName generates capitalized name + location suffix', () => {
+        // Deterministic call with custom random function
+        const deterministicName = generateRandomVladivostokName(() => 0);
+        expect(deterministicName).toBe(RUSSIAN_NAMES.male[0] + VLADIVOSTOK_LOCATION_SUFFIXES[0]);
+
+        // Default Math.random call
+        const randomName = generateRandomVladivostokName();
+        expect(typeof randomName).toBe('string');
+        const parts = randomName.split('-');
+        expect(parts.length).toBeGreaterThanOrEqual(2);
+        const allNames = [...RUSSIAN_NAMES.male, ...RUSSIAN_NAMES.female];
+        expect(allNames).toContain(parts[0]);
+    });
+
+    test('getInitialUsername loads from localStorage if present', () => {
+        const originalStorage = globalThis.localStorage;
+        const fakeStorage = new Map();
+        globalThis.localStorage = {
+            getItem: (k) => fakeStorage.get(k) || null,
+            setItem: (k, v) => fakeStorage.set(k, String(v)),
+            removeItem: (k) => fakeStorage.delete(k),
+            clear: () => fakeStorage.clear()
+        };
+
+        try {
+            fakeStorage.set('nabka_username', 'Люба-с-Первака');
+            expect(getInitialUsername()).toBe('Люба-с-Первака');
+
+            fakeStorage.delete('nabka_username');
+            fakeStorage.set('nabka_mp_username', 'Костян-с-Луговой');
+            expect(getInitialUsername()).toBe('Костян-с-Луговой');
+
+            fakeStorage.clear();
+            const fallback = getInitialUsername();
+            expect(typeof fallback).toBe('string');
+            expect(fallback.length).toBeGreaterThan(3);
+        } finally {
+            globalThis.localStorage = originalStorage;
+        }
+    });
+
+    test('substitutePlayerMentions replaces @cpro29a, cpro29a, @{username}, and {username}', () => {
+        const username = 'Костян-с-Луговой';
+        expect(substitutePlayerMentions('Привет от @cpro29a!', username)).toBe('Привет от @Костян-с-Луговой!');
+        expect(substitutePlayerMentions('Взять Раф для @{username} (+Спринт)', username)).toBe('Взять Раф для @Костян-с-Луговой (+Спринт)');
+        expect(substitutePlayerMentions('Фото {username} у тигра', username)).toBe('Фото Костян-с-Луговой у тигра');
+        expect(substitutePlayerMentions('Люблю cpro29a на Набке', username)).toBe('Люблю Костян-с-Луговой на Набке');
+        expect(substitutePlayerMentions('', username)).toBe('');
+        expect(substitutePlayerMentions(null, username)).toBe('');
+    });
+
+    test('createGameState initializes username from overrides or getInitialUsername', () => {
+        const customState = createGameState({ username: 'Артём-с-Шаморы' });
+        expect(customState.username).toBe('Артём-с-Шаморы');
+
+        const defaultState = createGameState({});
+        expect(typeof defaultState.username).toBe('string');
+        expect(defaultState.username.length).toBeGreaterThan(0);
+    });
+
+    test('MultiplayerClient.initUI sets random placeholder on first run, saves on submit, and restores on subsequent run', () => {
+        const originalDocument = globalThis.document;
+        const originalStorage = globalThis.localStorage;
+        const fakeStorage = new Map();
+
+        globalThis.localStorage = {
+            getItem: (k) => fakeStorage.get(k) || null,
+            setItem: (k, v) => fakeStorage.set(k, String(v)),
+            removeItem: (k) => fakeStorage.delete(k),
+            clear: () => fakeStorage.clear()
+        };
+
+        const listeners = {};
+        const elements = {
+            'mp-login-form': {
+                addEventListener: (evt, cb) => { listeners['login-submit'] = cb; }
+            },
+            'mp-username-input': {
+                placeholder: '',
+                value: '',
+                addEventListener: (evt, cb) => { listeners['input-' + evt] = cb; }
+            },
+            'header-username': { textContent: '' },
+            'local-nametag-text': { textContent: '' },
+            'hud-card-username': { textContent: '' },
+            'help-modal-username': { textContent: '' }
+        };
+
+        globalThis.document = {
+            getElementById: (id) => elements[id] || null,
+            addEventListener: () => {}
+        };
+
+        try {
+            // First run: no localStorage
+            MultiplayerClient.initUI();
+
+            const firstGeneratedName = elements['mp-username-input'].value;
+            expect(typeof firstGeneratedName).toBe('string');
+            expect(firstGeneratedName.length).toBeGreaterThan(3);
+            expect(elements['mp-username-input'].placeholder).toBe(`Например: ${firstGeneratedName}`);
+            expect(elements['header-username'].textContent).toBe('@' + firstGeneratedName);
+            expect(elements['local-nametag-text'].textContent).toBe('@' + firstGeneratedName);
+
+            // User types a different Vladivostok name
+            elements['mp-username-input'].value = 'Люба-с-Первака';
+            if (listeners['input-input']) listeners['input-input']();
+            expect(elements['header-username'].textContent).toBe('@Люба-с-Первака');
+
+            // Form is submitted
+            let connectedName = null;
+            const originalConnect = MultiplayerClient.connect;
+            MultiplayerClient.connect = (name) => {
+                connectedName = name;
+                fakeStorage.set('nabka_username', name);
+                fakeStorage.set('nabka_mp_username', name);
+            };
+
+            const fakeEvt = { preventDefault: () => {} };
+            listeners['login-submit'](fakeEvt);
+            expect(connectedName).toBe('Люба-с-Первака');
+            expect(fakeStorage.get('nabka_username')).toBe('Люба-с-Первака');
+
+            // Subsequent visit: localStorage has 'Люба-с-Первака'
+            elements['mp-username-input'].value = '';
+            MultiplayerClient.initUI();
+            expect(elements['mp-username-input'].value).toBe('Люба-с-Первака');
+            expect(elements['header-username'].textContent).toBe('@Люба-с-Первака');
+
+            MultiplayerClient.connect = originalConnect;
+        } finally {
+            globalThis.document = originalDocument;
+            globalThis.localStorage = originalStorage;
+        }
     });
 });
 

@@ -91,7 +91,7 @@ export const TextureFactory = {
         return tex;
     },
 
-    createCustomShirtTexture(username = 'cpro29a', accentHex = '#38bdf8') {
+    createCustomShirtTexture(username = 'Игрок', accentHex = '#38bdf8') {
         const canvas = document.createElement('canvas');
         canvas.width = 256;
         canvas.height = 256;
@@ -105,10 +105,12 @@ export const TextureFactory = {
         ctx.fillStyle = '#f59e0b';
         ctx.fillRect(0, 52, 256, 6);
 
+        const displayUser = '@' + String(username || 'Игрок');
         ctx.fillStyle = accentHex;
-        ctx.font = '900 28px monospace';
+        const fontSize = displayUser.length > 16 ? 18 : (displayUser.length > 12 ? 22 : 28);
+        ctx.font = `900 ${fontSize}px monospace`;
         ctx.textAlign = 'center';
-        ctx.fillText('@' + String(username).slice(0, 12), 128, 125);
+        ctx.fillText(displayUser, 128, 125);
 
         ctx.fillStyle = '#f8fafc';
         ctx.font = '700 20px sans-serif';
@@ -117,8 +119,12 @@ export const TextureFactory = {
         return new THREE.CanvasTexture(canvas);
     },
 
-    createCpro29aShirtTexture() {
-        return this.createCustomShirtTexture('cpro29a', '#38bdf8');
+    createPlayerShirtTexture(username = 'Игрок', accentHex = '#38bdf8') {
+        return this.createCustomShirtTexture(username, accentHex);
+    },
+
+    createCpro29aShirtTexture(username = 'Игрок') {
+        return this.createCustomShirtTexture(username, '#38bdf8');
     },
 
     createProceduralSkyMaterial() {

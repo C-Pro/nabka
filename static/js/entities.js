@@ -30,7 +30,7 @@ export const Player = {
         this.group.position.copy(this.position);
         this.group.rotation.y = this.rotationY;
 
-        const shirtTex = TextureFactory.createCpro29aShirtTexture();
+        const shirtTex = TextureFactory.createPlayerShirtTexture(GAME_STATE.username || 'Игрок', '#38bdf8');
         const torsoMat = new THREE.MeshStandardMaterial({ map: shirtTex, roughness: 0.5 });
         const skinMat = new THREE.MeshStandardMaterial({ color: 0xf1c27d, roughness: 0.6 });
         const jeansMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7 });
@@ -272,7 +272,7 @@ export const Player = {
     emote() {
         if (GAME_STATE.inVehicle || isGameplayInputSuspended()) return;
         this.emoteTimer = 3.2;
-        triggerPlayerSpeech('Владивосток, салют от @cpro29a! 🔥🌊');
+        triggerPlayerSpeech(`Владивосток, салют от @${GAME_STATE.username || 'Игрок'}! 🔥🌊`);
         SoundManager.playActionSound('cash');
         Dunya.hopAndBark('Тяф-тяф! Мы на Набке! 🐾🎀');
     }

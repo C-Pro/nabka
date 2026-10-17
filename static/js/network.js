@@ -1,5 +1,5 @@
 import { MsgPackCodec } from './msgpack.js';
-import { GAME_STATE, computePedestrianAnim, deriveDefaultWsUrl } from './state.js';
+import { GAME_STATE, computePedestrianAnim, deriveDefaultWsUrl, generateRandomVladivostokName, getInitialUsername } from './state.js';
 import { SoundManager } from './audio.js';
 import { TextureFactory } from './textures.js';
 import { World } from './world.js';
@@ -113,16 +113,45 @@ export const MultiplayerClient = {
         }
         this.authMode = 'query';
 
-        // Restore last used username if available
+        // Restore last used username if available, or generate random placeholder name
+        let initialName = null;
         try {
-            const savedName = localStorage.getItem('nabka_mp_username');
-            if (savedName && usernameInput) usernameInput.value = savedName;
+            const saved = localStorage.getItem('nabka_username') || localStorage.getItem('nabka_mp_username');
+            if (saved && saved.trim()) initialName = saved.trim();
         } catch (e) {}
+
+        const randomPlaceholder = generateRandomVladivostokName();
+        const effectiveName = initialName || randomPlaceholder;
+        GAME_STATE.username = effectiveName;
+
+        const hUser = document.getElementById('header-username');
+        const lTag = document.getElementById('local-nametag-text');
+        const cUser = document.getElementById('hud-card-username');
+        const helpUser = document.getElementById('help-modal-username');
+        if (hUser) hUser.textContent = '@' + effectiveName;
+        if (lTag) lTag.textContent = '@' + effectiveName;
+        if (cUser) cUser.textContent = '@' + effectiveName;
+        if (helpUser) helpUser.textContent = '@' + effectiveName;
+
+        if (usernameInput) {
+            usernameInput.placeholder = `Например: ${randomPlaceholder}`;
+            usernameInput.value = initialName ? initialName : randomPlaceholder;
+            usernameInput.addEventListener('input', () => {
+                const preview = usernameInput.value.trim() || randomPlaceholder;
+                if (hUser) hUser.textContent = '@' + preview;
+                if (lTag) lTag.textContent = '@' + preview;
+                if (cUser) cUser.textContent = '@' + preview;
+                if (helpUser) helpUser.textContent = '@' + preview;
+            });
+        }
 
         if (loginForm) {
             loginForm.addEventListener('submit', (e) => {
                 e.preventDefault();
-                const rawName = usernameInput ? usernameInput.value.trim() : '';
+                let rawName = usernameInput ? usernameInput.value.trim() : '';
+                if (!rawName) {
+                    rawName = usernameInput ? usernameInput.placeholder.replace(/^Например:\s*/, '').trim() : '';
+                }
                 if (!rawName || rawName.length > 32) {
                     this.showLoginError('Имя должно быть от 1 до 32 символов');
                     return;
@@ -184,16 +213,20 @@ export const MultiplayerClient = {
             });
         }
 
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible' && GAME_STATE.isConnected) {
-                this.sendMoveSnapshot(true);
-            }
-        });
-        window.addEventListener('focus', () => {
-            if (GAME_STATE.isConnected) {
-                this.sendMoveSnapshot(true);
-            }
-        });
+        if (typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && GAME_STATE.isConnected) {
+                    this.sendMoveSnapshot(true);
+                }
+            });
+        }
+        if (typeof window !== 'undefined') {
+            window.addEventListener('focus', () => {
+                if (GAME_STATE.isConnected) {
+                    this.sendMoveSnapshot(true);
+                }
+            });
+        }
     },
 
     showLoginError(msg, detail = '') {
@@ -248,11 +281,13 @@ export const MultiplayerClient = {
             const hUser = document.getElementById('header-username');
             const lTag = document.getElementById('local-nametag-text');
             const cUser = document.getElementById('hud-card-username');
+            const helpUser = document.getElementById('help-modal-username');
             const dot = document.getElementById('net-status-dot');
             const overlay = document.getElementById('mp-login-overlay');
             if (hUser) hUser.textContent = '@' + username;
             if (lTag) lTag.textContent = '@' + username;
             if (cUser) cUser.textContent = '@' + username;
+            if (helpUser) helpUser.textContent = '@' + username;
             if (dot) dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-ping';
             if (overlay) overlay.classList.add('hidden');
         }
@@ -291,6 +326,10 @@ export const MultiplayerClient = {
 
         this.isLocalBridge = true;
         GAME_STATE.username = username;
+        try {
+            localStorage.setItem('nabka_username', username);
+            localStorage.setItem('nabka_mp_username', username);
+        } catch (e) {}
 
         this.activateSessionUI(username, `🌐 Локальный MsgPack-мост активирован для @${username} (синхронизация между вкладками + боты Набки)`);
 
@@ -408,7 +447,10 @@ export const MultiplayerClient = {
         }
 
         GAME_STATE.username = username;
-        try { localStorage.setItem('nabka_mp_username', username); } catch (e) {}
+        try {
+            localStorage.setItem('nabka_username', username);
+            localStorage.setItem('nabka_mp_username', username);
+        } catch (e) {}
 
         const cleanBaseUrl = this.serverUrl.replace(/\?.*$/, '');
         const useRegisterPacket = isFallbackAttempt ? (this.authMode === 'query') : (this.authMode === 'register');

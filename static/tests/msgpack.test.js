@@ -3,7 +3,7 @@ import { MsgPackCodec } from '../js/msgpack.js';
 
 describe('MsgPackCodec', () => {
     test('encodes and decodes register message', () => {
-        const msg = { type: 'register', username: 'cpro29a' };
+        const msg = { type: 'register', username: 'Костян-с-Луговой' };
         const buf = MsgPackCodec.encode(msg);
         expect(buf).toBeInstanceOf(ArrayBuffer);
         const decoded = MsgPackCodec.decode(buf);
@@ -13,7 +13,7 @@ describe('MsgPackCodec', () => {
     test('encodes and decodes pedestrian move with IEEE-754 float64 coordinates', () => {
         const msg = {
             type: 'move',
-            username: 'cpro29a',
+            username: 'Костян-с-Луговой',
             mode: 'pedestrian',
             x: 12.345,
             y: 0,

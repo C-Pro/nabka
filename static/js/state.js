@@ -5,10 +5,74 @@
 
 export const DEFAULT_WALK_PITCH = 0.56; // 2/3 top-down looking forward angle (~32 deg)
 
+export const RUSSIAN_NAMES = {
+    male: [
+        'Костян', 'Саня', 'Димон', 'Вован', 'Лёха',
+        'Артём', 'Макс', 'Миша', 'Даня', 'Егор',
+        'Ваня', 'Игорь', 'Илья', 'Кирилл', 'Никита',
+        'Олег', 'Паша', 'Рома', 'Серёга', 'Тима',
+        'Ярик', 'Витя', 'Вадим', 'Богдан', 'Денис'
+    ],
+    female: [
+        'Люба', 'Алина', 'Алиса', 'Настя', 'Аня',
+        'Лера', 'Вероника', 'Вика', 'Даша', 'Диана',
+        'Женя', 'Катя', 'Лена', 'Ксюша', 'Марина',
+        'Маша', 'Надя', 'Наташа', 'Оксана', 'Оля',
+        'Полина', 'Света', 'Соня', 'Юля', 'Кристина'
+    ]
+};
+
+export const VLADIVOSTOK_LOCATION_SUFFIXES = [
+    '-с-Чуркина',
+    '-со-Спортивки',
+    '-из-Центра',
+    '-с-Эгершельда',
+    '-с-Зелёнки',
+    '-с-Луговой',
+    '-с-Первака',
+    '-с-Тихой',
+    '-с-Второй-Речки',
+    '-с-БАМа',
+    '-со-Снеговой',
+    '-с-Шаморы',
+    '-с-Зари',
+    '-с-Патрокла',
+    '-с-Седанки',
+    '-с-Окатовой',
+    '-с-Фуникулёра',
+    '-с-Миллионки',
+    '-с-Нейбута',
+    '-с-Баляйки',
+    '-с-Третьей-Рабочей',
+    '-с-Калинина',
+    '-с-Русского',
+    '-с-Улисса',
+    '-с-Гоголя'
+];
+
+export function generateRandomVladivostokName(randomFn = Math.random) {
+    const allNames = [...RUSSIAN_NAMES.male, ...RUSSIAN_NAMES.female];
+    const nameIndex = Math.floor(randomFn() * allNames.length);
+    const suffixIndex = Math.floor(randomFn() * VLADIVOSTOK_LOCATION_SUFFIXES.length);
+    const name = allNames[Math.max(0, Math.min(allNames.length - 1, nameIndex))];
+    const suffix = VLADIVOSTOK_LOCATION_SUFFIXES[Math.max(0, Math.min(VLADIVOSTOK_LOCATION_SUFFIXES.length - 1, suffixIndex))];
+    return `${name}${suffix}`;
+}
+
+export function getInitialUsername() {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const saved = localStorage.getItem('nabka_username') || localStorage.getItem('nabka_mp_username');
+            if (saved && saved.trim()) return saved.trim();
+        }
+    } catch (e) {}
+    return generateRandomVladivostokName();
+}
+
 export function createGameState(overrides = {}) {
     const isNarrowViewport = typeof window !== 'undefined' ? window.innerWidth < 640 : false;
     return {
-        username: 'cpro29a',
+        username: overrides.username || getInitialUsername(),
         isConnected: false,
         lastPacketSentAt: 0,
         lastActiveEventAt: 0,

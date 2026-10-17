@@ -370,7 +370,7 @@ export const World = {
                 onInteract: () => {
                     GAME_STATE.health = 100;
                     GAME_STATE.stamina = 100;
-                    completePOI(s.id === 'pyanse' ? 'pyanse' : s.id, `🥟 ${s.title}: Здоровье и бодрость @cpro29a полностью восстановлены!`, s.reward);
+                    completePOI(s.id === 'pyanse' ? 'pyanse' : s.id, `🥟 ${s.title}: Здоровье и бодрость @${GAME_STATE.username || 'Игрок'} полностью восстановлены!`, s.reward);
                     triggerPlayerSpeech(s.speech);
                 }
             });
