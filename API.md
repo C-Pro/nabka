@@ -290,14 +290,18 @@ Receiving `ping` refreshes the 30-second application inactivity deadline on the 
 
 ---
 
-## 4. HTTP Static File Server
+## 4. HTTP Static File Server & Versioning
 
 The server embeds all assets in the `static/` directory directly into the compiled Go binary using Go standard library `embed.FS` (`//go:embed all:static`), requiring zero external filesystem assets at runtime.
 
 - **Root Endpoint**: `GET /` automatically serves `static/index.html`.
 - **Direct Asset Requests**: Any file under `static/` is served at its relative path (e.g., `GET /index.html`, `GET /css/...`, `GET /js/...`).
+- **Favicons**: Serves `GET /favicon.ico` (`image/x-icon`) and `GET /favicon.svg` (`image/svg+xml`).
+- **Service Worker Neutralizer**: Serves `GET /sw.js` (`application/javascript`) with self-unregistering logic to immediately purge legacy caches in users' browsers.
+- **Version Endpoint**: `GET /api/version` (or `/version`) returns JSON `{"version": "<build-id>", "status": "ok"}` used for client auto-update checks.
+- **Cache-Control & Anti-Staleness**: All static endpoints send aggressive anti-caching headers (`Cache-Control: no-cache, no-store, must-revalidate, max-age=0, s-maxage=0`, `Pragma: no-cache`, `Expires: 0`, `CDN-Cache-Control: no-store`, `Cloudflare-CDN-Cache-Control: no-store`, `X-Nabka-Version: <build-id>`) while stripping `Last-Modified` and `ETag` to prevent heuristic stale caching across reverse proxies, CDNs, and browsers after image deployments.
 - **HTTP Methods**: Supports `GET` and `HEAD`.
 - **Byte Ranges**: Supports `Accept-Ranges: bytes` with `206 Partial Content` responses.
-- **Content Types**: Standard MIME types (e.g., `text/html; charset=utf-8` for HTML) are automatically inferred and populated.
-- **Routing**: Requests to `/ws` are routed to the WebSocket upgrader; all other paths are handled by the embedded static file server. Nonexistent paths return HTTP `404 Not Found`.
+- **Content Types**: Standard MIME types (e.g., `text/html; charset=utf-8` for HTML, `image/x-icon` for `.ico`) are automatically inferred and populated.
+- **Routing**: Requests to `/ws` are routed to the WebSocket upgrader; `/api/version` returns build metadata; all other paths are handled by the embedded static file server. Nonexistent paths return HTTP `404 Not Found`.
 

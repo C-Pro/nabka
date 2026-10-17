@@ -1125,6 +1125,9 @@ func TestEmbeddedModularStaticAssetsHTTP(t *testing.T) {
 		{"/js/physics.js", "PhysicsEngine"},
 		{"/data/world_map.json", "staticColliders"},
 		{"/data/npc_dialogues.json", "Дэн с Зелёнки"},
+		{"/favicon.svg", `<svg xmlns="http://www.w3.org/2000/svg"`},
+		{"/sw.js", `self.registration.unregister`},
+		{"/api/version", `"version"`},
 	}
 
 	for _, tc := range paths {
@@ -1143,6 +1146,31 @@ func TestEmbeddedModularStaticAssetsHTTP(t *testing.T) {
 		if !strings.Contains(string(body), tc.wantContain) {
 			t.Fatalf("GET %s body did not contain %q", tc.path, tc.wantContain)
 		}
+
+		// Verify anti-caching headers
+		cacheCtrl := resp.Header.Get("Cache-Control")
+		if !strings.Contains(cacheCtrl, "no-store") || !strings.Contains(cacheCtrl, "no-cache") {
+			t.Fatalf("GET %s expected Cache-Control with no-cache and no-store, got %q", tc.path, cacheCtrl)
+		}
+		if lastMod := resp.Header.Get("Last-Modified"); lastMod != "" {
+			t.Fatalf("GET %s expected Last-Modified to be stripped, got %q", tc.path, lastMod)
+		}
+		if etag := resp.Header.Get("ETag"); etag != "" {
+			t.Fatalf("GET %s expected ETag to be stripped, got %q", tc.path, etag)
+		}
+	}
+
+	// Test favicon.ico specifically for 200 OK and binary content
+	respIco, err := http.Get(httpBase + "/favicon.ico")
+	if err != nil {
+		t.Fatalf("GET /favicon.ico failed: %v", err)
+	}
+	defer respIco.Body.Close()
+	if respIco.StatusCode != http.StatusOK {
+		t.Fatalf("GET /favicon.ico status = %d, want 200", respIco.StatusCode)
+	}
+	if ct := respIco.Header.Get("Content-Type"); ct != "image/x-icon" {
+		t.Fatalf("GET /favicon.ico Content-Type = %q, want image/x-icon", ct)
 	}
 
 	resp404, err := http.Get(httpBase + "/js/does-not-exist.js")

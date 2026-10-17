@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -25,11 +26,13 @@ type ServerConfig struct {
 	AllowAllOrigins     bool
 	StaticFS            fs.FS
 	DisableStatic       bool
+	BuildID             string
 }
 
 // Server manages the fasthttp HTTP listener, WebSocket upgrader, Hub, and static file server.
 type Server struct {
 	config   ServerConfig
+	buildID  string
 	hub      *Hub
 	upgrader websocket.FastHTTPUpgrader
 	fastSrv  *fasthttp.Server
@@ -70,11 +73,23 @@ func NewServer(cfg ServerConfig) *Server {
 		cfg.StaticFS = nabka.FS()
 	}
 
+	buildID := cfg.BuildID
+	if buildID == "" {
+		buildID = os.Getenv("BUILD_ID")
+	}
+	if buildID == "" {
+		buildID = os.Getenv("GIT_COMMIT")
+	}
+	if buildID == "" {
+		buildID = fmt.Sprintf("nabka-%d", time.Now().Unix())
+	}
+
 	s := &Server{
-		config: cfg,
-		hub:    hub,
-		ctx:    ctx,
-		cancel: cancel,
+		config:  cfg,
+		buildID: buildID,
+		hub:     hub,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
 	if cfg.StaticFS != nil {
@@ -113,9 +128,24 @@ func (s *Server) Hub() *Hub {
 	return s.hub
 }
 
+// BuildID returns the server build identifier.
+func (s *Server) BuildID() string {
+	return s.buildID
+}
+
 // HandleRequest routes incoming HTTP requests to WebSocket upgrading or static file serving.
 func (s *Server) HandleRequest(ctx *fasthttp.RequestCtx) {
 	path := string(ctx.Path())
+	if path == "/api/version" || path == "/version" {
+		ctx.SetContentType("application/json; charset=utf-8")
+		ctx.Response.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+		ctx.Response.Header.Set("Pragma", "no-cache")
+		ctx.Response.Header.Set("Expires", "0")
+		ctx.Response.Header.Set("X-Nabka-Version", s.buildID)
+		ctx.SetBodyString(fmt.Sprintf(`{"version":%q,"status":"ok"}`, s.buildID))
+		return
+	}
+
 	if path == "/ws" {
 		queryUser := string(ctx.QueryArgs().Peek("username"))
 		if queryUser != "" {
@@ -167,8 +197,25 @@ func (s *Server) HandleRequest(ctx *fasthttp.RequestCtx) {
 
 	if s.fsHandler != nil {
 		ctx.Request.Header.Del("If-Modified-Since")
+		ctx.Request.Header.Del("If-None-Match")
 		s.fsHandler(ctx)
-		ctx.Response.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		ctx.Response.Header.Del("Last-Modified")
+		ctx.Response.Header.Del("ETag")
+		ctx.Response.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0, post-check=0, pre-check=0")
+		ctx.Response.Header.Set("Pragma", "no-cache")
+		ctx.Response.Header.Set("Expires", "0")
+		ctx.Response.Header.Set("Surrogate-Control", "no-store")
+		ctx.Response.Header.Set("CDN-Cache-Control", "no-store")
+		ctx.Response.Header.Set("Cloudflare-CDN-Cache-Control", "no-store")
+		ctx.Response.Header.Set("X-Nabka-Version", s.buildID)
+
+		if path == "/favicon.ico" {
+			ctx.Response.Header.Set("Content-Type", "image/x-icon")
+		} else if path == "/favicon.svg" {
+			ctx.Response.Header.Set("Content-Type", "image/svg+xml")
+		} else if path == "/sw.js" {
+			ctx.Response.Header.Set("Content-Type", "application/javascript; charset=utf-8")
+		}
 		return
 	}
 

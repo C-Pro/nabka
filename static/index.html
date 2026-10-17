@@ -2,8 +2,38 @@
 <html lang="ru" class="dark"><head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Набка</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>">
+    <!-- Favicons -->
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="alternate icon" type="image/x-icon" href="favicon.ico">
+    <link rel="apple-touch-icon" href="favicon.svg">
+    <!-- Immediate Service Worker & Cache Buster Killswitch -->
+    <script data-keep="true">
+        (function () {
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(function (registrations) {
+                    var unregistered = false;
+                    for (var i = 0; i < registrations.length; i++) {
+                        registrations[i].unregister();
+                        unregistered = true;
+                    }
+                    if (unregistered && typeof caches !== 'undefined') {
+                        caches.keys().then(function (keys) {
+                            return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+                        }).then(function () {
+                            if (!sessionStorage.getItem('nabka_sw_purged')) {
+                                sessionStorage.setItem('nabka_sw_purged', '1');
+                                window.location.reload(true);
+                            }
+                        });
+                    }
+                });
+            }
+        })();
+    </script>
     <!-- Suppress Tailwind CDN production console warning -->
     <script data-keep="true">
         (function () {

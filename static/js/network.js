@@ -32,6 +32,30 @@ export const MultiplayerClient = {
     sendIntervalMs: 55, // ~18 Hz tick rate
     worldMap: null,
     chatAutoHideTimer: null,
+    currentBuildVersion: null,
+
+    async checkServerVersion(autoReloadOnNewVersion = false) {
+        if (typeof fetch === 'undefined') return null;
+        try {
+            const resp = await fetch('/api/version?t=' + Date.now(), { cache: 'no-store' });
+            if (!resp.ok) return null;
+            const data = await resp.json();
+            if (data && data.version) {
+                if (this.currentBuildVersion && this.currentBuildVersion !== data.version) {
+                    if (autoReloadOnNewVersion && typeof window !== 'undefined' && window.location) {
+                        this.showLoginError('Вышло обновление Набки! Перезагрузка страницы...');
+                        setTimeout(() => {
+                            window.location.reload(true);
+                        }, 700);
+                    }
+                } else if (!this.currentBuildVersion) {
+                    this.currentBuildVersion = data.version;
+                }
+                return data.version;
+            }
+        } catch (e) {}
+        return null;
+    },
 
     showChat(focusInput = false) {
         if (typeof document === 'undefined') return;
@@ -218,6 +242,9 @@ export const MultiplayerClient = {
                 if (document.visibilityState === 'visible' && GAME_STATE.isConnected) {
                     this.sendMoveSnapshot(true);
                 }
+                if (document.visibilityState === 'visible') {
+                    this.checkServerVersion(true);
+                }
             });
         }
         if (typeof window !== 'undefined') {
@@ -225,8 +252,11 @@ export const MultiplayerClient = {
                 if (GAME_STATE.isConnected) {
                     this.sendMoveSnapshot(true);
                 }
+                this.checkServerVersion(true);
             });
         }
+
+        this.checkServerVersion(false);
     },
 
     showLoginError(msg, detail = '') {
@@ -435,6 +465,10 @@ export const MultiplayerClient = {
         this.serverSupportsPing = true;
         World.resetVehicles();
 
+        if (this.currentBuildVersion) {
+            this.checkServerVersion(true);
+        }
+
         if (this.ws) {
             try {
                 this.ws.onopen = null;
@@ -566,6 +600,12 @@ export const MultiplayerClient = {
                 this.showLoginError('Соединение с сервером закрыто. Нажми «Войти», чтобы вернуться!', diagDetail);
             } else {
                 this.showLoginError('Не удалось открыть WebSocket соединение (сервер недоступен)', diagDetail);
+            }
+
+            if (this.currentBuildVersion) {
+                setTimeout(() => {
+                    this.checkServerVersion(true);
+                }, 1200);
             }
         };
     },

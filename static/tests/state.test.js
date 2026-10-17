@@ -753,4 +753,66 @@ describe('Vladivostok Name Generation and Placeholder Handling', () => {
     });
 });
 
+describe('Client Auto-Update and Version Check', () => {
+    let originalFetch;
+    let originalWindow;
+
+    beforeEach(() => {
+        originalFetch = globalThis.fetch;
+        originalWindow = globalThis.window;
+        MultiplayerClient.currentBuildVersion = null;
+    });
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        globalThis.window = originalWindow;
+    });
+
+    test('checkServerVersion seeds currentBuildVersion without reloading on first check', async () => {
+        globalThis.fetch = async () => ({
+            ok: true,
+            json: async () => ({ version: 'nabka-build-100', status: 'ok' })
+        });
+
+        const version = await MultiplayerClient.checkServerVersion(false);
+        expect(version).toBe('nabka-build-100');
+        expect(MultiplayerClient.currentBuildVersion).toBe('nabka-build-100');
+    });
+
+    test('checkServerVersion detects new server build and triggers reload when autoReloadOnNewVersion is true', async () => {
+        MultiplayerClient.currentBuildVersion = 'nabka-build-100';
+
+        let reloadTriggered = false;
+        globalThis.window = {
+            location: {
+                reload: (force) => { reloadTriggered = true; }
+            }
+        };
+
+        globalThis.fetch = async () => ({
+            ok: true,
+            json: async () => ({ version: 'nabka-build-200', status: 'ok' })
+        });
+
+        let errorShown = '';
+        const origShowLoginError = MultiplayerClient.showLoginError;
+        MultiplayerClient.showLoginError = (msg) => { errorShown = msg; };
+
+        const version = await MultiplayerClient.checkServerVersion(true);
+        expect(version).toBe('nabka-build-200');
+        expect(errorShown).toContain('Вышло обновление Набки');
+
+        MultiplayerClient.showLoginError = origShowLoginError;
+    });
+
+    test('checkServerVersion handles fetch failure gracefully without error', async () => {
+        globalThis.fetch = async () => {
+            throw new Error('Network error');
+        };
+
+        const result = await MultiplayerClient.checkServerVersion(true);
+        expect(result).toBeNull();
+    });
+});
+
 
