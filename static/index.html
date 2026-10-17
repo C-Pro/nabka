@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Набка</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>">
+    <!-- Suppress Tailwind CDN production console warning -->
+    <script data-keep="true">
+        (function () {
+            const origWarn = console.warn;
+            console.warn = function (...args) {
+                if (args[0] && typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com')) return;
+                return origWarn.apply(console, args);
+            };
+        })();
+    </script>
+    <!-- Tailwind CSS -->
+    <script data-keep="true" src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js r128 -->
+    <script data-keep="true" src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&amp;family=JetBrains+Mono:wght@500;700&amp;family=Russo+One&amp;display=swap" rel="stylesheet">
+    <!-- Local Stylesheets -->
+    <link rel="stylesheet" href="css/tailwind.css">
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body class="flex flex-col h-screen h-[100dvh] w-screen bg-slate-950 overflow-hidden select-none">
+
+    <!-- Mandatory Multiplayer Login Overlay (No Single-Player Mode) -->
+    <div id="mp-login-overlay" class="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-xl flex items-center justify-center p-4 select-none">
+        <div class="hud-glass max-w-md w-full rounded-3xl p-6 sm:p-7 border border-sky-400/40 shadow-2xl flex flex-col gap-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2 bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 font-gta px-3 py-1 rounded-xl text-sm shadow">
+                    <i class="fa-solid fa-water"></i>
+                    <span>VLADIVOSTOK ONLINE</span>
+                </div>
+            </div>
+
+            <div>
+                <h1 class="font-gta text-xl sm:text-2xl text-white tracking-wide">Вход на Спортивную набережную</h1>
+                <p class="text-xs sm:text-sm text-slate-300 mt-1">
+                    Мультиплеер в реальном времени (MessagePack 20 Hz). Введи уникальное имя персонажа (1–32 символа):
+                </p>
+            </div>
+
+            <div id="mp-login-error" class="bg-rose-950/90 border border-rose-500/60 text-rose-200 text-xs px-3.5 py-3 rounded-xl flex items-center gap-2 hidden">
+                <i class="fa-solid fa-triangle-exclamation text-rose-400 shrink-0"></i>
+                <span id="mp-login-error-text">Не удалось открыть WebSocket соединение</span>
+            </div>
+
+            <form id="mp-login-form" class="flex flex-col gap-3">
+                <div>
+                    <label for="mp-username-input" class="block text-[11px] font-mono-code uppercase text-sky-300 mb-1">Никнейм игрока</label>
+                    <input id="mp-username-input" type="text" maxlength="32" required="" placeholder="Например: cpro29a" value="cpro29a" autocomplete="off" class="w-full bg-slate-900/95 border-2 border-slate-700 focus:border-sky-400 rounded-xl px-4 py-2.5 text-sm sm:text-base font-mono-code font-bold text-white placeholder-slate-500 outline-none transition">
+                </div>
+
+                <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3 text-[11px] text-slate-300 space-y-1">
+                    <div class="flex items-center justify-between">
+                        <span class="text-slate-400">Протокол синхронизации:</span>
+                        <span class="font-mono-code text-sky-300">Binary MsgPack • 15–20 Hz</span>
+                    </div>
+                </div>
+
+                <button id="mp-connect-btn" type="submit" class="btn-game w-full bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-gta py-3.5 rounded-xl text-sm sm:text-base shadow-xl flex items-center justify-center gap-2 border border-sky-300/40">
+                    <i class="fa-solid fa-plug-circle-bolt" id="mp-connect-icon"></i>
+                    <span id="mp-connect-text">ВОЙТИ НА НАБКУ</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Top Action Bar (Outside Canvas as per game layout standards) -->
+    <header class="w-full bg-slate-900/95 border-b border-slate-800 px-2 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between gap-2 z-30 shrink-0 overflow-x-auto no-scrollbar">
+        <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+            <div class="flex items-center gap-1.5 sm:gap-2 bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 font-gta px-2.5 py-1 rounded-lg text-xs sm:text-base shadow-md shrink-0">
+                <i class="fa-solid fa-water"></i>
+                <span>VLADIVOSTOK: НАБКА</span>
+            </div>
+            <div class="hidden lg:flex items-center gap-2 bg-slate-800/90 border border-slate-700 px-3 py-1 rounded-lg text-xs">
+                <span id="net-status-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                <span class="text-slate-300">Игрок:</span>
+                <span id="header-username" class="font-mono-code font-bold text-sky-400">@cpro29a</span>
+                <span class="text-slate-500">|</span>
+                <span class="text-emerald-400 font-mono-code font-bold"><i class="fa-solid fa-users mr-1"></i>Онлайн: <span id="online-count-badge">1</span></span>
+                <span class="text-slate-500">|</span>
+                <span id="location-zone-label" class="text-amber-300 font-semibold">Спортивная набережная — Променад</span>
+            </div>
+        </div>
+
+        <!-- Interactive Game Controls Toolbar -->
+        <div class="flex items-center flex-nowrap gap-1.5 sm:gap-2 shrink-0">
+            <button id="btn-toggle-mp-chat" class="btn-game bg-sky-700 hover:bg-sky-600 text-white font-semibold text-xs px-2.5 sm:px-3 py-1.5 rounded-lg flex items-center gap-1.5 border border-sky-400/40 shrink-0" title="Открыть чат Набки (C)">
+                <i class="fa-solid fa-comments"></i>
+                <span class="text-[11px] sm:text-xs">Чат (<span id="online-count-mobile">1</span>)</span>
+            </button>
+
+            <button id="btn-pointer-lock" class="hidden md:flex btn-game bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs px-3 py-1.5 rounded-lg items-center gap-1.5 shadow border border-slate-600 shrink-0">
+                <i class="fa-solid fa-crosshairs text-sky-400"></i>
+                <span id="pointer-lock-text">Захват мыши</span>
+            </button>
+
+            <button id="btn-cam-mode" class="btn-game bg-indigo-700 hover:bg-indigo-600 text-white font-semibold text-xs px-2.5 sm:px-3 py-1.5 rounded-lg flex items-center gap-1.5 border border-indigo-400/30 shrink-0" title="Сменить ракурс камеры (V)">
+                <i class="fa-solid fa-video"></i>
+                <span id="cam-mode-label" class="hidden md:inline">Камера: GTA (V)</span>
+            </button>
+
+            <button id="btn-help" class="btn-game bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 shrink-0" title="Управление">
+                <i class="fa-solid fa-circle-question"></i>
+            </button>
+        </div>
+    </header>
+
+    <main id="game-canvas-container" class="flex-1 relative w-full overflow-hidden touch-none">
+        <!-- 3D Three.js Canvas -->
+        <canvas id="three-canvas" class="touch-none" width="1042" height="772" style="width: 948px; height: 702px;"></canvas>
+
+        <!-- 3D Floating Nameplate for local player projected in 2D screen space -->
+        <div id="player-nametag" class="pointer-events-none absolute top-0 left-0 -translate-x-1/2 -translate-y-full z-10 transition-opacity duration-150" style="opacity: 1; transform: translate3d(474px, 291.581px, 0px) translate(-50%, -100%);">
+            <div class="flex flex-col items-center">
+                <div class="bg-slate-950/85 border border-sky-400/60 px-2.5 py-0.5 rounded-full shadow-lg flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    <span id="local-nametag-text" class="font-mono-code font-bold text-xs text-white tracking-tight">@cpro29a</span>
+                    <span class="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 rounded font-semibold">YOU</span>
+                </div>
+                <div id="player-speech-bubble" class="hidden mt-1 bg-white text-slate-900 font-bold text-xs px-2.5 py-1 rounded-lg shadow-md max-w-[220px] text-center break-words">
+                    Красота на Набке! 🌊
+                </div>
+            </div>
+        </div>
+
+        <!-- 3D Floating Nameplate for Maltese Dog Dunya (Дуня) -->
+        <div id="dunya-nametag" class="pointer-events-none absolute top-0 left-0 -translate-x-1/2 -translate-y-full z-10 transition-opacity duration-150" style="opacity: 0.95; transform: translate3d(582.077px, 431.212px, 0px) translate(-50%, -100%);">
+            <div class="flex flex-col items-center">
+                <div class="bg-slate-950/80 border border-pink-400/60 px-2 py-0.5 rounded-full shadow-md flex items-center gap-1">
+                    <span class="text-[10px]">🐾</span>
+                    <span class="font-bold text-[11px] text-pink-200 tracking-tight">Дуня</span>
+                </div>
+                <div id="dunya-speech-bubble" class="hidden mt-0.5 bg-pink-50 text-slate-900 font-bold text-[11px] px-2 py-0.5 rounded-lg shadow-md whitespace-nowrap">
+                    Тяф-тяф! 🤍🐾
+                </div>
+            </div>
+        </div>
+
+        <!-- Dynamic World POI Floating Labels Container -->
+        <div id="world-labels-container" class="pointer-events-none absolute inset-0 overflow-hidden z-0"></div>
+        <!-- Dynamic NPC Floating Labels Container -->
+        <div id="npc-labels-container" class="pointer-events-none absolute inset-0 overflow-hidden z-10"></div>
+        <!-- Dynamic Remote Multiplayer Players Floating Labels Container -->
+        <div id="remote-players-labels-container" class="pointer-events-none absolute inset-0 overflow-hidden z-10"></div>
+
+        <!-- Top-Left Multiplayer Live Chat & Online Roster Widget -->
+        <div id="mp-chat-panel" class="hidden absolute top-2 left-2 sm:top-3 sm:left-3 z-20 w-[250px] sm:w-80 pointer-events-auto flex flex-col gap-1.5 transition-all duration-300">
+            <div class="hud-glass rounded-xl p-2 sm:p-2.5 border-l-4 border-l-sky-400 shadow-xl">
+                <div class="flex items-center justify-between gap-1.5 border-b border-slate-800 pb-1.5 mb-1.5">
+                    <div class="flex items-center gap-1.5 text-[11px] font-bold text-sky-400">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span>НАБКА LIVE ЧАТ</span>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <button id="btn-collapse-chat" type="button" class="text-slate-400 hover:text-white px-1 text-xs" title="Скрыть чат (Esc)">
+                            <i id="chat-collapse-icon" class="fa-solid fa-chevron-up"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Online Players Chips (Click to @mention) -->
+                <div id="mp-online-users-bar" class="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 mb-1"></div>
+
+                <div id="mp-chat-body">
+                    <!-- Messages list (strictly rendered via textContent) -->
+                    <div id="mp-chat-messages" class="h-24 sm:h-32 overflow-y-auto space-y-1 pr-1 text-[11px] sm:text-xs font-medium select-text"></div>
+
+                    <!-- Chat Input Form -->
+                    <form id="mp-chat-form" class="mt-2 flex items-center gap-1.5">
+                        <input id="mp-chat-input" type="text" maxlength="500" placeholder="Сообщение всем или @ник (Enter)..." autocomplete="off" class="flex-1 bg-slate-900/90 border border-slate-700 focus:border-sky-400 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-400 outline-none">
+                        <button type="submit" class="btn-game bg-sky-600 hover:bg-sky-500 text-white font-bold px-2.5 py-1.5 rounded-lg text-xs shadow shrink-0" title="Отправить (Enter)">
+                            <i class="fa-solid fa-paper-plane"></i>
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Top-Right GTA HUD (Stars, Clock, Cash, Status) -->
+        <div class="absolute top-2 right-2 sm:top-3 sm:right-3 z-20 flex flex-col items-end pointer-events-none select-none">
+            <!-- Time & Respect Stars -->
+            <div class="flex items-center gap-2 sm:gap-3 mb-0.5 sm:mb-1">
+                <div id="wanted-stars" class="flex items-center gap-0.5 sm:gap-1 text-xs sm:text-lg drop-shadow">
+                    <i class="fa-solid fa-star text-amber-400"></i>
+                    <i class="fa-solid fa-star text-slate-600/70"></i>
+                    <i class="fa-solid fa-star text-slate-600/70"></i>
+                    <i class="fa-solid fa-star text-slate-600/70"></i>
+                    <i class="fa-solid fa-star text-slate-600/70"></i>
+                </div>
+                <div id="hud-clock" class="font-gta text-sm sm:text-2xl text-white gta-text-shadow">
+                    19:30
+                </div>
+            </div>
+
+            <!-- Cash in Rubles -->
+            <div id="hud-money" class="font-gta text-lg sm:text-3xl text-emerald-400 gta-text-shadow tracking-wider">
+                ₽ 125,400
+            </div>
+
+            <!-- Character Status Card -->
+            <div class="hud-glass rounded-xl p-1.5 sm:p-2.5 mt-1 w-36 sm:w-56 pointer-events-auto">
+                <div class="flex items-center justify-between text-[10px] sm:text-xs mb-1">
+                    <span id="hud-card-username" class="font-mono-code font-bold text-sky-400 truncate max-w-[90px]">@cpro29a</span>
+                    <span id="player-state-badge" class="bg-sky-500/20 text-sky-300 border border-sky-400/30 px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold truncate max-w-[85px] sm:max-w-none">
+                        ПЕШКОМ
+                    </span>
+                </div>
+                <!-- Health & Stamina Bars -->
+                <div class="space-y-1 sm:space-y-1.5">
+                    <div class="w-full bg-slate-800 h-1.5 sm:h-2 rounded-full overflow-hidden flex items-center">
+                        <div id="hp-bar" class="bg-gradient-to-r from-emerald-500 to-green-400 h-full transition-all duration-300" style="width: 100%;"></div>
+                    </div>
+                    <div class="w-full bg-slate-800 h-1 sm:h-1.5 rounded-full overflow-hidden flex items-center">
+                        <div id="stamina-bar" class="bg-gradient-to-r from-sky-500 to-cyan-300 h-full transition-all duration-150" style="width: 100%;"></div>
+                    </div>
+                </div>
+                <!-- Speedometer when driving -->
+                <div id="speedometer-box" class="hidden mt-1.5 pt-1.5 border-t border-slate-700/80 flex items-center justify-between">
+                    <span class="text-[10px] sm:text-[11px] text-amber-300 font-semibold"><i class="fa-solid fa-gauge-high mr-1"></i>JDM</span>
+                    <span class="font-gta text-xs sm:text-sm text-white"><span id="speed-value">0</span> км/ч</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center-Bottom Context Interaction Prompt (e.g., Press E) -->
+        <div id="interaction-prompt" class="absolute bottom-36 sm:bottom-28 left-1/2 -translate-x-1/2 z-20 pointer-events-auto w-max max-w-[92vw]">
+            <button id="btn-interact-trigger" class="hud-glass border-amber-400/70 hover:border-amber-300 px-4 sm:px-5 py-2 sm:py-2.5 rounded-full flex items-center gap-2.5 sm:gap-3 shadow-2xl animate-bounce">
+                <span class="bg-amber-400 text-slate-950 font-gta px-2 py-0.5 rounded-md text-xs sm:text-sm shadow shrink-0">E</span>
+                <span id="interaction-text" class="text-xs sm:text-sm font-bold text-white truncate">Погладить болонку Дуню 🐾🤍 (+Вайб)</span>
+            </button>
+        </div>
+
+        <!-- Toast Notification Area -->
+        <div id="toast-container" class="pointer-events-none absolute top-16 sm:top-24 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 w-full max-w-md px-4"></div>
+
+        <!-- Bottom-Left GTA Radar Minimap & Virtual Thumb Joystick -->
+        <div class="absolute bottom-2.5 left-2.5 sm:bottom-3 sm:left-3 z-20 flex flex-col sm:flex-row items-start sm:items-end gap-2 sm:gap-3 pointer-events-auto">
+            <!-- Radar Minimap (Hidden on small screens, full size on desktop sm:) -->
+            <div class="hidden sm:block relative w-40 h-40 rounded-2xl overflow-hidden border-2 border-slate-300/40 shadow-2xl bg-slate-950/90 shrink-0">
+                <canvas id="radar-canvas" width="180" height="180" class="w-full h-full block"></canvas>
+                <!-- North Indicator -->
+                <div class="absolute top-1 left-1/2 -translate-x-1/2 bg-slate-900/90 text-[10px] font-gta text-amber-400 px-1.5 rounded border border-slate-700 whitespace-nowrap">
+                    С (Залив ◄)
+                </div>
+                <div class="absolute bottom-1 right-1.5 text-[9px] font-mono-code text-slate-300 bg-slate-950/75 px-1 rounded">
+                    25 RUS
+                </div>
+            </div>
+
+            <!-- Mobile / Tablet Virtual Thumb Joystick -->
+            <div id="touch-joystick-zone" class="lg:hidden relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-slate-900/65 border-2 border-sky-400/40 shadow-2xl flex items-center justify-center touch-none">
+                <div class="pointer-events-none absolute inset-2 rounded-full border border-dashed border-slate-500/40"></div>
+                <span class="pointer-events-none absolute top-1.5 text-[8px] font-mono-code text-sky-300/70 uppercase tracking-widest">Спринт ▲</span>
+                <div id="joystick-knob" class="w-12 h-12 rounded-full bg-gradient-to-br from-sky-400 to-blue-600 border-2 border-white shadow-lg pointer-events-none transition-transform duration-75 flex items-center justify-center">
+                    <i class="fa-solid fa-arrows-up-down-left-right text-white/90 text-xs"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom-Right Ergonomic Action Cluster & Mobile Car Pedals -->
+        <div class="absolute bottom-2.5 right-2.5 sm:bottom-3 sm:right-3 z-20 flex flex-col items-end gap-2 pointer-events-auto touch-none">
+            <!-- Mobile Driving Pedals (Automatically shown when in a JDM car on touch/mobile) -->
+            <div id="mobile-car-pedals" class="hidden flex items-center gap-2">
+                <button id="btn-headlights-mobile" type="button" class="btn-game hud-glass text-amber-300 w-10 h-10 rounded-xl flex items-center justify-center border border-amber-400/40 shadow-lg" title="Фары / Сигнал (H)">
+                    <i class="fa-solid fa-lightbulb"></i>
+                </button>
+                <button id="btn-car-brake" type="button" class="btn-game bg-rose-600/90 active:bg-rose-500 text-white font-gta px-3.5 py-3 rounded-xl text-xs border border-rose-400/50 shadow-xl flex items-center gap-1.5 touch-none">
+                    <i class="fa-solid fa-angles-down"></i>
+                    <span>ТОРМОЗ</span>
+                </button>
+                <button id="btn-car-gas" type="button" class="btn-game bg-emerald-600/95 active:bg-emerald-500 text-white font-gta px-4 py-3 rounded-xl text-xs border border-emerald-400/50 shadow-xl flex items-center gap-1.5 touch-none">
+                    <i class="fa-solid fa-gauge-high"></i>
+                    <span>ГАЗ</span>
+                </button>
+            </div>
+
+            <!-- Secondary Touch Row: Sprint/Nitro & Flex Emote -->
+            <div class="flex items-center gap-1.5 sm:gap-2">
+                <button id="btn-action-emote" type="button" class="btn-game hud-glass hover:bg-slate-800/90 text-white px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl flex items-center gap-1.5 text-xs font-bold touch-none">
+                    <i class="fa-solid fa-bolt text-amber-400"></i>
+                    <span class="hidden sm:inline">Флекс (F)</span>
+                </button>
+                <button id="btn-action-sprint" type="button" class="lg:hidden btn-game hud-glass active:bg-sky-600/60 text-sky-300 border border-sky-400/40 px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl flex items-center gap-1.5 text-xs font-bold touch-none">
+                    <i class="fa-solid fa-fire-flame-curved text-sky-400"></i>
+                    <span>Турбо</span>
+                </button>
+            </div>
+
+            <!-- Primary Row: Jump / Handbrake Drift & Main Context Action (E) -->
+            <div class="flex items-center gap-2">
+                <button id="btn-action-jump" type="button" class="btn-game hud-glass hover:bg-slate-800/90 active:bg-indigo-600/60 text-white px-3.5 py-3 sm:py-2.5 rounded-2xl sm:rounded-xl flex items-center gap-2 text-xs font-bold border border-sky-400/30 shadow-lg touch-none">
+                    <i class="fa-solid fa-arrow-up text-sky-400" id="jump-btn-icon"></i>
+                    <span id="jump-btn-label">Прыжок</span>
+                </button>
+                <button id="btn-action-interact" type="button" class="btn-game bg-amber-500 hover:bg-amber-400 text-slate-950 px-4 py-3 sm:py-2.5 rounded-2xl sm:rounded-xl flex items-center gap-2 text-xs font-extrabold shadow-xl border border-amber-300 touch-none">
+                    <i class="fa-solid fa-hand-pointer"></i>
+                    <span id="action-btn-label">Действие (E)</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Interactive NPC Dialogue Modal (Authentic Vladivostok Locals) -->
+        <div id="npc-dialogue-modal" class="hidden absolute bottom-20 left-1/2 -translate-x-1/2 z-40 w-full max-w-xl px-3 pointer-events-auto">
+            <div class="hud-glass rounded-2xl p-4 border border-sky-400/50 shadow-2xl flex flex-col gap-3">
+                <!-- NPC Header -->
+                <div class="flex items-center justify-between border-b border-slate-700/80 pb-2.5">
+                    <div class="flex items-center gap-3">
+                        <div id="npc-avatar-badge" class="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-indigo-700 flex items-center justify-center text-white font-gta text-base shadow-md border border-white/20">
+                            🌊
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h3 id="npc-modal-name" class="font-gta text-sm sm:text-base text-white">Михалыч</h3>
+                                <span class="text-[10px] font-mono-code bg-amber-500/20 text-amber-300 border border-amber-400/30 px-2 py-0.5 rounded-full">
+                                    Местный • 25 RUS
+                                </span>
+                            </div>
+                            <p id="npc-modal-role" class="text-[11px] text-sky-300 font-medium">Моряк с рейда Амурского залива</p>
+                        </div>
+                    </div>
+                    <button id="btn-close-npc-chat" class="text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
+                        <span>ESC</span>
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+
+                <!-- Chat Messages History -->
+                <div id="npc-chat-history" class="max-h-48 overflow-y-auto space-y-2 pr-1 text-xs sm:text-sm"></div>
+
+                <!-- Interactive Dialogue Options (3 Follow-up Questions -> 3 Goodbye Options) -->
+                <div id="npc-options-container" class="flex flex-col gap-1.5 pt-1"></div>
+            </div>
+        </div>
+
+        <div id="help-modal" class="hidden absolute inset-0 z-40 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+            <div class="hud-glass max-w-lg w-full rounded-2xl p-6 border border-slate-700 shadow-2xl">
+                <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                    <div class="flex items-center gap-2.5">
+                        <span class="bg-sky-500 text-slate-950 font-gta px-2.5 py-1 rounded text-sm">@cpro29a</span>
+                        <h2 class="font-gta text-lg text-white">Гид по Спортивной набережной</h2>
+                    </div>
+                    <button id="btn-close-help" class="text-slate-400 hover:text-white text-lg px-2">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+
+                <div class="space-y-3 text-xs sm:text-sm text-slate-300">
+                    <div class="grid grid-cols-2 gap-2.5 bg-slate-900/90 p-3 rounded-xl border border-slate-800">
+                        <div><kbd class="bg-slate-800 text-sky-400 px-1.5 py-0.5 rounded font-mono-code">W A S D / Джойстик</kbd> — Ходьба и Руль</div>
+                        <div><kbd class="bg-slate-800 text-sky-400 px-1.5 py-0.5 rounded font-mono-code">Мышь / Свайп</kbd> — Обзор 360°</div>
+                        <div><kbd class="bg-slate-800 text-sky-400 px-1.5 py-0.5 rounded font-mono-code">Shift / Турбо</kbd> — Спринт / Буст</div>
+                        <div><kbd class="bg-slate-800 text-sky-400 px-1.5 py-0.5 rounded font-mono-code">Space / Дрифт</kbd> — Прыжок / Ручник</div>
+                        <div><kbd class="bg-slate-800 text-amber-400 px-1.5 py-0.5 rounded font-mono-code">E / Действие</kbd> — Машина / NPC / Кафе</div>
+                        <div><kbd class="bg-slate-800 text-amber-400 px-1.5 py-0.5 rounded font-mono-code">F / Молния</kbd> — Флекс @cpro29a</div>
+                        <div><kbd class="bg-slate-800 text-indigo-400 px-1.5 py-0.5 rounded font-mono-code">V / Камера</kbd> — Вид (Правый руль)</div>
+                        <div><kbd class="bg-slate-800 text-emerald-400 px-1.5 py-0.5 rounded font-mono-code">H / Фары</kbd> — Свет / Сигнал JDM</div>
+                        <div class="col-span-2"><kbd class="bg-slate-800 text-sky-300 px-1.5 py-0.5 rounded font-mono-code">C / Enter</kbd> — Чат Набки (Esc — закрыть)</div>
+                    </div>
+
+                    <p class="font-semibold text-amber-300 pt-1">Достопримечательности Набки на карте:</p>
+                    <ul class="space-y-1.5 text-xs text-slate-300 list-disc list-inside">
+                        <li><strong class="text-white">Большой светомузыкальный фонтан</strong> — сердце Спортивной набережной.</li>
+                        <li><strong class="text-white">Скульптура Амурского Тигра</strong> — легендарный бронзовый тигр у моря.</li>
+                        <li><strong class="text-white">Стритфуд «Пян-се &amp; Чифанька»</strong> — горячие паровые булочки и дальневосточный вайб.</li>
+                        <li><strong class="text-white">Колесо обозрения и пирс Юбилейного пляжа</strong> — вид на Амурский залив и яхты.</li>
+                        <li><strong class="text-white">Кинотеатр «Океан» и Стадион «Динамо»</strong> — культовая архитектура Владивостока.</li>
+                    </ul>
+                </div>
+
+                <div class="mt-5 flex justify-end">
+                    <button id="btn-start-play" class="btn-game bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold px-5 py-2.5 rounded-xl text-sm shadow-lg">
+                        Погнали на Набку!
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+
+    <script type="module" src="js/main.js" data-keep="true"></script>
+</body></html>

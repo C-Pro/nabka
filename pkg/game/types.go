@@ -28,6 +28,8 @@ const (
 	TypeMove     = "move"
 	TypeChat     = "chat"
 	TypeError    = "error"
+	TypePing     = "ping"
+	TypePong     = "pong"
 )
 
 // Modes for movement
@@ -147,6 +149,36 @@ type OutboundErrorMsg struct {
 	Message string `msgpack:"message"`
 }
 
+// CarState tracks the last seen world position and state of a vehicle.
+type CarState struct {
+	CarID  string  `msgpack:"car_id"`
+	X      float64 `msgpack:"x"`
+	Y      float64 `msgpack:"y"`
+	Z      float64 `msgpack:"z"`
+	Speed  float64 `msgpack:"speed"`
+	Yaw    float64 `msgpack:"yaw"`
+	Drift  bool    `msgpack:"drift"`
+	Lights bool    `msgpack:"lights"`
+	Driver string  `msgpack:"driver,omitempty"` // Active driver username, or empty if parked
+}
+
+// UserState tracks the last seen movement state of an active player.
+type UserState struct {
+	Username string  `msgpack:"username"`
+	Mode     string  `msgpack:"mode"` // ModePedestrian or ModeDriving
+	CarID    string  `msgpack:"car_id,omitempty"`
+	X        float64 `msgpack:"x"`
+	Y        float64 `msgpack:"y"`
+	Z        float64 `msgpack:"z"`
+	VX       float64 `msgpack:"vx,omitempty"`
+	VZ       float64 `msgpack:"vz,omitempty"`
+	Speed    float64 `msgpack:"speed,omitempty"`
+	Yaw      float64 `msgpack:"yaw"`
+	Anim     string  `msgpack:"anim,omitempty"`
+	Drift    bool    `msgpack:"drift,omitempty"`
+	Lights   bool    `msgpack:"lights,omitempty"`
+}
+
 // Validation helpers
 
 // ValidateMsgPackMap verifies the payload starts with a MsgPack map header.
@@ -176,6 +208,9 @@ func ValidateUsername(name string) (string, error) {
 	}
 	if utf8.RuneCountInString(trimmed) < 1 || utf8.RuneCountInString(trimmed) > 32 {
 		return "", errors.New("username must be between 1 and 32 characters")
+	}
+	if strings.EqualFold(trimmed, "server") {
+		return "", errors.New("username 'server' is reserved")
 	}
 	// Disallow control characters
 	for _, r := range trimmed {
@@ -219,6 +254,11 @@ func ParseEnvelope(data []byte) (*Envelope, error) {
 	}
 
 	return &env, nil
+}
+
+// NormalizeYaw bounds any finite angle strictly into [-pi, pi] in constant time.
+func NormalizeYaw(yaw float64) float64 {
+	return math.Atan2(math.Sin(yaw), math.Cos(yaw))
 }
 
 // ParsePedestrianMove decodes and strictly validates pedestrian movement.
@@ -270,7 +310,7 @@ func ParsePedestrianMove(data []byte, verifiedUsername string) (*OutboundPedestr
 		Z:        *in.Z,
 		VX:       vx,
 		VZ:       vz,
-		Yaw:      *in.Yaw,
+		Yaw:      NormalizeYaw(*in.Yaw),
 		Anim:     anim,
 	}, nil
 }
@@ -316,7 +356,7 @@ func ParseDrivingMove(data []byte, verifiedUsername string) (*OutboundDrivingMov
 		Y:        *in.Y,
 		Z:        *in.Z,
 		Speed:    *in.Speed,
-		Yaw:      *in.Yaw,
+		Yaw:      NormalizeYaw(*in.Yaw),
 		Drift:    *in.Drift,
 		Lights:   *in.Lights,
 	}, nil

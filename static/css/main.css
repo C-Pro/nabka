@@ -1,0 +1,61 @@
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            height: 100dvh;
+            overflow: hidden;
+            overscroll-behavior: none;
+            touch-action: none;
+            background-color: #090d16;
+            font-family: 'Inter', sans-serif;
+            color: #f8fafc;
+        }
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .font-gta {
+            font-family: 'Russo One', sans-serif;
+            letter-spacing: 0.04em;
+        }
+        .font-mono-code {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        #game-canvas-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+        canvas#three-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .hud-glass {
+            background: rgba(9, 13, 22, 0.82);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(148, 163, 184, 0.22);
+        }
+        .gta-text-shadow {
+            text-shadow: 2px 2px 0px #000, -1px -1px 0px #000, 1px -1px 0px #000, -1px 1px 0px #000;
+        }
+        .btn-game {
+            transition: transform 0.12s ease, filter 0.12s ease;
+        }
+        .btn-game:active, .touch-active {
+            transform: scale(0.93);
+            filter: brightness(1.2);
+        }

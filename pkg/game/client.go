@@ -147,7 +147,7 @@ func (c *Client) ReadPump() {
 				// Valid application message: refresh inactivity deadline
 				_ = c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
 				data, _ := MarshalMsgPack(out)
-				c.hub.Broadcast(c, true, data) // exclude sender
+				c.hub.BroadcastPedestrianMove(c, out, data) // updates state and excludes sender
 
 			case ModeDriving:
 				out, err := ParseDrivingMove(payload, c.Username)
@@ -160,7 +160,7 @@ func (c *Client) ReadPump() {
 				// Valid application message: refresh inactivity deadline
 				_ = c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
 				data, _ := MarshalMsgPack(out)
-				c.hub.Broadcast(c, true, data) // exclude sender
+				c.hub.BroadcastDrivingMove(c, out, data) // updates state and excludes sender
 
 			default:
 				errMsg, _ := MarshalMsgPack(OutboundErrorMsg{
@@ -182,6 +182,11 @@ func (c *Client) ReadPump() {
 			_ = c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
 			data, _ := MarshalMsgPack(out)
 			c.hub.Broadcast(c, false, data) // include sender for chat display & speech bubbles
+
+		case TypePing:
+			_ = c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
+			pongMsg, _ := MarshalMsgPack(map[string]interface{}{"type": TypePong})
+			c.sendDirect(pongMsg)
 
 		case TypeRegister:
 			errMsg, _ := MarshalMsgPack(OutboundErrorMsg{

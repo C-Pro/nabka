@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"sync"
 	"time"
+
+	"nabka"
 
 	"github.com/fasthttp/websocket"
 	"github.com/valyala/fasthttp"
@@ -20,14 +23,19 @@ type ServerConfig struct {
 	SendBufferSize      int
 	RegistrationTimeout time.Duration
 	AllowAllOrigins     bool
+	StaticFS            fs.FS
+	DisableStatic       bool
 }
 
-// Server manages the fasthttp HTTP listener, WebSocket upgrader, and Hub.
+// Server manages the fasthttp HTTP listener, WebSocket upgrader, Hub, and static file server.
 type Server struct {
 	config   ServerConfig
 	hub      *Hub
 	upgrader websocket.FastHTTPUpgrader
 	fastSrv  *fasthttp.Server
+
+	fsHandler   fasthttp.RequestHandler
+	fsCleanStop chan struct{}
 
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -58,11 +66,27 @@ func NewServer(cfg ServerConfig) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	hub := NewHub(ctx)
 
+	if !cfg.DisableStatic && cfg.StaticFS == nil {
+		cfg.StaticFS = nabka.FS()
+	}
+
 	s := &Server{
 		config: cfg,
 		hub:    hub,
 		ctx:    ctx,
 		cancel: cancel,
+	}
+
+	if cfg.StaticFS != nil {
+		s.fsCleanStop = make(chan struct{})
+		fastFS := &fasthttp.FS{
+			FS:                 cfg.StaticFS,
+			IndexNames:         []string{"index.html"},
+			GenerateIndexPages: false,
+			AcceptByteRange:    true,
+			CleanStop:          s.fsCleanStop,
+		}
+		s.fsHandler = fastFS.NewRequestHandler()
 	}
 
 	s.upgrader = websocket.FastHTTPUpgrader{
@@ -89,25 +113,40 @@ func (s *Server) Hub() *Hub {
 	return s.hub
 }
 
-// HandleRequest routes incoming HTTP requests to WebSocket upgrading.
+// HandleRequest routes incoming HTTP requests to WebSocket upgrading or static file serving.
 func (s *Server) HandleRequest(ctx *fasthttp.RequestCtx) {
 	path := string(ctx.Path())
-	if path != "/ws" {
-		ctx.SetStatusCode(fasthttp.StatusNotFound)
-		ctx.SetBodyString("Not Found")
-		return
-	}
+	if path == "/ws" {
+		queryUser := string(ctx.QueryArgs().Peek("username"))
+		if queryUser != "" {
+			validName, err := ValidateUsername(queryUser)
+			if err != nil {
+				ctx.SetStatusCode(fasthttp.StatusBadRequest)
+				ctx.SetBodyString(fmt.Sprintf("invalid username: %v", err))
+				return
+			}
 
-	queryUser := string(ctx.QueryArgs().Peek("username"))
-	if queryUser != "" {
-		validName, err := ValidateUsername(queryUser)
-		if err != nil {
-			ctx.SetStatusCode(fasthttp.StatusBadRequest)
-			ctx.SetBodyString(fmt.Sprintf("invalid username: %v", err))
+			err = s.upgrader.Upgrade(ctx, func(conn *websocket.Conn) {
+				s.connMu.Lock()
+				if s.isShuttingDown {
+					s.connMu.Unlock()
+					_ = conn.Close()
+					return
+				}
+				s.connWg.Add(1)
+				s.connMu.Unlock()
+				defer s.connWg.Done()
+
+				s.handleRegisteredConnection(conn, validName)
+			})
+			if err != nil {
+				ctx.SetStatusCode(fasthttp.StatusBadRequest)
+			}
 			return
 		}
 
-		err = s.upgrader.Upgrade(ctx, func(conn *websocket.Conn) {
+		// Username not in query param: upgrade and await initial registration payload
+		err := s.upgrader.Upgrade(ctx, func(conn *websocket.Conn) {
 			s.connMu.Lock()
 			if s.isShuttingDown {
 				s.connMu.Unlock()
@@ -118,7 +157,7 @@ func (s *Server) HandleRequest(ctx *fasthttp.RequestCtx) {
 			s.connMu.Unlock()
 			defer s.connWg.Done()
 
-			s.handleRegisteredConnection(conn, validName)
+			s.handleUnregisteredConnection(conn)
 		})
 		if err != nil {
 			ctx.SetStatusCode(fasthttp.StatusBadRequest)
@@ -126,23 +165,15 @@ func (s *Server) HandleRequest(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Username not in query param: upgrade and await initial registration payload
-	err := s.upgrader.Upgrade(ctx, func(conn *websocket.Conn) {
-		s.connMu.Lock()
-		if s.isShuttingDown {
-			s.connMu.Unlock()
-			_ = conn.Close()
-			return
-		}
-		s.connWg.Add(1)
-		s.connMu.Unlock()
-		defer s.connWg.Done()
-
-		s.handleUnregisteredConnection(conn)
-	})
-	if err != nil {
-		ctx.SetStatusCode(fasthttp.StatusBadRequest)
+	if s.fsHandler != nil {
+		ctx.Request.Header.Del("If-Modified-Since")
+		s.fsHandler(ctx)
+		ctx.Response.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		return
 	}
+
+	ctx.SetStatusCode(fasthttp.StatusNotFound)
+	ctx.SetBodyString("Not Found")
 }
 
 // handleRegisteredConnection runs for clients with validated username.
@@ -271,6 +302,11 @@ func (s *Server) Shutdown() error {
 	s.hub.Stop()
 	s.connWg.Wait()
 	s.wg.Wait()
+
+	if s.fsCleanStop != nil {
+		close(s.fsCleanStop)
+		s.fsCleanStop = nil
+	}
 
 	s.mu.Lock()
 	if s.ln != nil {

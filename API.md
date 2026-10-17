@@ -47,7 +47,8 @@ Connect to `/ws` without query parameters. The connection upgrades, and the clie
 ## 2. Inactivity Timeout
 
 - **Deadline**: 30 seconds of inactivity.
-- **Rule**: A client is kicked if it does not send a valid application message (`move` or `chat`) within 30 seconds.
+- **Rule**: A client is kicked if it does not send a valid application message (`move`, `chat`, or `ping`) within 30 seconds.
+- **Heartbeat Ping**: Active browser clients send an application-level `{"type": "ping"}` every 10 seconds while the page tab is open, refreshing the 30-second deadline. The server responds with `{"type": "pong"}`.
 - **Protocol Frames**: WebSocket protocol-level Ping/Pong frames do **not** refresh the 30-second application inactivity deadline to prevent idling clients from staying connected indefinitely.
 - **Broadcast on Kick**: Remaining clients receive a leave broadcast with reason `"kicked for 30s inactivity"`.
 - **Reconnection**: The username is immediately freed for reconnection upon timeout or disconnect.
@@ -76,7 +77,22 @@ Broadcast to all connected clients (including the newcomer) upon successful regi
 
 ---
 
-### 3.2. Leave Event (Server -> Remaining Clients)
+### 3.2. Initial World State Synchronization (Server -> Newly Joined Client)
+
+Immediately following the `join` broadcast, the server synchronizes the current world state by transmitting tracked vehicle and player positions directly to the newly joined client:
+
+1. **Tracked Vehicles**: For each vehicle that has been moved or driven in the world, the server sends a driving movement message (`mode: "driving"`, `car_id`, `x`, `y`, `z`, `yaw`, `speed`, `drift`, `lights`):
+   - **Parked vehicle**: `username` is empty (`""`), `speed` is `0`, and `drift` is `false`. The client updates the parked vehicle's world transform without attaching a remote driver.
+   - **Occupied vehicle**: `username` contains the active driver's username.
+2. **Active Players**: For each other connected client, their last known state is transmitted:
+   - **Pedestrian**: Outbound pedestrian movement message (`mode: "pedestrian"`, `anim`, `vx`, `vz`, `yaw`, etc.).
+   - **Driving**: Outbound driving movement message (`mode: "driving"`, `car_id`, etc.).
+
+Vehicles that have not been moved remain at their default client-side spawn positions.
+
+---
+
+### 3.3. Leave Event (Server -> Remaining Clients)
 
 Broadcast to all remaining clients when a user disconnects or is evicted:
 
@@ -104,7 +120,7 @@ Broadcast to all remaining clients when a user disconnects or is evicted:
 
 ---
 
-### 3.3. Pedestrian Movement (15–20 Hz)
+### 3.4. Pedestrian Movement (15–20 Hz)
 
 Sent by clients to synchronize character position, velocity, orientation, and animation state for 60 FPS client-side dead-reckoning.
 
@@ -154,7 +170,7 @@ Sent by clients to synchronize character position, velocity, orientation, and an
 
 ---
 
-### 3.4. Driving Movement (15–20 Hz)
+### 3.5. Driving Movement (15–20 Hz)
 
 Sent by clients to synchronize vehicle telemetry, visual state, and world position.
 
@@ -207,7 +223,7 @@ Sent by clients to synchronize vehicle telemetry, visual state, and world positi
 
 ---
 
-### 3.5. Chat Messages
+### 3.6. Chat Messages
 
 #### Inbound (Client -> Server):
 ```json
@@ -240,7 +256,7 @@ Sent by clients to synchronize vehicle telemetry, visual state, and world positi
 
 ---
 
-### 3.6. Error Message (Server -> Client)
+### 3.7. Error Message (Server -> Client)
 
 Delivered directly to a client when a recoverable validation or protocol error occurs:
 
@@ -250,3 +266,38 @@ Delivered directly to a client when a recoverable validation or protocol error o
   "message": "invalid anim \"fly\": must be idle, walk, run, jump, or emote"
 }
 ```
+
+---
+
+### 3.8. Ping & Pong Keepalive (Bidirectional)
+
+Used by active browser clients to maintain continuous connection while the tab is open:
+
+```json
+{
+  "type": "ping"
+}
+```
+
+Server replies with:
+```json
+{
+  "type": "pong"
+}
+```
+
+Receiving `ping` refreshes the 30-second application inactivity deadline on the server.
+
+---
+
+## 4. HTTP Static File Server
+
+The server embeds all assets in the `static/` directory directly into the compiled Go binary using Go standard library `embed.FS` (`//go:embed all:static`), requiring zero external filesystem assets at runtime.
+
+- **Root Endpoint**: `GET /` automatically serves `static/index.html`.
+- **Direct Asset Requests**: Any file under `static/` is served at its relative path (e.g., `GET /index.html`, `GET /css/...`, `GET /js/...`).
+- **HTTP Methods**: Supports `GET` and `HEAD`.
+- **Byte Ranges**: Supports `Accept-Ranges: bytes` with `206 Partial Content` responses.
+- **Content Types**: Standard MIME types (e.g., `text/html; charset=utf-8` for HTML) are automatically inferred and populated.
+- **Routing**: Requests to `/ws` are routed to the WebSocket upgrader; all other paths are handled by the embedded static file server. Nonexistent paths return HTTP `404 Not Found`.
+

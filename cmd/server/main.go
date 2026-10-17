@@ -35,7 +35,8 @@ func main() {
 
 	slog.Info("Starting multiplayer WebSocket game server",
 		"addr", addr,
-		"endpoint", "/ws",
+		"ws_endpoint", "/ws",
+		"static_endpoint", "/",
 		"inactivity_timeout", cfg.InactivityTimeout,
 		"format", "msgpack",
 	)
