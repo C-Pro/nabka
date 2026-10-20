@@ -200,32 +200,33 @@
         <div id="remote-players-labels-container" class="pointer-events-none absolute inset-0 overflow-hidden z-10"></div>
 
         <!-- Top-Left Multiplayer Live Chat & Online Roster Widget -->
-        <div id="mp-chat-panel" class="hidden absolute top-2 left-2 sm:top-3 sm:left-3 z-20 w-[250px] sm:w-80 pointer-events-auto flex flex-col gap-1.5 transition-all duration-300">
-            <div class="hud-glass rounded-xl p-2 sm:p-2.5 border-l-4 border-l-sky-400 shadow-xl">
-                <div class="flex items-center justify-between gap-1.5 border-b border-slate-800 pb-1.5 mb-1.5">
-                    <div class="flex items-center gap-1.5 text-[11px] font-bold text-sky-400">
-                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <div id="mp-chat-panel" class="hidden absolute top-2 left-2 sm:top-3 sm:left-3 z-20 w-[320px] sm:w-[460px] md:w-[500px] max-w-[calc(100vw-1rem)] pointer-events-auto flex flex-col gap-1.5 transition-all duration-300">
+            <div class="hud-glass rounded-2xl p-2.5 sm:p-3.5 border-l-4 border-l-sky-400 shadow-2xl">
+                <div class="flex items-center justify-between gap-2 border-b border-slate-800 pb-2 mb-2">
+                    <div class="flex items-center gap-2 text-xs sm:text-sm font-bold text-sky-400">
+                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
                         <span>НАБКА LIVE ЧАТ</span>
                     </div>
                     <div class="flex items-center gap-1.5">
-                        <button id="btn-collapse-chat" type="button" class="text-slate-400 hover:text-white px-1 text-xs" title="Скрыть чат (Esc)">
+                        <button id="btn-collapse-chat" type="button" class="text-slate-400 hover:text-white px-1.5 py-0.5 rounded text-xs bg-slate-800/60 hover:bg-slate-700" title="Скрыть чат (Esc)">
                             <i id="chat-collapse-icon" class="fa-solid fa-chevron-up"></i>
                         </button>
                     </div>
                 </div>
 
                 <!-- Online Players Chips (Click to @mention) -->
-                <div id="mp-online-users-bar" class="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 mb-1"></div>
+                <div id="mp-online-users-bar" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1.5 mb-1.5"></div>
 
                 <div id="mp-chat-body">
                     <!-- Messages list (strictly rendered via textContent) -->
-                    <div id="mp-chat-messages" class="h-24 sm:h-32 overflow-y-auto space-y-1 pr-1 text-[11px] sm:text-xs font-medium select-text"></div>
+                    <div id="mp-chat-messages" class="h-48 sm:h-64 md:h-72 overflow-y-auto space-y-1.5 pr-1.5 text-xs sm:text-[13px] font-medium select-text"></div>
 
                     <!-- Chat Input Form -->
-                    <form id="mp-chat-form" class="mt-2 flex items-center gap-1.5">
-                        <input id="mp-chat-input" type="text" maxlength="500" placeholder="Сообщение всем или @ник (Enter)..." autocomplete="off" class="flex-1 bg-slate-900/90 border border-slate-700 focus:border-sky-400 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-400 outline-none">
-                        <button type="submit" class="btn-game bg-sky-600 hover:bg-sky-500 text-white font-bold px-2.5 py-1.5 rounded-lg text-xs shadow shrink-0" title="Отправить (Enter)">
+                    <form id="mp-chat-form" class="mt-2.5 flex items-center gap-2">
+                        <input id="mp-chat-input" type="text" maxlength="500" placeholder="Сообщение всем или @ник (Enter)..." autocomplete="off" class="flex-1 bg-slate-900/90 border border-slate-700 focus:border-sky-400 rounded-xl px-3 py-2 text-xs sm:text-sm text-white placeholder-slate-400 outline-none">
+                        <button type="submit" class="btn-game bg-sky-600 hover:bg-sky-500 text-white font-bold px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm shadow shrink-0 flex items-center gap-1.5" title="Отправить (Enter)">
                             <i class="fa-solid fa-paper-plane"></i>
+                            <span class="hidden sm:inline">Отправить</span>
                         </button>
                     </form>
                 </div>
@@ -253,33 +254,15 @@
                 ₽ 125,400
             </div>
 
-            <!-- Character Status Card -->
-            <div class="hud-glass rounded-xl p-1.5 sm:p-2.5 mt-1 w-36 sm:w-56 pointer-events-auto">
-                <div class="flex items-center justify-between text-[10px] sm:text-xs mb-1">
-                    <span id="hud-card-username" class="font-mono-code font-bold text-sky-400 truncate max-w-[90px]">@Игрок</span>
-                    <span id="player-state-badge" class="bg-sky-500/20 text-sky-300 border border-sky-400/30 px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold truncate max-w-[85px] sm:max-w-none">
-                        ПЕШКОМ
-                    </span>
-                </div>
-                <!-- Health & Stamina Bars -->
-                <div class="space-y-1 sm:space-y-1.5">
-                    <div class="w-full bg-slate-800 h-1.5 sm:h-2 rounded-full overflow-hidden flex items-center">
-                        <div id="hp-bar" class="bg-gradient-to-r from-emerald-500 to-green-400 h-full transition-all duration-300" style="width: 100%;"></div>
-                    </div>
-                    <div class="w-full bg-slate-800 h-1 sm:h-1.5 rounded-full overflow-hidden flex items-center">
-                        <div id="stamina-bar" class="bg-gradient-to-r from-sky-500 to-cyan-300 h-full transition-all duration-150" style="width: 100%;"></div>
-                    </div>
-                </div>
-                <!-- Speedometer when driving -->
-                <div id="speedometer-box" class="hidden mt-1.5 pt-1.5 border-t border-slate-700/80 flex items-center justify-between">
-                    <span class="text-[10px] sm:text-[11px] text-amber-300 font-semibold"><i class="fa-solid fa-gauge-high mr-1"></i>JDM</span>
-                    <span class="font-gta text-xs sm:text-sm text-white"><span id="speed-value">0</span> км/ч</span>
-                </div>
+            <!-- Speedometer when driving -->
+            <div id="speedometer-box" class="hidden hud-glass rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 mt-1 w-28 sm:w-36 pointer-events-auto flex items-center justify-between shadow-xl">
+                <span class="text-[10px] sm:text-[11px] text-amber-300 font-semibold"><i class="fa-solid fa-gauge-high mr-1"></i>JDM</span>
+                <span class="font-gta text-xs sm:text-sm text-white"><span id="speed-value">0</span> км/ч</span>
             </div>
         </div>
 
         <!-- Center-Bottom Context Interaction Prompt (e.g., Press E) -->
-        <div id="interaction-prompt" class="absolute left-1/2 -translate-x-1/2 z-20 pointer-events-auto w-max max-w-[92vw]">
+        <div id="interaction-prompt" class="hidden absolute left-1/2 -translate-x-1/2 z-20 pointer-events-auto w-max max-w-[92vw]">
             <button id="btn-interact-trigger" class="hud-glass border-amber-400/70 hover:border-amber-300 px-4 sm:px-5 py-2 sm:py-2.5 rounded-full flex items-center gap-2.5 sm:gap-3 shadow-2xl animate-bounce">
                 <span class="bg-amber-400 text-slate-950 font-gta px-2 py-0.5 rounded-md text-xs sm:text-sm shadow shrink-0">E</span>
                 <span id="interaction-text" class="text-xs sm:text-sm font-bold text-white truncate">Погладить Дуню 🐾🤍 (+Вайб)</span>

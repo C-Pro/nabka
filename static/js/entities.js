@@ -4,7 +4,7 @@ import { PhysicsEngine, WorldVehiclePhysics, stepWorldVehiclePhysics, getVehicle
 import { TextureFactory } from './textures.js';
 import { SoundManager } from './audio.js';
 import { World } from './world.js';
-import { completePOI, triggerPlayerSpeech, showToast, closeNpcDialogue } from './ui.js';
+import { completePOI, triggerPlayerSpeech, showToast, closeNpcDialogue, dismissInteractionPrompt } from './ui.js';
 import { ModelLoader, ModelBuilders } from './models.js';
 
 export const Player = {
@@ -78,14 +78,7 @@ export const Player = {
 
         const inputLen = Math.hypot(moveForward, moveRight);
         const isMoving = inputLen > 0.05;
-        const isSprinting = (GAME_STATE.keys.shift || GAME_STATE.joystickSprint) && GAME_STATE.stamina > 5;
-
-        if (isMoving && isSprinting) {
-            GAME_STATE.stamina = Math.max(0, GAME_STATE.stamina - dt * 18);
-        } else {
-            GAME_STATE.stamina = Math.min(100, GAME_STATE.stamina + dt * 14);
-        }
-
+        const isSprinting = Boolean(GAME_STATE.keys.shift || GAME_STATE.joystickSprint);
         const speed = isSprinting ? 14.5 : 8.2;
 
         if (isMoving) {
@@ -723,7 +716,6 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
 }
 
 export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
-    const badge = document.getElementById('player-state-badge');
     const speedBox = document.getElementById('speedometer-box');
     const mobilePedals = document.getElementById('mobile-car-pedals');
     const jumpBtnLabel = document.getElementById('jump-btn-label');
@@ -731,8 +723,11 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
     const actionBtnLabel = document.getElementById('action-btn-label');
     SoundManager.playActionSound('car');
 
+    dismissInteractionPrompt();
+
     if (GAME_STATE.inVehicle) {
         const leavingVehicle = GAME_STATE.inVehicle;
+        leavingVehicle._lastExitTime = Date.now();
         leavingVehicle.speed = 0;
         leavingVehicle.vx = 0;
         leavingVehicle.vz = 0;
@@ -750,10 +745,6 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         GAME_STATE.inVehicle = null;
         GAME_STATE.keys.w = GAME_STATE.keys.s = GAME_STATE.keys.space = false;
         SoundManager.updateVehicleAudio(null, false, false, false, false);
-        if (badge) {
-            badge.textContent = 'ПЕШКОМ';
-            badge.className = 'bg-sky-500/20 text-sky-300 border border-sky-400/30 px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold truncate max-w-[85px] sm:max-w-none';
-        }
         if (speedBox) speedBox.classList.add('hidden');
         if (mobilePedals) mobilePedals.classList.add('hidden');
         if (jumpBtnLabel) jumpBtnLabel.textContent = 'Прыжок';
@@ -771,10 +762,6 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         carObj.snapshotBuffer = null;
         carObj.remoteDriver = null;
         resetVehiclePose(carObj);
-        if (badge) {
-            badge.textContent = 'ПРАВЫЙ РУЛЬ';
-            badge.className = 'bg-amber-500/20 text-amber-300 border border-amber-400/30 px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold truncate max-w-[85px] sm:max-w-none';
-        }
         if (speedBox) speedBox.classList.remove('hidden');
         if (mobilePedals) mobilePedals.classList.remove('hidden');
         if (jumpBtnLabel) jumpBtnLabel.textContent = 'Дрифт';

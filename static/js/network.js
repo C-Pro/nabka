@@ -145,11 +145,9 @@ export const MultiplayerClient = {
 
         const hUser = document.getElementById('header-username');
         const lTag = document.getElementById('local-nametag-text');
-        const cUser = document.getElementById('hud-card-username');
         const helpUser = document.getElementById('help-modal-username');
         if (hUser) hUser.textContent = '@' + effectiveName;
         if (lTag) lTag.textContent = '@' + effectiveName;
-        if (cUser) cUser.textContent = '@' + effectiveName;
         if (helpUser) helpUser.textContent = '@' + effectiveName;
 
         if (usernameInput) {
@@ -159,7 +157,6 @@ export const MultiplayerClient = {
                 const preview = usernameInput.value.trim() || randomPlaceholder;
                 if (hUser) hUser.textContent = '@' + preview;
                 if (lTag) lTag.textContent = '@' + preview;
-                if (cUser) cUser.textContent = '@' + preview;
                 if (helpUser) helpUser.textContent = '@' + preview;
             });
         }
@@ -307,13 +304,11 @@ export const MultiplayerClient = {
         if (typeof document !== 'undefined') {
             const hUser = document.getElementById('header-username');
             const lTag = document.getElementById('local-nametag-text');
-            const cUser = document.getElementById('hud-card-username');
             const helpUser = document.getElementById('help-modal-username');
             const dot = document.getElementById('net-status-dot');
             const overlay = document.getElementById('mp-login-overlay');
             if (hUser) hUser.textContent = '@' + username;
             if (lTag) lTag.textContent = '@' + username;
-            if (cUser) cUser.textContent = '@' + username;
             if (helpUser) helpUser.textContent = '@' + username;
             if (dot) dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-ping';
             if (overlay) overlay.classList.add('hidden');
@@ -1062,7 +1057,7 @@ export const MultiplayerClient = {
         const list = document.getElementById('mp-chat-messages');
         if (!list) return;
         const row = document.createElement('div');
-        row.className = 'leading-snug break-words';
+        row.className = 'leading-relaxed break-words';
 
         const nameEl = document.createElement('span');
         nameEl.className = sender === GAME_STATE.username
@@ -1089,7 +1084,7 @@ export const MultiplayerClient = {
         const list = document.getElementById('mp-chat-messages');
         if (!list) return;
         const row = document.createElement('div');
-        row.className = 'text-[10px] font-mono-code text-amber-300/90 leading-snug';
+        row.className = 'text-[11px] sm:text-xs font-mono-code text-amber-300/90 leading-relaxed';
         row.textContent = text;
         list.appendChild(row);
         list.scrollTop = list.scrollHeight;

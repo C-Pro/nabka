@@ -3,10 +3,11 @@ import { SoundManager } from './audio.js';
 import { World } from './world.js';
 import { Player, Dunya, toggleVehicleDrive } from './entities.js';
 import { MultiplayerClient, showChatBox, hideChatBox } from './network.js';
-import { showToast, closeNpcDialogue } from './ui.js';
+import { showToast, closeNpcDialogue, dismissInteractionPrompt } from './ui.js';
 
 export function triggerCurrentInteraction() {
     if (isGameplayInputSuspended()) return;
+    dismissInteractionPrompt();
     if (GAME_STATE.inVehicle) {
         toggleVehicleDrive(GAME_STATE.inVehicle, (force) => MultiplayerClient.sendMoveSnapshot(force));
     } else if (GAME_STATE.nearestInteractable) {

@@ -86,8 +86,6 @@ function gameLoop() {
         MultiplayerClient.update(dt);
     }
 
-    const staminaBar = document.getElementById('stamina-bar');
-    if (staminaBar) staminaBar.style.width = `${GAME_STATE.stamina}%`;
     if (GAME_STATE.inVehicle) {
         const kmh = Math.round(Math.abs(GAME_STATE.inVehicle.speed) * 3.8);
         const speedVal = document.getElementById('speed-value');

@@ -11,10 +11,20 @@ export function substitutePlayerMentions(text, username = (typeof GAME_STATE !==
         .replaceAll('{username}', user);
 }
 
-export function showToast(text, theme = 'sky') {
+export function showToast(text, theme = 'sky', durationMs = 1000) {
     if (typeof document === 'undefined') return;
     const container = document.getElementById('toast-container');
     if (!container) return;
+
+    // Enforce limit of max 5 toasts on screen at a time (evict oldest)
+    const MAX_TOASTS = 5;
+    while (container.children.length >= MAX_TOASTS) {
+        const oldest = container.firstElementChild;
+        if (oldest._dismissTimer) clearTimeout(oldest._dismissTimer);
+        if (oldest._removeTimer) clearTimeout(oldest._removeTimer);
+        oldest.remove();
+    }
+
     const toast = document.createElement('div');
     const borderColors = {
         sky: 'border-sky-400 text-sky-200',
@@ -25,11 +35,11 @@ export function showToast(text, theme = 'sky') {
     toast.textContent = substitutePlayerMentions(text);
     container.appendChild(toast);
 
-    setTimeout(() => {
+    toast._dismissTimer = setTimeout(() => {
         toast.style.opacity = '0';
         toast.style.transform = 'translateY(-8px)';
-        setTimeout(() => toast.remove(), 300);
-    }, 3400);
+        toast._removeTimer = setTimeout(() => toast.remove(), 300);
+    }, durationMs);
 }
 
 // Wire SoundManager toast callback
@@ -438,7 +448,22 @@ export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlay
     ctx.restore();
 }
 
-export function checkProximityInteractions({ playerPos, npcs, interactables, dunya, worldMap }) {
+let activePromptKey = null;
+let activePromptTimer = null;
+
+export function dismissInteractionPrompt() {
+    if (activePromptTimer) {
+        clearTimeout(activePromptTimer);
+        activePromptTimer = null;
+    }
+    activePromptKey = null;
+    if (typeof document !== 'undefined') {
+        const promptEl = document.getElementById('interaction-prompt');
+        if (promptEl) promptEl.classList.add('hidden');
+    }
+}
+
+export function checkProximityInteractions({ playerPos, npcs, interactables, dunya, worldMap, promptDurationMs = 1000 }) {
     let closest = null;
     let minDist = Infinity;
 
@@ -460,6 +485,7 @@ export function checkProximityInteractions({ playerPos, npcs, interactables, dun
 
     for (const item of interactables) {
         if (GAME_STATE.inVehicle && item.carRef !== GAME_STATE.inVehicle) continue;
+        if (item.carRef && item.carRef._lastExitTime && (Date.now() - item.carRef._lastExitTime < 3000)) continue;
         const d = Math.hypot(playerPos.x - item.x, playerPos.z - item.z);
         if (d < item.radius && d < minDist) {
             minDist = d;
@@ -468,28 +494,33 @@ export function checkProximityInteractions({ playerPos, npcs, interactables, dun
     }
 
     if (!closest && !GAME_STATE.inVehicle && dunya && dunya.group) {
-        const dDunya = Math.hypot(playerPos.x - dunya.position.x, playerPos.z - dunya.position.z);
-        if (dDunya < 2.5) {
-            const isCat = dunya.petType === 'cat';
-            const petName = isCat ? 'Кот Берик' : 'Мальтийская болонка Дуня';
-            const petPrompt = isCat ? 'Погладить кота Берика 🐾🤍 (+Вайб)' : 'Погладить болонку Дуню 🐾🤍 (+Вайб)';
-            closest = {
-                id: 'dunya_pet',
-                name: petName,
-                prompt: petPrompt,
-                onInteract: () => {
-                    const currentUsername = GAME_STATE.username || 'Игрок';
-                    if (isCat) {
-                        dunya.hopAndBark(`Мур-р-р! Люблю @${currentUsername}! 🐾💖`);
-                        triggerPlayerSpeech('Хороший мальчик, Берик! 🐾🤍');
-                        completePOI('dunya_pet', '🐾 Ты погладил кота Берика на Набке!', 250);
-                    } else {
-                        dunya.hopAndBark(`Тяф! Люблю @${currentUsername}! 🐾💖`);
-                        triggerPlayerSpeech('Хорошая девочка, Дуня! 🐾🤍');
-                        completePOI('dunya_pet', '🐾 Ты погладил мальтийскую болонку Дуню на Набке!', 250);
+        const petCooldown = Boolean(dunya._lastPetTime && (Date.now() - dunya._lastPetTime < 15000));
+        if (!petCooldown) {
+            const dDunya = Math.hypot(playerPos.x - dunya.position.x, playerPos.z - dunya.position.z);
+            if (dDunya < 2.5) {
+                const isCat = dunya.petType === 'cat';
+                const petName = isCat ? 'Кот Берик' : 'Мальтийская болонка Дуня';
+                const petPrompt = isCat ? 'Погладить кота Берика 🐾🤍 (+Вайб)' : 'Погладить болонку Дуню 🐾🤍 (+Вайб)';
+                closest = {
+                    id: 'dunya_pet',
+                    name: petName,
+                    prompt: petPrompt,
+                    onInteract: () => {
+                        dunya._lastPetTime = Date.now();
+                        dismissInteractionPrompt();
+                        const currentUsername = GAME_STATE.username || 'Игрок';
+                        if (isCat) {
+                            dunya.hopAndBark(`Мур-р-р! Люблю @${currentUsername}! 🐾💖`);
+                            triggerPlayerSpeech('Хороший мальчик, Берик! 🐾🤍');
+                            completePOI('dunya_pet', '🐾 Ты погладил кота Берика на Набке!', 250);
+                        } else {
+                            dunya.hopAndBark(`Тяф! Люблю @${currentUsername}! 🐾💖`);
+                            triggerPlayerSpeech('Хорошая девочка, Дуня! 🐾🤍');
+                            completePOI('dunya_pet', '🐾 Ты погладил мальтийскую болонку Дуню на Набке!', 250);
+                        }
                     }
-                }
-            };
+                };
+            }
         }
     }
 
@@ -500,13 +531,27 @@ export function checkProximityInteractions({ playerPos, npcs, interactables, dun
 
         if (promptEl && promptText) {
             if (GAME_STATE.inVehicle) {
-                promptEl.classList.remove('hidden');
-                promptText.textContent = `Выйти из ${GAME_STATE.inVehicle.name} на Набку`;
+                if (activePromptKey !== null) {
+                    dismissInteractionPrompt();
+                }
             } else if (closest) {
-                promptEl.classList.remove('hidden');
-                promptText.textContent = substitutePlayerMentions(closest.prompt);
+                const targetKey = closest.id || closest.name || 'target';
+                if (activePromptKey !== targetKey) {
+                    activePromptKey = targetKey;
+                    if (activePromptTimer) {
+                        clearTimeout(activePromptTimer);
+                    }
+                    promptText.textContent = substitutePlayerMentions(closest.prompt);
+                    promptEl.classList.remove('hidden');
+                    activePromptTimer = setTimeout(() => {
+                        promptEl.classList.add('hidden');
+                        activePromptTimer = null;
+                    }, promptDurationMs);
+                }
             } else {
-                promptEl.classList.add('hidden');
+                if (activePromptKey !== null) {
+                    dismissInteractionPrompt();
+                }
             }
         }
 

@@ -17,7 +17,7 @@ import {
 } from '../js/state.js';
 import { World, getVladivostokTime, getTimeOfDayPhase } from '../js/world.js';
 import { MultiplayerClient, showChatBox, hideChatBox, scheduleChatAutoHide } from '../js/network.js';
-import { getLabelDistanceMetrics, substitutePlayerMentions, checkProximityInteractions } from '../js/ui.js';
+import { getLabelDistanceMetrics, substitutePlayerMentions, checkProximityInteractions, showToast, dismissInteractionPrompt } from '../js/ui.js';
 import { selectValidSpawnPoint, Player, revalidatePlayerSpawn, Dunya } from '../js/entities.js';
 import { clearMovementInput } from '../js/input.js';
 import worldMap from '../data/world_map.json';
@@ -379,6 +379,47 @@ describe('MultiplayerClient state replication', () => {
         Player.isGrounded = true;
         Player.emote();
         expect(Player.emoteTimer).toBe(3.2);
+    });
+
+    test('sprint is unlimited and does not deplete or require stamina', () => {
+        const origTHREE = globalThis.THREE;
+        globalThis.THREE = {
+            Vector3: class {
+                constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+                set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+                copy(p) { this.x = p.x; this.y = p.y; this.z = p.z; return this; }
+                add(p) { this.x += p.x; this.y += p.y; this.z += p.z; return this; }
+            }
+        };
+
+        const createMockPart = () => ({ rotation: { x: 0, y: 0, z: 0 } });
+        Player.position = new globalThis.THREE.Vector3(0, 0, 22);
+        Player.velocity = new globalThis.THREE.Vector3(0, 0, 0);
+        Player.group = { visible: true, position: { copy(p) { this.x = p.x; this.y = p.y; this.z = p.z; } }, rotation: { y: 0 } };
+        Player.head = createMockPart();
+        Player.leftArm = createMockPart();
+        Player.rightArm = createMockPart();
+        Player.leftLeg = createMockPart();
+        Player.rightLeg = createMockPart();
+        Player.isGrounded = true;
+
+        clearMovementInput();
+        GAME_STATE.keys.w = true;
+        GAME_STATE.keys.shift = true;
+        GAME_STATE.cameraYaw = 0;
+
+        try {
+            // Run continuous updates for 20 ticks (2.0s)
+            for (let i = 0; i < 20; i++) {
+                Player.update(0.1, new Map());
+            }
+
+            const horizontalSpeed = Math.hypot(Player.velocity.x, Player.velocity.z);
+            expect(horizontalSpeed).toBeCloseTo(14.5, 1);
+        } finally {
+            clearMovementInput();
+            globalThis.THREE = origTHREE;
+        }
     });
 
     test('MultiplayerClient.removeRemotePlayer disposes geometries and materials on group', () => {
@@ -1056,6 +1097,244 @@ describe('Pet Selection (Dog Dunya / Cat Berik) and Persistence', () => {
             expect(Dunya.group.position.y).toBe(0);
         } finally {
             globalThis.THREE = origTHREE;
+        }
+    });
+
+    test('showToast creates a toast that triggers hide transition after 1 second (1000ms)', async () => {
+        const origDoc = globalThis.document;
+        const children = [];
+        const toastContainer = {
+            id: 'toast-container',
+            children,
+            get firstElementChild() {
+                return children[0] || null;
+            },
+            appendChild(el) {
+                children.push(el);
+                el.parentElement = this;
+                return el;
+            },
+            removeChild(el) {
+                const idx = children.indexOf(el);
+                if (idx !== -1) children.splice(idx, 1);
+                el.parentElement = null;
+                return el;
+            }
+        };
+
+        globalThis.document = {
+            getElementById: (id) => (id === 'toast-container' ? toastContainer : null),
+            createElement: (tag) => {
+                const el = {
+                    tagName: tag.toUpperCase(),
+                    className: '',
+                    textContent: '',
+                    style: {},
+                    parentElement: null,
+                    remove() {
+                        if (el.parentElement) {
+                            el.parentElement.removeChild(el);
+                        }
+                    }
+                };
+                return el;
+            }
+        };
+
+        try {
+            showToast('🐾 Ты погладил собаку!', 'amber', 80);
+
+            expect(toastContainer.children.length).toBe(1);
+            const toast = toastContainer.children[0];
+            expect(toast.textContent).toContain('🐾 Ты погладил собаку!');
+            expect(toast.className).toContain('border-amber-400');
+
+            // Before timeout: no style applied
+            expect(toast.style.opacity).toBeUndefined();
+
+            // Wait for dismiss timer (80ms)
+            await new Promise(r => setTimeout(r, 110));
+            expect(toast.style.opacity).toBe('0');
+            expect(toast.style.transform).toBe('translateY(-8px)');
+
+            // Wait for remove timer (300ms)
+            await new Promise(r => setTimeout(r, 330));
+            expect(toastContainer.children.length).toBe(0);
+        } finally {
+            globalThis.document = origDoc;
+        }
+    });
+
+    test('showToast enforces a limit of max 5 toasts on screen, evicting oldest first', () => {
+        const origDoc = globalThis.document;
+        const children = [];
+        const toastContainer = {
+            id: 'toast-container',
+            children,
+            get firstElementChild() {
+                return children[0] || null;
+            },
+            appendChild(el) {
+                children.push(el);
+                el.parentElement = this;
+                return el;
+            },
+            removeChild(el) {
+                const idx = children.indexOf(el);
+                if (idx !== -1) children.splice(idx, 1);
+                el.parentElement = null;
+                return el;
+            }
+        };
+
+        globalThis.document = {
+            getElementById: (id) => (id === 'toast-container' ? toastContainer : null),
+            createElement: (tag) => {
+                const el = {
+                    tagName: tag.toUpperCase(),
+                    className: '',
+                    textContent: '',
+                    style: {},
+                    parentElement: null,
+                    remove() {
+                        if (el.parentElement) {
+                            el.parentElement.removeChild(el);
+                        }
+                    }
+                };
+                return el;
+            }
+        };
+
+        try {
+            showToast('Действие 1: Погладь собаку', 'amber');
+            showToast('Действие 2: Сядь в машину', 'amber');
+            showToast('Действие 3: Купи пян-се', 'amber');
+            showToast('Действие 4: Посети маяк', 'amber');
+            showToast('Действие 5: Погладь кота', 'amber');
+
+            expect(toastContainer.children.length).toBe(5);
+            expect(toastContainer.children[0].textContent).toContain('Действие 1');
+            expect(toastContainer.children[4].textContent).toContain('Действие 5');
+
+            // Adding 6th toast must evict oldest (Действие 1)
+            showToast('Действие 6: Прокатись на колесе', 'amber');
+
+            expect(toastContainer.children.length).toBe(5);
+            expect(toastContainer.children[0].textContent).toContain('Действие 2');
+            expect(toastContainer.children[4].textContent).toContain('Действие 6');
+
+            // Adding 7th toast must evict Действие 2
+            showToast('Действие 7: Включи фары', 'amber');
+            expect(toastContainer.children.length).toBe(5);
+            expect(toastContainer.children[0].textContent).toContain('Действие 3');
+            expect(toastContainer.children[4].textContent).toContain('Действие 7');
+        } finally {
+            globalThis.document = origDoc;
+        }
+    });
+
+    test('checkProximityInteractions displays interaction prompt when entering range and auto-hides after 1 second', async () => {
+        const origDoc = globalThis.document;
+        const promptEl = {
+            classList: {
+                _classes: new Set(['hidden']),
+                add(c) { this._classes.add(c); },
+                remove(c) { this._classes.delete(c); },
+                contains(c) { return this._classes.has(c); }
+            }
+        };
+        const promptText = { textContent: '' };
+
+        globalThis.document = {
+            ...(origDoc || {}),
+            getElementById: (id) => {
+                if (id === 'interaction-prompt') return promptEl;
+                if (id === 'interaction-text') return promptText;
+                return origDoc && origDoc.getElementById ? origDoc.getElementById(id) : null;
+            }
+        };
+
+        const mockInteractable = {
+            id: 'car_mark2',
+            name: 'Toyota Mark II',
+            prompt: 'Сесть за правый руль Toyota Mark II (E)',
+            x: 5,
+            z: 5,
+            radius: 4,
+            onInteract: () => {}
+        };
+
+        try {
+            dismissInteractionPrompt();
+
+            // Player walks within range of the car (using 60ms duration for fast test execution)
+            checkProximityInteractions({
+                playerPos: { x: 5.5, y: 0, z: 5 },
+                npcs: [],
+                interactables: [mockInteractable],
+                dunya: null,
+                worldMap: { zones: [] },
+                promptDurationMs: 60
+            });
+
+            // Prompt is revealed
+            expect(promptEl.classList.contains('hidden')).toBe(false);
+            expect(promptText.textContent).toContain('Сесть за правый руль Toyota Mark II');
+
+            // Running subsequent frames while in range does not re-reveal or break the auto-hide timer
+            checkProximityInteractions({
+                playerPos: { x: 5.5, y: 0, z: 5 },
+                npcs: [],
+                interactables: [mockInteractable],
+                dunya: null,
+                worldMap: { zones: [] },
+                promptDurationMs: 60
+            });
+            expect(promptEl.classList.contains('hidden')).toBe(false);
+
+            // Wait 90ms for auto-hide
+            await new Promise(r => setTimeout(r, 90));
+
+            // Prompt is hidden after the duration!
+            expect(promptEl.classList.contains('hidden')).toBe(true);
+
+            // Dismissing prompt clears state
+            dismissInteractionPrompt();
+            expect(promptEl.classList.contains('hidden')).toBe(true);
+        } finally {
+            dismissInteractionPrompt();
+            globalThis.document = origDoc;
+        }
+    });
+
+    test('dismissInteractionPrompt immediately hides prompt on interaction execution or vehicle drive', () => {
+        const origDoc = globalThis.document;
+        const promptEl = {
+            classList: {
+                _classes: new Set(),
+                add(c) { this._classes.add(c); },
+                remove(c) { this._classes.delete(c); },
+                contains(c) { return this._classes.has(c); }
+            }
+        };
+        const promptText = { textContent: 'Погладить болонку Дуню 🐾🤍 (+Вайб)' };
+
+        globalThis.document = {
+            ...(origDoc || {}),
+            getElementById: (id) => {
+                if (id === 'interaction-prompt') return promptEl;
+                if (id === 'interaction-text') return promptText;
+                return origDoc && origDoc.getElementById ? origDoc.getElementById(id) : null;
+            }
+        };
+
+        try {
+            expect(promptEl.classList.contains('hidden')).toBe(false);
+            dismissInteractionPrompt();
+            expect(promptEl.classList.contains('hidden')).toBe(true);
+        } finally {
+            globalThis.document = origDoc;
         }
     });
 });
