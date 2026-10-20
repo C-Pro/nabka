@@ -234,15 +234,42 @@ export function getLabelDistanceMetrics(distFromCamera) {
     return { visible: true, opacity: opacity.toFixed(3), zIndex };
 }
 
+export const LOCAL_LABEL_INITIAL_DURATION_MS = 1500;
+export const LOCAL_LABEL_EXIT_VEHICLE_DURATION_MS = 2500;
+
+let localLabelsVisibleUntil = (typeof performance !== 'undefined' && performance.now)
+    ? performance.now() + LOCAL_LABEL_INITIAL_DURATION_MS
+    : (Date.now() + LOCAL_LABEL_INITIAL_DURATION_MS);
+
+export function showLocalLabels(durationMs = LOCAL_LABEL_INITIAL_DURATION_MS) {
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    localLabelsVisibleUntil = Math.max(localLabelsVisibleUntil, now + durationMs);
+}
+
+export function hideLocalLabels() {
+    localLabelsVisibleUntil = 0;
+}
+
+export function isLocalLabelsVisible() {
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    return now < localLabelsVisibleUntil;
+}
+
 export function updateScreenProjections({ camera, playerPos, dunya, worldLabels, npcs, remotePlayers }) {
     const container = document.getElementById('game-canvas-container');
     if (!container || !camera) return;
     const width = container.clientWidth;
     const height = container.clientHeight;
 
+    const showLocal = isLocalLabelsVisible() && !GAME_STATE.inVehicle;
+
     const nametag = document.getElementById('player-nametag');
+    const nametagPill = document.getElementById('player-nametag-pill');
+    const playerBubble = document.getElementById('player-speech-bubble');
+    const hasPlayerBubble = Boolean(playerBubble && !playerBubble.classList.contains('hidden'));
+
     if (nametag) {
-        if (!GAME_STATE.isConnected) {
+        if (!GAME_STATE.isConnected || (!showLocal && !hasPlayerBubble)) {
             nametag.style.opacity = '0';
             nametag.style.display = 'none';
         } else {
@@ -258,6 +285,9 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
                 nametag.style.transform = `translate3d(${sx}px, ${sy}px, 0) translate(-50%, -100%)`;
                 nametag.style.opacity = pMetrics.opacity;
                 nametag.style.zIndex = pMetrics.zIndex;
+                if (nametagPill) {
+                    nametagPill.style.display = showLocal ? '' : 'none';
+                }
             } else {
                 nametag.style.opacity = '0';
                 nametag.style.display = 'none';
@@ -266,8 +296,12 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
     }
 
     const dunyaTag = document.getElementById('dunya-nametag');
+    const petPill = document.getElementById('pet-nametag-pill');
+    const dunyaBubble = document.getElementById('dunya-speech-bubble');
+    const hasDunyaBubble = Boolean(dunyaBubble && !dunyaBubble.classList.contains('hidden'));
+
     if (dunyaTag && dunya && dunya.group) {
-        if (!GAME_STATE.isConnected) {
+        if (!GAME_STATE.isConnected || (!showLocal && !hasDunyaBubble)) {
             dunyaTag.style.opacity = '0';
             dunyaTag.style.display = 'none';
         } else {
@@ -283,6 +317,9 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
                 dunyaTag.style.transform = `translate3d(${dxScreen}px, ${dyScreen}px, 0) translate(-50%, -100%)`;
                 dunyaTag.style.opacity = dMetrics.opacity;
                 dunyaTag.style.zIndex = dMetrics.zIndex;
+                if (petPill) {
+                    petPill.style.display = showLocal ? '' : 'none';
+                }
             } else {
                 dunyaTag.style.opacity = '0';
                 dunyaTag.style.display = 'none';

@@ -17,8 +17,20 @@ import {
 } from '../js/state.js';
 import { World, getVladivostokTime, getTimeOfDayPhase } from '../js/world.js';
 import { MultiplayerClient, showChatBox, hideChatBox, scheduleChatAutoHide } from '../js/network.js';
-import { getLabelDistanceMetrics, substitutePlayerMentions, checkProximityInteractions, showToast, dismissInteractionPrompt } from '../js/ui.js';
-import { selectValidSpawnPoint, Player, revalidatePlayerSpawn, Dunya } from '../js/entities.js';
+import {
+    getLabelDistanceMetrics,
+    substitutePlayerMentions,
+    checkProximityInteractions,
+    showToast,
+    dismissInteractionPrompt,
+    showLocalLabels,
+    hideLocalLabels,
+    isLocalLabelsVisible,
+    LOCAL_LABEL_INITIAL_DURATION_MS,
+    LOCAL_LABEL_EXIT_VEHICLE_DURATION_MS,
+    updateScreenProjections
+} from '../js/ui.js';
+import { selectValidSpawnPoint, Player, revalidatePlayerSpawn, Dunya, toggleVehicleDrive } from '../js/entities.js';
 import { clearMovementInput } from '../js/input.js';
 import worldMap from '../data/world_map.json';
 import npcDialogues from '../data/npc_dialogues.json';
@@ -1336,6 +1348,165 @@ describe('Pet Selection (Dog Dunya / Cat Berik) and Persistence', () => {
         } finally {
             globalThis.document = origDoc;
         }
+    });
+
+    describe('Character and Pet Label Visibility Lifecycle', () => {
+        test('showLocalLabels sets visibility and isLocalLabelsVisible expires after duration', () => {
+            showLocalLabels(1500);
+            expect(isLocalLabelsVisible()).toBe(true);
+
+            hideLocalLabels();
+            expect(isLocalLabelsVisible()).toBe(false);
+        });
+
+        test('exiting a vehicle triggers showLocalLabels for exit duration', () => {
+            const dummyCar = {
+                id: 'car_test',
+                group: { position: { x: 10, y: 0.02, z: 20 }, rotation: { y: 0 } },
+                speed: 10,
+                vx: 0,
+                vz: 10,
+                yawRate: 0,
+                isAwake: true,
+                isDrifting: false,
+                isBraking: false
+            };
+
+            hideLocalLabels();
+            expect(isLocalLabelsVisible()).toBe(false);
+
+            // Put player in vehicle
+            GAME_STATE.inVehicle = dummyCar;
+            Player.position = { set: () => {} };
+
+            // Exiting vehicle
+            toggleVehicleDrive(dummyCar);
+            expect(GAME_STATE.inVehicle).toBeNull();
+            expect(isLocalLabelsVisible()).toBe(true);
+
+            hideLocalLabels();
+        });
+
+        test('updateScreenProjections hides labels when isLocalLabelsVisible is false, and shows them when true', () => {
+            const playerNametag = {
+                style: { display: '', opacity: '1', transform: '', zIndex: 0 }
+            };
+            const playerPill = {
+                style: { display: '' }
+            };
+            const playerBubble = {
+                classList: {
+                    contains: (cls) => cls === 'hidden'
+                }
+            };
+
+            const dunyaTag = {
+                style: { display: '', opacity: '1', transform: '', zIndex: 0 }
+            };
+            const petPill = {
+                style: { display: '' }
+            };
+            const dunyaBubble = {
+                classList: {
+                    contains: (cls) => cls === 'hidden'
+                }
+            };
+
+            const origDoc = globalThis.document;
+            const origThree = globalThis.THREE;
+            globalThis.THREE = {
+                Vector3: class {
+                    constructor(x, y, z) { this.x = x; this.y = y; this.z = z; }
+                }
+            };
+
+            globalThis.document = {
+                ...(origDoc || {}),
+                getElementById: (id) => {
+                    if (id === 'game-canvas-container') return { clientWidth: 800, clientHeight: 600 };
+                    if (id === 'player-nametag') return playerNametag;
+                    if (id === 'player-nametag-pill') return playerPill;
+                    if (id === 'player-speech-bubble') return playerBubble;
+                    if (id === 'dunya-nametag') return dunyaTag;
+                    if (id === 'pet-nametag-pill') return petPill;
+                    if (id === 'dunya-speech-bubble') return dunyaBubble;
+                    return origDoc && origDoc.getElementById ? origDoc.getElementById(id) : null;
+                }
+            };
+
+            const mockCamera = {
+                position: { distanceTo: () => 5 }
+            };
+            const makePos = () => {
+                const vec = {
+                    x: 0,
+                    y: 0,
+                    z: 0.5,
+                    clone() { return makePos(); },
+                    add() { return makePos(); },
+                    project() { return this; },
+                    distanceTo() { return 5; }
+                };
+                return vec;
+            };
+            const mockPlayerPos = makePos();
+            const mockDunya = {
+                group: {},
+                position: makePos()
+            };
+
+            try {
+                GAME_STATE.isConnected = true;
+                GAME_STATE.inVehicle = null;
+
+                // 1. Labels active (e.g. initial spawn or vehicle exit)
+                showLocalLabels(1500);
+                updateScreenProjections({
+                    camera: mockCamera,
+                    playerPos: mockPlayerPos,
+                    dunya: mockDunya,
+                    worldLabels: [],
+                    npcs: [],
+                    remotePlayers: new Map()
+                });
+                expect(playerNametag.style.display).toBe('');
+                expect(playerPill.style.display).toBe('');
+                expect(dunyaTag.style.display).toBe('');
+                expect(petPill.style.display).toBe('');
+
+                // 2. Labels expired / hidden after 1.5s
+                hideLocalLabels();
+                updateScreenProjections({
+                    camera: mockCamera,
+                    playerPos: mockPlayerPos,
+                    dunya: mockDunya,
+                    worldLabels: [],
+                    npcs: [],
+                    remotePlayers: new Map()
+                });
+                expect(playerNametag.style.display).toBe('none');
+                expect(playerNametag.style.opacity).toBe('0');
+                expect(dunyaTag.style.display).toBe('none');
+                expect(dunyaTag.style.opacity).toBe('0');
+
+                // 3. Labels expired, but speech bubble active: container projected, pill hidden
+                playerBubble.classList.contains = () => false; // speech bubble active
+                updateScreenProjections({
+                    camera: mockCamera,
+                    playerPos: mockPlayerPos,
+                    dunya: mockDunya,
+                    worldLabels: [],
+                    npcs: [],
+                    remotePlayers: new Map()
+                });
+                expect(playerNametag.style.display).toBe('');
+                expect(playerPill.style.display).toBe('none');
+            } finally {
+                globalThis.document = origDoc;
+                globalThis.THREE = origThree;
+                hideLocalLabels();
+            }
+        });
     });
 });
 

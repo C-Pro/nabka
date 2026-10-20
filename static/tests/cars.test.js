@@ -101,6 +101,42 @@ describe('Vehicle Dynamics & Inertia', () => {
         expect(carFootBrake.vz).toBeLessThan(0);
     });
 
+    test('engine beats handbrake: holding throttle (W) and handbrake (Space) maintains forward propulsion and does not stop', () => {
+        // 1. Moving vehicle maintains speed under throttle + handbrake
+        const movingCar = createTestCar({ yaw: 0, vz: 20.0, speed: 20.0 });
+        const throttleHandbrakeInput = { throttle: 1, steer: 0, handbrake: true, boost: false };
+
+        for (let i = 0; i < 30; i++) {
+            stepVehicleDynamics(movingCar, throttleHandbrakeInput, 0.1);
+        }
+
+        // Must still be moving fast under forward engine power (never decelerate to 0)
+        expect(movingCar.vz).toBeGreaterThan(18.0);
+        expect(movingCar.isBraking).toBe(false);
+
+        // 2. Stationary vehicle accelerates forward under throttle + handbrake
+        const stoppedCar = createTestCar({ yaw: 0, vx: 0, vz: 0, speed: 0 });
+        for (let i = 0; i < 20; i++) {
+            stepVehicleDynamics(stoppedCar, throttleHandbrakeInput, 0.1);
+        }
+
+        expect(stoppedCar.vz).toBeGreaterThan(10.0);
+        expect(stoppedCar.speed).toBeGreaterThan(10.0);
+    });
+
+    test('engine beats handbrake in drift: holding throttle and handbrake while steering sustains drift without stopping', () => {
+        const car = createTestCar({ yaw: 0, vz: 15.0, speed: 15.0 });
+        const driftInput = { throttle: 1, steer: 0.5, handbrake: true, boost: false };
+
+        for (let i = 0; i < 20; i++) {
+            stepVehicleDynamics(car, driftInput, 0.1);
+        }
+
+        expect(car.isDrifting).toBe(true);
+        const totalSpeed = Math.hypot(car.vx, car.vz);
+        expect(totalSpeed).toBeGreaterThan(8.0);
+    });
+
     test('boost release does not delete existing velocity; car coasts down naturally', () => {
         const car = createTestCar({ yaw: 0, vz: 33.0, speed: 33.0 });
         // Throttle held, but boost released

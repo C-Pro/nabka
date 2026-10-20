@@ -24,10 +24,12 @@ const MIME_TYPES = {
 
 const isBatchExport = process.argv.includes('--export-models');
 const PORT = Number(process.env.EDITOR_PORT || (isBatchExport ? 0 : 8090));
+const HOSTNAME = process.env.EDITOR_HOST || '127.0.0.1';
 
 let browserProc = null;
 
 const server = Bun.serve({
+    hostname: HOSTNAME,
     port: PORT,
     async fetch(req) {
         const url = new URL(req.url);
@@ -45,7 +47,7 @@ const server = Bun.serve({
         if (pathname.startsWith('/api/models/') && req.method === 'PUT') {
             const rawName = pathname.slice('/api/models/'.length).replace(/[^a-zA-Z0-9._-]/g, '');
             const fileName = rawName.endsWith('.glb') ? rawName : `${rawName}.glb`;
-            if (!fileName || fileName === '.glb') {
+            if (!fileName || fileName === '.glb' || fileName.includes('..')) {
                 return new Response('Invalid model name', { status: 400 });
             }
             const buf = new Uint8Array(await req.arrayBuffer());
@@ -135,7 +137,7 @@ const server = Bun.serve({
 });
 
 if (isBatchExport) {
-    const targetUrl = `http://localhost:${server.port}/editor/index.html?exportAll=1`;
+    const targetUrl = `http://127.0.0.1:${server.port}/editor/index.html?exportAll=1`;
     console.log(`Running headless GLB export via ${targetUrl}...`);
     browserProc = spawn('chromium', [
         '--headless',
@@ -152,5 +154,5 @@ if (isBatchExport) {
         process.exit(1);
     }, 30000);
 } else {
-    console.log(`Nabka Standalone World & Model Editor running at http://localhost:${server.port}/editor/index.html`);
+    console.log(`Nabka Standalone World & Model Editor running at http://${HOSTNAME}:${server.port}/editor/index.html`);
 }

@@ -5,7 +5,7 @@ import { SoundManager } from './audio.js';
 import { TextureFactory } from './textures.js';
 import { World } from './world.js';
 import { Player, toggleVehicleDrive, revalidatePlayerSpawn } from './entities.js';
-import { showToast, triggerPlayerSpeech } from './ui.js';
+import { showToast, triggerPlayerSpeech, showLocalLabels } from './ui.js';
 import { ModelLoader, ModelBuilders } from './models.js';
 
 export function hashUsernameColor(username) {
@@ -616,6 +616,7 @@ export const MultiplayerClient = {
                 this.updateOnlineRosterUI();
                 if (user === GAME_STATE.username) {
                     showToast(`🌐 Ты на Спортивной набережной как @${user}!`, 'emerald');
+                    showLocalLabels(1500);
                     if (this.worldMap && revalidatePlayerSpawn(this.worldMap, this.remotePlayers)) {
                         this.sendMoveSnapshot(true);
                     }
@@ -662,7 +663,10 @@ export const MultiplayerClient = {
                                 car.remoteDriver = null;
                                 car.netTarget = null;
                             }
-                            car.group.position.set(Number(msg.x) || 0, Number(msg.y) || 0.02, Number(msg.z) || 0);
+                            const parkedY = (msg.y !== undefined && Number.isFinite(Number(msg.y)))
+                                ? Number(msg.y)
+                                : ((car.spawnY !== undefined && Number.isFinite(car.spawnY)) ? car.spawnY : 0.02);
+                            car.group.position.set(Number(msg.x) || 0, parkedY, Number(msg.z) || 0);
                             car.group.rotation.y = Number(msg.yaw) || 0;
                             car.x = car.group.position.x;
                             car.y = car.group.position.y;
@@ -864,7 +868,9 @@ export const MultiplayerClient = {
                         car.remoteDriver = this.username;
                         car.netTarget = {
                             x: Number(msg.x) || 0,
-                            y: Number(msg.y) || 0.02,
+                            y: (msg.y !== undefined && Number.isFinite(Number(msg.y)))
+                                ? Number(msg.y)
+                                : ((car.spawnY !== undefined && Number.isFinite(car.spawnY)) ? car.spawnY : 0.02),
                             z: Number(msg.z) || 0,
                             speed: Number(msg.speed) || 0,
                             yaw: Number(msg.yaw) || 0,

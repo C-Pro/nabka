@@ -4,7 +4,7 @@ import { PhysicsEngine, WorldVehiclePhysics, stepWorldVehiclePhysics, getVehicle
 import { TextureFactory } from './textures.js';
 import { SoundManager } from './audio.js';
 import { World } from './world.js';
-import { completePOI, triggerPlayerSpeech, showToast, closeNpcDialogue, dismissInteractionPrompt } from './ui.js';
+import { completePOI, triggerPlayerSpeech, showToast, closeNpcDialogue, dismissInteractionPrompt, showLocalLabels, hideLocalLabels, LOCAL_LABEL_EXIT_VEHICLE_DURATION_MS } from './ui.js';
 import { ModelLoader, ModelBuilders } from './models.js';
 
 export const Player = {
@@ -275,6 +275,7 @@ export const Dunya = {
         if (this.scene) {
             this._spawnModel();
             this.updateNametagUI();
+            showLocalLabels();
         }
     },
 
@@ -296,6 +297,14 @@ export const Dunya = {
         const isCat = this.petType === 'cat';
         const modelUrl = isCat ? 'models/berik.glb' : 'models/dunya.glb';
         const fallbackFn = isCat ? () => ModelBuilders.berik() : () => ModelBuilders.dunya();
+
+        if (modelUrl && typeof ModelLoader !== 'undefined' && ModelLoader.cache && !ModelLoader.cache.has(modelUrl) && typeof ModelLoader.load === 'function') {
+            ModelLoader.load(modelUrl).then(loaded => {
+                if (loaded && this.petType === (isCat ? 'cat' : 'dog') && this.scene) {
+                    this._spawnModel();
+                }
+            });
+        }
 
         this.group = ModelLoader.instantiate(modelUrl, fallbackFn);
         if (this.position) this.group.position.copy(this.position);
@@ -608,11 +617,12 @@ export const Dunya = {
     }
 };
 
-export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = null, customId = null, modelUrl = null) {
+export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = null, customId = null, modelUrl = null, y = 0.02) {
     const carId = customId || ('car_' + World.vehicles.length);
     const resolvedModelUrl = modelUrl || `models/${carId}.glb`;
     const group = ModelLoader.instantiate(resolvedModelUrl, () => ModelBuilders.car(colorHex, carId));
-    group.position.set(x, 0.02, z);
+    const initY = (y !== undefined && Number.isFinite(Number(y))) ? Number(y) : 0.02;
+    group.position.set(x, initY, z);
     group.rotation.y = rotY;
 
     const headBeam = new THREE.SpotLight(0xfef08a, 1.8, 36, Math.PI / 5, 0.45, 1.2);
@@ -622,7 +632,9 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
     group.add(headBeam);
     group.add(headBeam.target);
 
-    World.scene.add(group);
+    if (World.scene && typeof World.scene.add === 'function') {
+        World.scene.add(group);
+    }
 
     let mass = 1450;
     if (name.includes('Mark II')) mass = 1470;
@@ -637,7 +649,7 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
         group,
         headBeam,
         x,
-        y: 0.02,
+        y: initY,
         z,
         yaw: rotY,
         vx: 0,
@@ -657,12 +669,12 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
         remoteDriver: null,
         netTarget: null,
         spawnX: x,
-        spawnY: 0.02,
+        spawnY: initY,
         spawnZ: z,
         spawnRotY: rotY,
         resetToSpawn() {
             this.x = this.spawnX;
-            this.y = this.spawnY || 0.02;
+            this.y = (this.spawnY !== undefined && Number.isFinite(this.spawnY)) ? this.spawnY : 0.02;
             this.z = this.spawnZ;
             this.yaw = this.spawnRotY || 0;
             this.vx = 0;
@@ -678,7 +690,7 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
             this.snapshotBuffer = null;
             resetVehiclePose(this);
             if (this.group && this.group.position) {
-                this.group.position.set(this.spawnX, this.spawnY || 0.02, this.spawnZ);
+                this.group.position.set(this.spawnX, this.y, this.spawnZ);
                 this.group.rotation.y = this.spawnRotY || 0;
             }
             if (this.headBeam) {
@@ -716,10 +728,10 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
 }
 
 export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
-    const speedBox = document.getElementById('speedometer-box');
-    const mobilePedals = document.getElementById('mobile-car-pedals');
-    const jumpBtn = document.getElementById('btn-action-jump');
-    const actionBtnLabel = document.getElementById('action-btn-label');
+    const speedBox = (typeof document !== 'undefined') ? document.getElementById('speedometer-box') : null;
+    const mobilePedals = (typeof document !== 'undefined') ? document.getElementById('mobile-car-pedals') : null;
+    const jumpBtn = (typeof document !== 'undefined') ? document.getElementById('btn-action-jump') : null;
+    const actionBtnLabel = (typeof document !== 'undefined') ? document.getElementById('action-btn-label') : null;
     SoundManager.playActionSound('car');
 
     dismissInteractionPrompt();
@@ -749,6 +761,7 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         if (jumpBtn) jumpBtn.classList.remove('hidden');
         if (actionBtnLabel) actionBtnLabel.textContent = 'Действие (E)';
         showToast(`🚶 @${GAME_STATE.username} вышел на променад Набки`, 'sky');
+        showLocalLabels(LOCAL_LABEL_EXIT_VEHICLE_DURATION_MS);
         if (onSendSnapshot) onSendSnapshot(true);
     } else {
         if (carObj.remoteDriver && carObj.remoteDriver !== GAME_STATE.username) {
@@ -757,6 +770,7 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         }
         if (GAME_STATE.activeNpcChat) closeNpcDialogue();
         GAME_STATE.inVehicle = carObj;
+        hideLocalLabels();
         carObj.snapshotBuffer = null;
         carObj.remoteDriver = null;
         resetVehiclePose(carObj);

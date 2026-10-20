@@ -647,17 +647,25 @@ export function stepSingleVehicleDynamics(car, input, dt) {
         }
 
         if (handbrake) {
-            const hBrakeDecel = CAR_SPECS.accelHandbrake;
-            if (vLong > 0) {
-                vLong = Math.max(0, vLong - hBrakeDecel * dt);
-            } else if (vLong < 0) {
-                vLong = Math.min(0, vLong + hBrakeDecel * dt);
-            }
-            if (!boost && Math.abs(vLong) < 0.2) {
-                vLong = 0;
-            }
-            if (Math.abs(vLong) > 0.5) {
-                car.isBraking = true;
+            if (throttle <= 0) {
+                // When off-throttle (coasting) or reversing, handbrake strongly decelerates the vehicle to a complete stop
+                const hBrakeDecel = CAR_SPECS.accelHandbrake;
+                if (vLong > 0) {
+                    vLong = Math.max(0, vLong - hBrakeDecel * dt);
+                } else if (vLong < 0) {
+                    vLong = Math.min(0, vLong + hBrakeDecel * dt);
+                }
+                if (!boost && Math.abs(vLong) < 0.2) {
+                    vLong = 0;
+                }
+                if (Math.abs(vLong) > 0.5) {
+                    car.isBraking = true;
+                }
+            } else {
+                // Throttle > 0: Engine beats handbrake!
+                // Drive wheels overpower rear handbrake resistance so the car maintains forward
+                // propulsion. Handbrake breaks rear traction to initiate/sustain drifts without
+                // dragging vehicle speed down to a halt.
             }
         }
 
@@ -673,7 +681,7 @@ export function stepSingleVehicleDynamics(car, input, dt) {
         const maxGripAcc = CAR_SPECS.muGrip * 9.81;
 
         const isSharpTurn = Math.abs(steer) > 0.35 && totalSpeed > 4.0;
-        const canDriftAtSpeed = totalSpeed > 2.0;
+        const canDriftAtSpeed = (handbrake && throttle > 0) ? totalSpeed > 0.8 : totalSpeed > 2.0;
         const enterDrift = canDriftAtSpeed && (
             (car.isBraking && isSharpTurn) ||
             (handbrake && (Math.abs(steer) > 0.1 || Math.abs(vLat) > 0.4)) ||

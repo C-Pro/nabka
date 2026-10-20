@@ -1989,6 +1989,7 @@ export const ModelLoader = {
         const urls = new Set([
             'models/player.glb',
             'models/dunya.glb',
+            'models/berik.glb',
             'models/npc.glb',
             'models/seagull.glb',
             'models/sailboat_white.glb',

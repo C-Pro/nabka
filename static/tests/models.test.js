@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseGLB, cloneModelHierarchy, ModelLoader, DEFAULT_LANDMARKS, computeModelBoundingBox } from '../js/models.js';
 import { exportObjectToGLB } from '../../editor/export_glb.js';
+import { createJDMCar } from '../js/entities.js';
 
 const STATIC_DIR = resolve(import.meta.dir, '..');
 const MODELS_DIR = join(STATIC_DIR, 'models');
@@ -278,6 +279,11 @@ function installMockThree() {
                 this.setAttribute('normal', new BufferAttribute(new Float32Array(pos.count * 3), 3));
             }
         }
+        rotateX() { return this; }
+        rotateY() { return this; }
+        rotateZ() { return this; }
+        translate() { return this; }
+        scale() { return this; }
         clone() {
             const g = new BufferGeometry();
             for (const [k, v] of Object.entries(this.attributes)) {
@@ -381,6 +387,12 @@ function installMockThree() {
     class DirectionalLight extends Light {}
     class PointLight extends Light {}
     class AmbientLight extends Light {}
+    class SpotLight extends Light {
+        constructor(color, intensity = 1.0) {
+            super(color, intensity);
+            this.target = new Object3D();
+        }
+    }
     class HemisphereLight extends Light {
         constructor(skyColor, groundColor, intensity = 1.0) {
             super(skyColor, intensity);
@@ -400,6 +412,7 @@ function installMockThree() {
         Light,
         DirectionalLight,
         PointLight,
+        SpotLight,
         AmbientLight,
         HemisphereLight,
         BufferGeometry,
@@ -881,6 +894,39 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
         expect(World.streetLightsActive).toBe(false);
         expect(ptLight.visible).toBe(false);
         expect(poolMesh.visible).toBe(false);
+    });
+
+    test('ModelLoader.preloadAll includes models/berik.glb alongside models/dunya.glb', async () => {
+        const loadedUrls = [];
+        const originalLoad = ModelLoader.load;
+        ModelLoader.load = async (url) => {
+            loadedUrls.push(url);
+            return new globalThis.THREE.Group();
+        };
+        try {
+            await ModelLoader.preloadAll({ landmarks: [], stalls: [], vehicles: [], props: [] });
+            expect(loadedUrls).toContain('models/berik.glb');
+            expect(loadedUrls).toContain('models/dunya.glb');
+            expect(loadedUrls).toContain('models/player.glb');
+        } finally {
+            ModelLoader.load = originalLoad;
+        }
+    });
+
+    test('createJDMCar initializes simulation, group, and spawn height from configured y and resetToSpawn preserves it', () => {
+        const car = createJDMCar('Suzuki Jimny', 0xf59e0b, 40.05, 10.5, 0, null, 'car_jimny', null, 0.27);
+        expect(car.y).toBe(0.27);
+        expect(car.spawnY).toBe(0.27);
+        expect(car.group.position.y).toBe(0.27);
+
+        // Move car during gameplay
+        car.y = 1.5;
+        car.group.position.y = 1.5;
+
+        // Reset to spawn must restore configured height
+        car.resetToSpawn();
+        expect(car.y).toBe(0.27);
+        expect(car.group.position.y).toBe(0.27);
     });
 });
 

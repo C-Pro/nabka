@@ -4,7 +4,7 @@ import { World } from './world.js';
 import { Player, Dunya, createJDMCar, toggleVehicleDrive, initPromenadeNPCs, selectValidSpawnPoint, updateWorldVehicles } from './entities.js';
 import { MultiplayerClient } from './network.js';
 import { bindInputControls } from './input.js';
-import { checkProximityInteractions, updateScreenProjections, drawGTARadar } from './ui.js';
+import { checkProximityInteractions, updateScreenProjections, drawGTARadar, showLocalLabels } from './ui.js';
 import { ModelLoader } from './models.js';
 
 let activeWorldMap = {};
@@ -153,11 +153,9 @@ export async function startApp() {
         const rawColor = v.colorHex !== undefined ? v.colorHex : v.color;
         const colorInt = typeof rawColor === 'string' ? parseInt(rawColor, 16) : rawColor;
         const rotY = v.rotY ?? v.rotation ?? v.rotationY ?? 0;
-        const carObj = createJDMCar(v.name, colorInt, v.x, v.z, rotY, handleToggleDrive, v.id, v.model || null);
+        const carY = (v.y !== undefined && Number.isFinite(Number(v.y))) ? Number(v.y) : 0.02;
+        const carObj = createJDMCar(v.name, colorInt, v.x, v.z, rotY, handleToggleDrive, v.id, v.model || null, carY);
         if (carObj && carObj.group) {
-            if (v.y !== undefined) {
-                carObj.group.position.y = v.y;
-            }
             if (v.scale !== undefined && v.scale !== 1) {
                 carObj.group.scale.setScalar(v.scale);
             }
@@ -187,6 +185,7 @@ export async function startApp() {
 
     MultiplayerClient.initUI(worldMap);
     bindInputControls(worldMap);
+    showLocalLabels(1500);
 
     gameLoop();
 }
