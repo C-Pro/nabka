@@ -84,6 +84,9 @@ type InboundDrivingMoveMsg struct {
 	Yaw      *float64 `msgpack:"yaw"`
 	Drift    *bool    `msgpack:"drift"`
 	Lights   *bool    `msgpack:"lights"`
+	VX       *float64 `msgpack:"vx"`
+	VZ       *float64 `msgpack:"vz"`
+	YawRate  *float64 `msgpack:"yaw_rate"`
 }
 
 // InboundChatMsg represents an incoming chat message.
@@ -122,17 +125,22 @@ type OutboundPedestrianMoveMsg struct {
 
 // OutboundDrivingMoveMsg broadcasts verified vehicle movement.
 type OutboundDrivingMoveMsg struct {
-	Username string  `msgpack:"username"`
-	Type     string  `msgpack:"type"`
-	Mode     string  `msgpack:"mode"`
-	CarID    string  `msgpack:"car_id"`
-	X        float64 `msgpack:"x"`
-	Y        float64 `msgpack:"y"`
-	Z        float64 `msgpack:"z"`
-	Speed    float64 `msgpack:"speed"`
-	Yaw      float64 `msgpack:"yaw"`
-	Drift    bool    `msgpack:"drift"`
-	Lights   bool    `msgpack:"lights"`
+	Username     string  `msgpack:"username"`
+	Type         string  `msgpack:"type"`
+	Mode         string  `msgpack:"mode"`
+	CarID        string  `msgpack:"car_id"`
+	X            float64 `msgpack:"x"`
+	Y            float64 `msgpack:"y"`
+	Z            float64 `msgpack:"z"`
+	Speed        float64 `msgpack:"speed"`
+	Yaw          float64 `msgpack:"yaw"`
+	Drift        bool    `msgpack:"drift"`
+	Lights       bool    `msgpack:"lights"`
+	VX           float64 `msgpack:"vx"`
+	VZ           float64 `msgpack:"vz"`
+	YawRate      float64 `msgpack:"yaw_rate"`
+	Sequence     uint64  `msgpack:"sequence"`
+	SampleTimeMS float64 `msgpack:"sample_time_ms"`
 }
 
 // OutboundChatMsg forwards verified chat to display in chat and speech bubbles.
@@ -151,32 +159,40 @@ type OutboundErrorMsg struct {
 
 // CarState tracks the last seen world position and state of a vehicle.
 type CarState struct {
-	CarID  string  `msgpack:"car_id"`
-	X      float64 `msgpack:"x"`
-	Y      float64 `msgpack:"y"`
-	Z      float64 `msgpack:"z"`
-	Speed  float64 `msgpack:"speed"`
-	Yaw    float64 `msgpack:"yaw"`
-	Drift  bool    `msgpack:"drift"`
-	Lights bool    `msgpack:"lights"`
-	Driver string  `msgpack:"driver,omitempty"` // Active driver username, or empty if parked
+	CarID        string  `msgpack:"car_id"`
+	X            float64 `msgpack:"x"`
+	Y            float64 `msgpack:"y"`
+	Z            float64 `msgpack:"z"`
+	Speed        float64 `msgpack:"speed"`
+	Yaw          float64 `msgpack:"yaw"`
+	Drift        bool    `msgpack:"drift"`
+	Lights       bool    `msgpack:"lights"`
+	Driver       string  `msgpack:"driver,omitempty"` // Active driver username, or empty if parked
+	VX           float64 `msgpack:"vx"`
+	VZ           float64 `msgpack:"vz"`
+	YawRate      float64 `msgpack:"yaw_rate"`
+	Sequence     uint64  `msgpack:"sequence"`
+	SampleTimeMS float64 `msgpack:"sample_time_ms"`
 }
 
 // UserState tracks the last seen movement state of an active player.
 type UserState struct {
-	Username string  `msgpack:"username"`
-	Mode     string  `msgpack:"mode"` // ModePedestrian or ModeDriving
-	CarID    string  `msgpack:"car_id,omitempty"`
-	X        float64 `msgpack:"x"`
-	Y        float64 `msgpack:"y"`
-	Z        float64 `msgpack:"z"`
-	VX       float64 `msgpack:"vx,omitempty"`
-	VZ       float64 `msgpack:"vz,omitempty"`
-	Speed    float64 `msgpack:"speed,omitempty"`
-	Yaw      float64 `msgpack:"yaw"`
-	Anim     string  `msgpack:"anim,omitempty"`
-	Drift    bool    `msgpack:"drift,omitempty"`
-	Lights   bool    `msgpack:"lights,omitempty"`
+	Username     string  `msgpack:"username"`
+	Mode         string  `msgpack:"mode"` // ModePedestrian or ModeDriving
+	CarID        string  `msgpack:"car_id,omitempty"`
+	X            float64 `msgpack:"x"`
+	Y            float64 `msgpack:"y"`
+	Z            float64 `msgpack:"z"`
+	VX           float64 `msgpack:"vx,omitempty"`
+	VZ           float64 `msgpack:"vz,omitempty"`
+	Speed        float64 `msgpack:"speed,omitempty"`
+	Yaw          float64 `msgpack:"yaw"`
+	Anim         string  `msgpack:"anim,omitempty"`
+	Drift        bool    `msgpack:"drift,omitempty"`
+	Lights       bool    `msgpack:"lights,omitempty"`
+	YawRate      float64 `msgpack:"yaw_rate"`
+	Sequence     uint64  `msgpack:"sequence"`
+	SampleTimeMS float64 `msgpack:"sample_time_ms"`
 }
 
 // Validation helpers
@@ -347,7 +363,20 @@ func ParseDrivingMove(data []byte, verifiedUsername string) (*OutboundDrivingMov
 		return nil, errors.New("driving coordinates, speed, or yaw must be finite numbers")
 	}
 
+	vx, vz, yawRate := math.Sin(*in.Yaw)*(*in.Speed), math.Cos(*in.Yaw)*(*in.Speed), 0.0
+	for _, field := range []struct {
+		value  *float64
+		target *float64
+	}{{in.VX, &vx}, {in.VZ, &vz}, {in.YawRate, &yawRate}} {
+		if field.value != nil {
+			if !IsFinite(*field.value) {
+				return nil, errors.New("vehicle velocity and yaw_rate must be finite")
+			}
+			*field.target = *field.value
+		}
+	}
 	return &OutboundDrivingMoveMsg{
+		VX: vx, VZ: vz, YawRate: yawRate,
 		Username: verifiedUsername,
 		Type:     TypeMove,
 		Mode:     ModeDriving,

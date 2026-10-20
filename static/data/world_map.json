@@ -1,17 +1,815 @@
 {
+  "terrain": [
+    {
+      "id": "ocean",
+      "name": "Амурский залив (Океан)",
+      "type": "ocean",
+      "x": -178,
+      "y": -1.6,
+      "z": 0,
+      "width": 320,
+      "height": 0.1,
+      "depth": 1200,
+      "color": 223649
+    },
+    {
+      "id": "beach",
+      "name": "Пляж Юбилейный",
+      "type": "beach",
+      "x": -22,
+      "y": -1.1,
+      "z": 0,
+      "width": 14,
+      "height": 1.2,
+      "depth": 340,
+      "color": 9732714
+    },
+    {
+      "id": "promenade",
+      "name": "Плиточный променад Набки",
+      "type": "promenade",
+      "x": 0,
+      "y": -0.5,
+      "z": 0,
+      "width": 30,
+      "height": 1,
+      "depth": 340,
+      "color": 13358561
+    },
+    {
+      "id": "east_ground",
+      "name": "Городской фундамент Владивостока",
+      "type": "ground",
+      "x": 162.5,
+      "y": -0.55,
+      "z": 0,
+      "width": 263,
+      "height": 1,
+      "depth": 340,
+      "color": 2238770
+    },
+    {
+      "id": "road",
+      "name": "ул. Батарейная — Набережная (вдоль моря)",
+      "type": "road",
+      "x": 23,
+      "y": -0.5,
+      "z": 0,
+      "width": 14,
+      "height": 1,
+      "depth": 340,
+      "color": 1976635
+    },
+    {
+      "id": "road_pogranichnaya",
+      "name": "ул. Пограничная (Север-Юг)",
+      "type": "road",
+      "x": 108,
+      "y": -0.5,
+      "z": -15,
+      "width": 14,
+      "height": 1,
+      "depth": 310,
+      "color": 1976635,
+      "rotY": 0
+    },
+    {
+      "id": "road_morskaya",
+      "name": "ул. 1-я Морская / Тигровая",
+      "type": "road",
+      "x": 175,
+      "y": -0.5,
+      "z": 0,
+      "width": 14,
+      "height": 1,
+      "depth": 340,
+      "color": 1976635
+    },
+    {
+      "id": "road_fokina_w",
+      "name": "ул. Адмирала Фокина (Западный сегмент)",
+      "type": "road_x",
+      "x": 65.5,
+      "y": -0.5,
+      "z": -38,
+      "width": 71,
+      "height": 1,
+      "depth": 14,
+      "color": 1976635
+    },
+    {
+      "id": "road_fokina_mid",
+      "name": "ул. Адмирала Фокина (Центральный сегмент)",
+      "type": "road_x",
+      "x": 141.5,
+      "y": -0.5,
+      "z": -38,
+      "width": 53,
+      "height": 1,
+      "depth": 14,
+      "color": 1976635
+    },
+    {
+      "id": "road_fokina_e",
+      "name": "ул. Адмирала Фокина (Восточный сегмент)",
+      "type": "road_x",
+      "x": 218.5,
+      "y": -0.5,
+      "z": -38,
+      "width": 73,
+      "height": 1,
+      "depth": 14,
+      "color": 1976635
+    },
+    {
+      "id": "road_south_cross_w",
+      "name": "ул. Набережная у Фонтана (Запад)",
+      "type": "road_x",
+      "x": 65.5,
+      "y": -0.5,
+      "z": 82,
+      "width": 71,
+      "height": 1,
+      "depth": 14,
+      "color": 1976635
+    },
+    {
+      "id": "road_south_cross_mid",
+      "name": "ул. Набережная у к/т «Океан» (Центр)",
+      "type": "road_x",
+      "x": 141.5,
+      "y": -0.5,
+      "z": 82,
+      "width": 53,
+      "height": 1,
+      "depth": 14,
+      "color": 1976635
+    },
+    {
+      "id": "road_south_cross_e",
+      "name": "Подъезд к к/т «Океан» (Восток)",
+      "type": "road_x",
+      "x": 188,
+      "y": -0.5,
+      "z": 82,
+      "width": 12,
+      "height": 1,
+      "depth": 14,
+      "color": 1976635
+    },
+    {
+      "id": "road_north_cross_w",
+      "name": "Батарейный переулок (Запад)",
+      "type": "road_x",
+      "x": 65.5,
+      "y": -0.5,
+      "z": -80,
+      "width": 71,
+      "height": 1,
+      "depth": 12,
+      "color": 1976635
+    },
+    {
+      "id": "road_north_cross_mid",
+      "name": "Батарейный переулок (Центр)",
+      "type": "road_x",
+      "x": 141.5,
+      "y": -0.5,
+      "z": -80,
+      "width": 53,
+      "height": 1,
+      "depth": 12,
+      "color": 1976635
+    },
+    {
+      "id": "road_north_cross_e",
+      "name": "Батарейный переулок (Восток)",
+      "type": "road_x",
+      "x": 188,
+      "y": -0.5,
+      "z": -80,
+      "width": 12,
+      "height": 1,
+      "depth": 12,
+      "color": 1976635
+    },
+    {
+      "id": "road_azimut_drive",
+      "name": "Подъездная аллея отеля AZIMUT",
+      "type": "road_x",
+      "x": 210.5,
+      "y": -0.5,
+      "z": 132,
+      "width": 57,
+      "height": 1,
+      "depth": 12,
+      "color": 1976635
+    },
+    {
+      "id": "road_north_perimeter",
+      "name": "Северный проезд у СК «Олимпиец»",
+      "type": "road_x",
+      "x": 65.5,
+      "y": -0.5,
+      "z": -150,
+      "width": 71,
+      "height": 1,
+      "depth": 10,
+      "color": 1976635
+    },
+    {
+      "id": "plaza_fountain",
+      "name": "Площадь Центрального Фонтана",
+      "type": "plaza",
+      "x": 79.5,
+      "y": -0.47,
+      "z": 56.6,
+      "width": 36,
+      "height": 1,
+      "depth": 30,
+      "color": 11051934
+    },
+    {
+      "id": "plaza_ocean_cinema",
+      "name": "Эспланада кинотеатра «Океан»",
+      "type": "plaza",
+      "x": 136,
+      "y": -0.47,
+      "z": 102,
+      "width": 46,
+      "height": 1,
+      "depth": 24,
+      "color": 11051934
+    },
+    {
+      "id": "plaza_dynamo",
+      "name": "Входная площадь стадиона «Динамо»",
+      "type": "plaza",
+      "x": 141.38,
+      "y": -0.5,
+      "z": 14.39,
+      "width": 45.76,
+      "height": 1.32,
+      "depth": 58.04,
+      "color": 11051934,
+      "rotY": 0
+    },
+    {
+      "id": "sidewalk_naberezhnaya_east_s",
+      "name": "Тротуар Набережной (Юг)",
+      "type": "sidewalk",
+      "x": 31.5,
+      "y": -0.48,
+      "z": 129.5,
+      "width": 3,
+      "height": 1,
+      "depth": 81,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_naberezhnaya_east_mid",
+      "name": "Тротуар Набережной (Центр)",
+      "type": "sidewalk",
+      "x": 31.5,
+      "y": -0.48,
+      "z": 22,
+      "width": 3,
+      "height": 1,
+      "depth": 106,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_naberezhnaya_east_n1",
+      "name": "Тротуар Набережной (Океанариум)",
+      "type": "sidewalk",
+      "x": 31.5,
+      "y": -0.48,
+      "z": -59.5,
+      "width": 3,
+      "height": 1,
+      "depth": 29,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_naberezhnaya_east_n2",
+      "name": "Тротуар Набережной (Олимпиец)",
+      "type": "sidewalk",
+      "x": 31.5,
+      "y": -0.48,
+      "z": -115.5,
+      "width": 3,
+      "height": 1,
+      "depth": 59,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_pogranichnaya_west_s",
+      "name": "Тротуар Пограничной зап. (Юг)",
+      "type": "sidewalk",
+      "x": 99.5,
+      "y": -0.48,
+      "z": 114.5,
+      "width": 3,
+      "height": 1,
+      "depth": 51,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_pogranichnaya_west_mid",
+      "name": "Тротуар Пограничной зап. (Центр)",
+      "type": "sidewalk",
+      "x": 99.5,
+      "y": -0.48,
+      "z": 22,
+      "width": 3,
+      "height": 1,
+      "depth": 106,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_pogranichnaya_west_n1",
+      "name": "Тротуар Пограничной зап. (Океанариум)",
+      "type": "sidewalk",
+      "x": 99.5,
+      "y": -0.48,
+      "z": -59.5,
+      "width": 3,
+      "height": 1,
+      "depth": 29,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_pogranichnaya_west_n2",
+      "name": "Тротуар Пограничной зап. (Крепость)",
+      "type": "sidewalk",
+      "x": 99.5,
+      "y": -0.48,
+      "z": -115.5,
+      "width": 3,
+      "height": 1,
+      "depth": 59,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_pogranichnaya_east_s",
+      "name": "Тротуар Пограничной вост. (Юг)",
+      "type": "sidewalk",
+      "x": 116.5,
+      "y": -0.48,
+      "z": 114.5,
+      "width": 3,
+      "height": 1,
+      "depth": 51,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_pogranichnaya_east_mid",
+      "name": "Тротуар Пограничной вост. (Динамо)",
+      "type": "sidewalk",
+      "x": 116.5,
+      "y": -0.48,
+      "z": 22,
+      "width": 3,
+      "height": 1,
+      "depth": 106,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_pogranichnaya_east_n",
+      "name": "Тротуар Пограничной вост. (Север)",
+      "type": "sidewalk",
+      "x": 116.5,
+      "y": -0.48,
+      "z": -59.5,
+      "width": 3,
+      "height": 1,
+      "depth": 29,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_morskaya_west_s",
+      "name": "Тротуар 1-й Морской зап. (Юг)",
+      "type": "sidewalk",
+      "x": 166.5,
+      "y": -0.48,
+      "z": 129.5,
+      "width": 3,
+      "height": 1,
+      "depth": 81,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_morskaya_west_mid",
+      "name": "Тротуар 1-й Морской зап. (Динамо)",
+      "type": "sidewalk",
+      "x": 166.5,
+      "y": -0.48,
+      "z": 22,
+      "width": 3,
+      "height": 1,
+      "depth": 106,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_morskaya_west_n",
+      "name": "Тротуар 1-й Морской зап. (Север)",
+      "type": "sidewalk",
+      "x": 166.5,
+      "y": -0.48,
+      "z": -59.5,
+      "width": 3,
+      "height": 1,
+      "depth": 29,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_morskaya_east_s",
+      "name": "Тротуар 1-й Морской вост. (Юг)",
+      "type": "sidewalk",
+      "x": 183.5,
+      "y": -0.48,
+      "z": 149.5,
+      "width": 3,
+      "height": 1,
+      "depth": 41,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_morskaya_east_az",
+      "name": "Тротуар 1-й Морской вост. (Азимут)",
+      "type": "sidewalk",
+      "x": 183.5,
+      "y": -0.48,
+      "z": 107.5,
+      "width": 3,
+      "height": 1,
+      "depth": 37,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_morskaya_east_n",
+      "name": "Тротуар 1-й Морской вост. (Супра)",
+      "type": "sidewalk",
+      "x": 183.5,
+      "y": -0.48,
+      "z": -59.5,
+      "width": 3,
+      "height": 1,
+      "depth": 29,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_fokina_n_w",
+      "name": "Тротуар Фокина сев. (Запад)",
+      "type": "sidewalk",
+      "x": 65.5,
+      "y": -0.48,
+      "z": -46.5,
+      "width": 65,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_fokina_s_w",
+      "name": "Тротуар Фокина южн. (Запад)",
+      "type": "sidewalk",
+      "x": 65.5,
+      "y": -0.48,
+      "z": -29.5,
+      "width": 65,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_fokina_n_mid",
+      "name": "Тротуар Фокина сев. (Центр)",
+      "type": "sidewalk",
+      "x": 141.5,
+      "y": -0.48,
+      "z": -46.5,
+      "width": 47,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_fokina_s_mid",
+      "name": "Тротуар Фокина южн. (Центр)",
+      "type": "sidewalk",
+      "x": 141.5,
+      "y": -0.48,
+      "z": -29.5,
+      "width": 47,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561,
+      "rotY": 0
+    },
+    {
+      "id": "sidewalk_fokina_n_e",
+      "name": "Тротуар Фокина сев. (Восток)",
+      "type": "sidewalk",
+      "x": 218.5,
+      "y": -0.48,
+      "z": -46.5,
+      "width": 67,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_fokina_s_e",
+      "name": "Тротуар Фокина южн. (Восток)",
+      "type": "sidewalk",
+      "x": 218.5,
+      "y": -0.48,
+      "z": -29.5,
+      "width": 67,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_south_n_w",
+      "name": "Тротуар Южного проезда сев. (Запад)",
+      "type": "sidewalk",
+      "x": 65.5,
+      "y": -0.48,
+      "z": 73.5,
+      "width": 65,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_south_s_w",
+      "name": "Тротуар Южного проезда южн. (Запад)",
+      "type": "sidewalk",
+      "x": 65.5,
+      "y": -0.48,
+      "z": 90.5,
+      "width": 65,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_south_n_mid",
+      "name": "Тротуар Южного проезда сев. (Центр)",
+      "type": "sidewalk",
+      "x": 141.5,
+      "y": -0.48,
+      "z": 73.5,
+      "width": 47,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_south_s_mid",
+      "name": "Тротуар Южного проезда южн. (Центр)",
+      "type": "sidewalk",
+      "x": 141.5,
+      "y": -0.48,
+      "z": 90.5,
+      "width": 47,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_north_n_w",
+      "name": "Тротуар Батарейного пер. сев. (Запад)",
+      "type": "sidewalk",
+      "x": 65.5,
+      "y": -0.48,
+      "z": -87.5,
+      "width": 65,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_north_s_w",
+      "name": "Тротуар Батарейного пер. южн. (Запад)",
+      "type": "sidewalk",
+      "x": 65.5,
+      "y": -0.48,
+      "z": -72.5,
+      "width": 65,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_north_n_mid",
+      "name": "Тротуар Батарейного пер. сев. (Центр)",
+      "type": "sidewalk",
+      "x": 141.5,
+      "y": -0.48,
+      "z": -87.5,
+      "width": 47,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "sidewalk_north_s_mid",
+      "name": "Тротуар Батарейного пер. южн. (Центр)",
+      "type": "sidewalk",
+      "x": 141.5,
+      "y": -0.48,
+      "z": -72.5,
+      "width": 47,
+      "height": 1,
+      "depth": 3,
+      "color": 13358561
+    },
+    {
+      "id": "park_fortress",
+      "name": "Сквер Владивостокской крепости",
+      "type": "grass",
+      "x": 82,
+      "y": -0.49,
+      "z": -115,
+      "width": 32,
+      "height": 1,
+      "depth": 56,
+      "color": 3046690
+    },
+    {
+      "id": "park_olympiets",
+      "name": "Сквер спорткомплекса «Олимпиец»",
+      "type": "grass",
+      "x": 50,
+      "y": -0.49,
+      "z": -115,
+      "width": 32,
+      "height": 1,
+      "depth": 56,
+      "color": 3046690
+    },
+    {
+      "id": "park_oceanarium",
+      "name": "Сквер Океанариума «Аквамир»",
+      "type": "grass",
+      "x": 65.5,
+      "y": -0.49,
+      "z": -59,
+      "width": 59,
+      "height": 1,
+      "depth": 24,
+      "color": 3046690
+    },
+    {
+      "id": "park_ferris",
+      "name": "Парк аттракционов и Колеса обозрения",
+      "type": "grass",
+      "x": 47.5,
+      "y": -0.49,
+      "z": 56.6,
+      "width": 28,
+      "height": 1,
+      "depth": 30,
+      "color": 3046690
+    },
+    {
+      "id": "park_dynamo_south",
+      "name": "Парк южнее стадиона «Динамо»",
+      "type": "grass",
+      "x": 141.5,
+      "y": -0.49,
+      "z": 58,
+      "width": 47,
+      "height": 1,
+      "depth": 28,
+      "color": 3046690
+    },
+    {
+      "id": "park_azimut",
+      "name": "Парк отеля AZIMUT",
+      "type": "grass",
+      "x": 218.5,
+      "y": -0.49,
+      "z": 95,
+      "width": 67,
+      "height": 1,
+      "depth": 48,
+      "color": 3046690
+    },
+    {
+      "id": "park_azimut_south",
+      "name": "Южный ландшафтный сквер Азимута",
+      "type": "grass",
+      "x": 218.5,
+      "y": -0.49,
+      "z": 155,
+      "width": 67,
+      "height": 1,
+      "depth": 26,
+      "color": 3046690
+    },
+    {
+      "id": "park_supra_northeast",
+      "name": "Зеленый склон Арбата и ресторана «Супра»",
+      "type": "grass",
+      "x": 221.52,
+      "y": -0.99,
+      "z": -86.62,
+      "width": 72,
+      "height": 1,
+      "depth": 76,
+      "color": 3046690,
+      "rotY": 0
+    },
+    {
+      "id": "park_central_block",
+      "name": "Центральный сквер Набережной",
+      "type": "grass",
+      "x": 65.5,
+      "y": -0.49,
+      "z": 6.5,
+      "width": 65,
+      "height": 1,
+      "depth": 69,
+      "color": 3046690
+    }
+  ],
   "bounds": {
-    "player": { "minX": -46, "maxX": 48, "minZ": -155, "maxZ": 155 },
-    "vehicle": { "minX": -13, "maxX": 44, "minZ": -150, "maxZ": 150 },
-    "npc": { "minX": -12.5, "maxX": 12.0, "minZ": -130, "maxZ": 130 }
+    "player": {
+      "minX": -46,
+      "maxX": 294,
+      "minZ": -170,
+      "maxZ": 170
+    },
+    "vehicle": {
+      "minX": -13,
+      "maxX": 290,
+      "minZ": -165,
+      "maxZ": 165
+    },
+    "npc": {
+      "minX": -12.5,
+      "maxX": 12,
+      "minZ": -130,
+      "maxZ": 130
+    }
   },
-  "playerSpawn": { "x": 0, "y": 0, "z": 22, "yaw": 3.141592653589793 },
-  "dunyaSpawn": { "x": 1.6, "y": 0, "z": 22.8, "yaw": 3.141592653589793 },
+  "playerSpawn": {
+    "x": 0,
+    "y": 0,
+    "z": 22,
+    "yaw": 3.141592653589793
+  },
+  "dunyaSpawn": {
+    "x": 1.6,
+    "y": 0,
+    "z": 22.8,
+    "yaw": 3.141592653589793
+  },
   "spawnPoints": [
-    { "id": "fountain_south", "name": "Южный променад у Фонтана", "x": 0, "y": 0, "z": 22, "yaw": 3.141592653589793 },
-    { "id": "tiger_alley", "name": "Аллея у Амурского Тигра", "x": -4, "y": 0, "z": -22, "yaw": 3.141592653589793 },
-    { "id": "beach_entrance", "name": "Спуск к пляжу Юбилейный", "x": -16, "y": 0, "z": 12, "yaw": 1.5707963267948966 },
-    { "id": "okean_promenade", "name": "Променад у к/т Океан", "x": 2, "y": 0, "z": 75, "yaw": 3.141592653589793 },
-    { "id": "park_alley", "name": "Аллея парка аттракционов", "x": 2, "y": 0, "z": -68, "yaw": 0.0 }
+    {
+      "id": "fountain_south",
+      "name": "Южный променад у Фонтана",
+      "x": 0,
+      "y": 0,
+      "z": 22,
+      "yaw": 3.141592653589793
+    },
+    {
+      "id": "tiger_alley",
+      "name": "Аллея у Амурского Тигра",
+      "x": -4,
+      "y": 0,
+      "z": -22,
+      "yaw": 3.141592653589793
+    },
+    {
+      "id": "beach_entrance",
+      "name": "Спуск к пляжу Юбилейный",
+      "x": -16,
+      "y": 0,
+      "z": 12,
+      "yaw": 1.5707963267948966
+    },
+    {
+      "id": "okean_promenade",
+      "name": "Променад у к/т Океан",
+      "x": 2,
+      "y": 0,
+      "z": 75,
+      "yaw": 3.141592653589793
+    },
+    {
+      "id": "park_alley",
+      "name": "Аллея парка аттракционов",
+      "x": 2,
+      "y": 0,
+      "z": -68,
+      "yaw": 0
+    }
   ],
   "weatherPresets": [
     {
@@ -76,273 +874,1403 @@
     }
   ],
   "cameraModes": [
-    { "name": "GTA 2/3 Вид сверху", "dist": 9.2, "heightOffset": 1.95 },
-    { "name": "Экшен Близко", "dist": 5.5, "heightOffset": 1.75 },
-    { "name": "Панорама Набки", "dist": 14.5, "heightOffset": 2.6 },
-    { "name": "От 1-го лица / Правый руль", "dist": 0.1, "heightOffset": 2.35 }
+    {
+      "name": "GTA 2/3 Вид сверху",
+      "dist": 9.2,
+      "heightOffset": 1.95
+    },
+    {
+      "name": "Экшен Близко",
+      "dist": 5.5,
+      "heightOffset": 1.75
+    },
+    {
+      "name": "Панорама Набки",
+      "dist": 14.5,
+      "heightOffset": 2.6
+    },
+    {
+      "name": "От 1-го лица / Правый руль",
+      "dist": 0.1,
+      "heightOffset": 2.35
+    }
+  ],
+  "landmarks": [
+    {
+      "id": "fountain",
+      "name": "Центральный Фонтан",
+      "model": "models/fountain.glb",
+      "x": 66.43,
+      "y": 0,
+      "z": 1.73,
+      "rotY": 0,
+      "scale": 1.95,
+      "hasFountainParticles": true
+    },
+    {
+      "id": "tiger_statue",
+      "name": "Бронзовый Амурский Тигр",
+      "model": "models/tiger_statue.glb",
+      "x": -10,
+      "y": 0,
+      "z": -32,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "pier",
+      "name": "Пирс пляжа «Юбилейный»",
+      "model": "models/pier.glb",
+      "x": -32,
+      "y": 0.1,
+      "z": 48,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "ferris_wheel",
+      "name": "Колесо обозрения",
+      "model": "models/ferris_wheel.glb",
+      "x": 36.11,
+      "y": 0,
+      "z": 52.16,
+      "rotY": -1.58,
+      "scale": 1.36,
+      "isFerrisWheel": true
+    },
+    {
+      "id": "dynamo_stadium",
+      "name": "Стадион «Динамо»",
+      "model": "models/dynamo_stadium.glb",
+      "x": 142.66,
+      "y": 0,
+      "z": -20.85,
+      "rotY": -1.55,
+      "scale": 0.78,
+      "label": {
+        "text": "🏟️ Стадион «Динамо» (Фокина, 1 • ★ 4.1)",
+        "x": 120.66,
+        "y": 14.5,
+        "z": -20.85
+      }
+    },
+    {
+      "id": "ocean_cinema",
+      "name": "Кинотеатр «Океан IMAX»",
+      "model": "models/ocean_cinema.glb",
+      "x": 135.73,
+      "y": 0,
+      "z": 105.18,
+      "rotY": 0,
+      "scale": 1.55,
+      "label": {
+        "text": "🎬 К/Т «Океан IMAX» (Набережная, 3 • ★ 4.7)",
+        "x": 125.73,
+        "y": 18.5,
+        "z": 105.18
+      }
+    },
+    {
+      "id": "oceanarium",
+      "name": "Океанариум",
+      "model": "models/oceanarium.glb",
+      "x": 45.79,
+      "y": 0,
+      "z": -58.42,
+      "rotY": 0,
+      "scale": 1,
+      "hasFence": true
+    },
+    {
+      "id": "supra_restaurant",
+      "name": "Грузинский дом «Супра»",
+      "model": "models/supra_restaurant.glb",
+      "x": 140.37,
+      "y": 0,
+      "z": -61.91,
+      "rotY": 1.55,
+      "scale": 2.02
+    },
+    {
+      "id": "fortress_museum",
+      "name": "Музей «Владивостокская крепость»",
+      "model": "models/fortress_museum.glb",
+      "x": 99.32,
+      "y": 0,
+      "z": -97.34,
+      "rotY": 0,
+      "scale": 1.55
+    },
+    {
+      "id": "olympiets_complex",
+      "name": "СК «Олимпиец»",
+      "model": "models/olympiets_complex.glb",
+      "x": 40.91,
+      "y": 0,
+      "z": -115.79,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "azimut_hotel",
+      "name": "AZIMUT Сити Отель",
+      "model": "models/azimut_hotel.glb",
+      "x": 218.75,
+      "y": 0,
+      "z": 131.75,
+      "rotY": -1.57,
+      "scale": 0.99
+    },
+    {
+      "id": "yacht_club_pier",
+      "name": "Пирс яхт-клуба «Семь Футов»",
+      "model": "models/yacht_club_pier.glb",
+      "x": -28,
+      "y": 0.15,
+      "z": 148,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "yacht_club_boathouse",
+      "name": "Эллинг яхт-клуба «Семь Футов»",
+      "model": "models/yacht_club_boathouse.glb",
+      "x": -10,
+      "y": 0,
+      "z": 148,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "lighthouse",
+      "name": "Токаревский Маяк",
+      "model": "models/lighthouse.glb",
+      "x": -93.81,
+      "y": -1.2,
+      "z": 147.38,
+      "rotY": 0,
+      "scale": 1.03,
+      "label": {
+        "text": "🚨 Токаревский Маяк",
+        "x": -93.81,
+        "y": 20,
+        "z": 147.38
+      }
+    },
+    {
+      "id": "bridge_pylon_west",
+      "name": "Западный пилон моста",
+      "model": "models/bridge_pylon.glb",
+      "x": 470.98,
+      "y": 0,
+      "z": 396.6,
+      "rotY": 0,
+      "scale": 1.99
+    },
+    {
+      "id": "bridge_pylon_east",
+      "name": "Восточный пилон моста",
+      "model": "models/bridge_pylon.glb",
+      "x": 474.88,
+      "y": 0,
+      "z": 127.88,
+      "rotY": 0,
+      "scale": 1.81
+    },
+    {
+      "id": "bridge_deck",
+      "name": "Пролёт моста",
+      "model": "models/bridge_deck.glb",
+      "x": 470.55,
+      "y": 24,
+      "z": 257.16,
+      "rotY": 1.56,
+      "scale": 1.93
+    }
+  ],
+  "props": [
+    {
+      "id": "lamp_-120",
+      "name": "Фонарь (Z=-120)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": -120,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_-114",
+      "name": "Лавочка (Z=-114)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": -114,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "lamp_-96",
+      "name": "Фонарь (Z=-96)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": -96,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_-90",
+      "name": "Лавочка (Z=-90)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": -90,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "lamp_-72",
+      "name": "Фонарь (Z=-72)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": -72,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_-66",
+      "name": "Лавочка (Z=-66)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": -66,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "lamp_-48",
+      "name": "Фонарь (Z=-48)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": -48,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_-42",
+      "name": "Лавочка (Z=-42)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": -42,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "lamp_-24",
+      "name": "Фонарь (Z=-24)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": -24,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_-18",
+      "name": "Лавочка (Z=-18)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": -18,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "lamp_0",
+      "name": "Фонарь (Z=0)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": 0,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "lamp_24",
+      "name": "Фонарь (Z=24)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": 24,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_30",
+      "name": "Лавочка (Z=30)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": 30,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "lamp_48",
+      "name": "Фонарь (Z=48)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": 48,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_54",
+      "name": "Лавочка (Z=54)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": 54,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "lamp_72",
+      "name": "Фонарь (Z=72)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": 72,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_78",
+      "name": "Лавочка (Z=78)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": 78,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "lamp_96",
+      "name": "Фонарь (Z=96)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": 96,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_102",
+      "name": "Лавочка (Z=102)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": 102,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "lamp_120",
+      "name": "Фонарь (Z=120)",
+      "type": "lamp",
+      "model": "models/street_lamp.glb",
+      "x": -12,
+      "y": 0,
+      "z": 120,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "bench_126",
+      "name": "Лавочка (Z=126)",
+      "type": "bench",
+      "model": "models/bench.glb",
+      "x": -11.2,
+      "y": 0.325,
+      "z": 126,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_nab_-120",
+      "name": "Фонарь шоссе (Набережная -120)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 30.5,
+      "y": 0,
+      "z": -120,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_nab_-60",
+      "name": "Фонарь шоссе (Набережная -60)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 30.5,
+      "y": 0,
+      "z": -60,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_nab_0",
+      "name": "Фонарь шоссе (Набережная 0)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 30.5,
+      "y": 0,
+      "z": 0,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_nab_60",
+      "name": "Фонарь шоссе (Набережная 60)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 30.5,
+      "y": 0,
+      "z": 60,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_nab_120",
+      "name": "Фонарь шоссе (Набережная 120)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 30.5,
+      "y": 0,
+      "z": 120,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_pog_-120",
+      "name": "Фонарь шоссе (Пограничная -120)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 115.5,
+      "y": 0,
+      "z": -120,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_pog_-60",
+      "name": "Фонарь шоссе (Пограничная -60)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 115.5,
+      "y": 0,
+      "z": -60,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_pog_0",
+      "name": "Фонарь шоссе (Пограничная 0)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 115.5,
+      "y": 0,
+      "z": 0,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_pog_60",
+      "name": "Фонарь шоссе (Пограничная 60)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 115.5,
+      "y": 0,
+      "z": 60,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_pog_110",
+      "name": "Фонарь шоссе (Пограничная 110)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 115.5,
+      "y": 0,
+      "z": 110,
+      "rotY": 3.14159,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_mor_-120",
+      "name": "Фонарь шоссе (1-я Морская -120)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 167.5,
+      "y": 0,
+      "z": -120,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_mor_-60",
+      "name": "Фонарь шоссе (1-я Морская -60)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 167.5,
+      "y": 0,
+      "z": -60,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_mor_0",
+      "name": "Фонарь шоссе (1-я Морская 0)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 167.5,
+      "y": 0,
+      "z": 0,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_mor_60",
+      "name": "Фонарь шоссе (1-я Морская 60)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 167.5,
+      "y": 0,
+      "z": 60,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_mor_120",
+      "name": "Фонарь шоссе (1-я Морская 120)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 167.5,
+      "y": 0,
+      "z": 120,
+      "rotY": 0,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_fok_65",
+      "name": "Фонарь (ул. Фокина 65)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 65,
+      "y": 0,
+      "z": -30.5,
+      "rotY": 1.31,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_fok_140",
+      "name": "Фонарь (ул. Фокина 140)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 141.18,
+      "y": 0,
+      "z": -44.99,
+      "rotY": -1.6,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_fok_215",
+      "name": "Фонарь (ул. Фокина 215)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 215,
+      "y": 0,
+      "z": -30.5,
+      "rotY": 1.91,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_bat_65",
+      "name": "Фонарь (Батарейный пер. 65)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 65,
+      "y": 0,
+      "z": -73.5,
+      "rotY": 1.5708,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_bat_140",
+      "name": "Фонарь (Батарейный пер. 140)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 140,
+      "y": 0,
+      "z": -73.5,
+      "rotY": 1.5708,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_south_65",
+      "name": "Фонарь (Южный проезд 65)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 65,
+      "y": 0,
+      "z": 89.5,
+      "rotY": 1.37,
+      "scale": 1,
+      "hasCollider": true
+    },
+    {
+      "id": "road_lamp_south_140",
+      "name": "Фонарь (Южный проезд 140)",
+      "type": "road_lamp",
+      "model": "models/road_lamp.glb",
+      "x": 140,
+      "y": 0,
+      "z": 89.5,
+      "rotY": -1.5708,
+      "scale": 1,
+      "hasCollider": true
+    }
   ],
   "vehicles": [
-    { "id": "car_0", "name": "Toyota Mark II Tourer V", "colorHex": 16317180, "x": 19.5, "z": 14, "rotY": 3.141592653589793 },
-    { "id": "car_1", "name": "Nissan Skyline GT-R R34", "colorHex": 2450411, "x": 26.5, "z": -22, "rotY": 0 },
-    { "id": "car_2", "name": "Subaru Forester STI", "colorHex": 1096065, "x": 19.5, "z": 68, "rotY": 3.141592653589793 },
-    { "id": "car_3", "name": "Toyota Chaser JZX100", "colorHex": 16096779, "x": 26.5, "z": 42, "rotY": 0 },
-    { "id": "car_4", "name": "Mazda RX-7 FD3S", "colorHex": 15680580, "x": 19.5, "z": -64, "rotY": 3.141592653589793 }
+    {
+      "id": "car_0",
+      "name": "Toyota Mark II Tourer V",
+      "model": "models/car_0.glb",
+      "colorHex": 16317180,
+      "x": 33.69,
+      "z": 9.89,
+      "rotY": 3.14,
+      "y": 0
+    },
+    {
+      "id": "car_1",
+      "name": "Mazda Roadster",
+      "model": "models/roadster.glb",
+      "colorHex": 9741240,
+      "x": 10.9,
+      "z": -87.11,
+      "rotY": 0.97,
+      "y": 0
+    },
+    {
+      "id": "car_2",
+      "name": "Subaru Forester STI",
+      "model": "models/forrester.glb",
+      "colorHex": 14427686,
+      "x": 141.39,
+      "z": 14.07,
+      "rotY": 3.14,
+      "y": 0.13
+    },
+    {
+      "id": "car_3",
+      "name": "Suzuki Jimny",
+      "model": "models/jimny.glb",
+      "colorHex": 16096779,
+      "x": 40.05,
+      "z": 10.5,
+      "rotY": 0,
+      "y": 0.27
+    },
+    {
+      "id": "car_4",
+      "name": "Subaru Impreza WRX",
+      "model": "models/impreza_wrx.glb",
+      "colorHex": 1920728,
+      "x": 10.56,
+      "z": -94.71,
+      "rotY": 0.98,
+      "y": 0
+    }
   ],
   "stalls": [
     {
       "id": "pyanse",
+      "model": "models/stall_pyanse.glb",
       "title": "ПЯН-СЕ",
       "sub": "ЛЕГЕНДА ВЛАДИВОСТОКА",
       "bg": "#7c2d12",
       "accent": "#fbbf24",
       "bodyColor": 10105874,
-      "x": 9.5,
-      "z": 28,
-      "prompt": "Купить легендарный горячий Пян-се (+HP & Вайб)",
+      "x": 7.3,
+      "z": 36.85,
+      "rotY": 0,
+      "prompt": "Купить легендарный горячий Пян-се",
       "speech": "Горячий Пян-се на берегу моря — база! 🥟🔥",
-      "reward": 400
+      "reward": 400,
+      "y": 0
     },
     {
       "id": "chifanka",
+      "model": "models/stall_chifanka.glb",
       "title": "ЧИФАНЬКА",
       "sub": "ЛАПША • ДАМПЛИНГИ • ВОК",
       "bg": "#7f1d1d",
       "accent": "#f87171",
       "bodyColor": 4524554,
-      "x": 9.5,
-      "z": 44,
-      "prompt": "Заказать коробочку Вок в Чифаньке (+Вайб)",
+      "x": 7.07,
+      "z": 62.27,
+      "rotY": 0,
+      "prompt": "Заказать коробочку Вок в Чифаньке",
       "speech": "Чифанька на Спортивной никогда не подводит! 🥡",
-      "reward": 500
+      "reward": 500,
+      "y": 0
     },
     {
       "id": "coffee",
+      "model": "models/stall_coffee.glb",
       "title": "МОРСКОЙ КОФЕ",
       "sub": "РАФ С МОРСКОЙ СОЛЬЮ",
       "bg": "#0c4a6e",
       "accent": "#38bdf8",
       "bodyColor": 988970,
-      "x": 9.5,
-      "z": 60,
-      "prompt": "Взять Приморский Раф для @{username} (+Спринт)",
+      "x": 6.91,
+      "z": 85.96,
+      "rotY": 0,
+      "prompt": "Взять Приморский Раф для @{username}",
       "speech": "Бодрящий кофе с видом на Амурский залив! ☕",
-      "reward": 350
+      "reward": 350,
+      "y": 0
     }
   ],
   "pois": [
     {
       "id": "fountain",
+      "parentId": "fountain",
       "name": "Большой фонтан на Набке",
-      "prompt": "Освежиться у Центрального фонтана (+Вайб & ₽500)",
-      "x": 0,
-      "z": 10.5,
+      "prompt": "Освежиться у Центрального фонтана",
+      "x": 66.43,
+      "z": 12.23,
       "radius": 5.5,
       "reward": 500,
       "toast": "🌊 Ты загадал желание у Центрального фонтана Спортивной гавани!",
       "speech": "Фонтан на Спортивной — топ! ⛲",
-      "label": { "text": "⛲ Центральный Фонтан (★ 4.7)", "x": 0, "y": 5.5, "z": 0 }
+      "label": {
+        "text": "⛲ Центральный Фонтан (★ 4.7)",
+        "x": 66.43,
+        "y": 5.5,
+        "z": 1.73
+      }
     },
     {
       "id": "tiger",
+      "parentId": "tiger_statue",
       "name": "Бронзовый Амурский Тигр",
-      "prompt": "Сделать фото @{username} с Амурским Тигром (+₽1,000)",
+      "prompt": "Сделать фото @{username} с Амурским Тигром",
       "x": -7.5,
       "z": -32,
       "radius": 4.5,
       "reward": 1000,
       "toast": "🐅 Фото @{username} у бронзового тигра набрало 10К лайков!",
       "speech": "Хозяин тайги на Набке! 🐅🔥",
-      "label": { "text": "🐅 Бронзовый Тигр (★ 4.8)", "x": -10, "y": 3.6, "z": -32 }
+      "label": {
+        "text": "🐅 Бронзовый Тигр (★ 4.8)",
+        "x": -10,
+        "y": 3.6,
+        "z": -32
+      }
     },
     {
       "id": "pier",
+      "parentId": "pier",
       "name": "Пирс пляжа «Юбилейный»",
-      "prompt": "Полюбоваться закатом над Амурским заливом (+₽750)",
+      "prompt": "Полюбоваться закатом над Амурским заливом",
       "x": -44,
       "z": 48,
       "radius": 6,
       "reward": 750,
       "toast": "⛵ Ты встретил закат над Амурским заливом на пирсе Юбилейного!",
       "speech": "Лучший вид во Владивостоке! 🌅🌊",
-      "label": { "text": "⛵ Пирс «Юбилейный»", "x": -44, "y": 3.8, "z": 48 }
+      "label": {
+        "text": "⛵ Пирс «Юбилейный»",
+        "x": -44,
+        "y": 3.8,
+        "z": 48
+      }
     },
     {
       "id": "ferris",
+      "parentId": "ferris_wheel",
       "name": "Колесо обозрения",
-      "prompt": "Запустить неоновую подсветку Колеса обозрения (+₽800)",
-      "x": -4,
-      "z": -81,
+      "prompt": "Запустить неоновую подсветку Колеса обозрения",
+      "x": 30.81,
+      "z": 56.73,
       "radius": 6,
       "reward": 800,
       "toast": "🎡 Колесо обозрения на Спортивной сияет на весь залив!",
       "speech": "Вид сверху — просто космос! 🎡",
-      "label": { "text": "🎡 Колесо Обозрения (★ 4.5)", "x": -4, "y": 8, "z": -88 }
+      "label": {
+        "text": "🎡 Колесо Обозрения (★ 4.5)",
+        "x": 38.38,
+        "y": 8,
+        "z": 50.2
+      }
     },
     {
       "id": "oceanarium",
+      "parentId": "oceanarium",
       "name": "Океанариум (ул. Батарейная, 4)",
-      "prompt": "Посетить Океанариум на Батарейной, 4 (+₽900)",
-      "x": 6,
-      "z": -103.5,
+      "prompt": "Посетить Океанариум на Батарейной, 4",
+      "x": 45.79,
+      "z": -44.42,
       "radius": 6,
       "reward": 900,
       "toast": "🐬 @{username} заглянул в Океанариум (ул. Батарейная, 4)!",
       "speech": "Белухи и нерпы на Батарейной, 4! 🐬🌊",
-      "label": { "text": "🐬 Океанариум (Батарейная, 4 • ★ 4.2)", "x": 6, "y": 12, "z": -118 }
+      "label": {
+        "text": "🐬 Океанариум (Батарейная, 4 • ★ 4.2)",
+        "x": 33.79,
+        "y": 12,
+        "z": -64.42
+      }
     },
     {
       "id": "supra",
+      "parentId": "supra_restaurant",
       "name": "Ресторан «Супра» (Фокина, 1б)",
-      "prompt": "Заказать хинкали и хачапури в «Супре» (+HP & ₽1,100)",
-      "x": 25.5,
-      "z": 16,
+      "prompt": "Заказать хинкали и хачапури в «Супре»",
+      "x": 128.37,
+      "z": -61.91,
       "radius": 5.5,
       "reward": 1100,
       "restoreHealth": true,
       "restoreStamina": true,
       "toast": "🥟 @{username} зашёл без очереди в «Супру» на Адмирала Фокина, 1б!",
       "speech": "Хинкали в Супре на Фокина — пушка! 🔥🥟",
-      "label": { "text": "🍷 «Супра» (Фокина, 1б • ★ 4.6)", "x": 34, "y": 9.2, "z": 16 }
+      "label": {
+        "text": "🍷 «Супра» (Фокина, 1б • ★ 4.6)",
+        "x": 126.37,
+        "y": 9.2,
+        "z": -61.91
+      }
     },
     {
       "id": "fortress",
+      "parentId": "fortress_museum",
       "name": "Музей «Владивостокская крепость» (Батарейная, 4а)",
-      "prompt": "Осмотреть береговые орудия Крепости (+₽850)",
-      "x": 28,
-      "z": -92,
+      "prompt": "Осмотреть береговые орудия Крепости",
+      "x": 90.32,
+      "z": -97.34,
       "radius": 6,
       "reward": 850,
       "toast": "🏰 @{username} изучил батарею Музея «Владивостокская крепость» (Батарейная, 4а)!",
       "speech": "История Владивостокской крепости! ⚓🏰",
-      "label": { "text": "🏰 Крепость (Батарейная, 4а • ★ 4.4)", "x": 35, "y": 8.2, "z": -92 }
+      "label": {
+        "text": "🏰 Крепость (Батарейная, 4а • ★ 4.4)",
+        "x": 69.32,
+        "y": 8.2,
+        "z": -94.34
+      }
     },
     {
       "id": "olympiets",
+      "parentId": "olympiets_complex",
       "name": "СК «Олимпиец» (ул. Батарейная, 2)",
-      "prompt": "Провести тренировку в СК «Олимпиец» (+Макс Стамина & ₽700)",
-      "x": 26,
-      "z": -134,
+      "prompt": "Провести тренировку в СК «Олимпиец»",
+      "x": 28.91,
+      "z": -115.79,
       "radius": 6,
       "reward": 700,
       "restoreStamina": true,
       "toast": "🏋️ @{username} прокачал выносливость в СК «Олимпиец» (Батарейная, 2)!",
       "speech": "Спорткомплекс Олимпиец — на спорте! 💪",
-      "label": { "text": "🏅 СК «Олимпиец» (Батарейная, 2 • ★ 4.4)", "x": 36, "y": 13.5, "z": -134 }
+      "label": {
+        "text": "🏅 СК «Олимпиец» (Батарейная, 2 • ★ 4.4)",
+        "x": 54.91,
+        "y": 13.5,
+        "z": -109.79
+      }
     },
     {
       "id": "azimut",
+      "parentId": "azimut_hotel",
       "name": "AZIMUT Сити Отель (ул. Набережная, 10)",
-      "prompt": "Подняться на панорамный этаж AZIMUT Отеля (+₽950)",
-      "x": 31,
-      "z": 130,
+      "prompt": "Подняться на панорамный этаж AZIMUT Отеля",
+      "x": 205.75,
+      "z": 131.75,
       "radius": 6.5,
       "reward": 950,
       "toast": "🏨 @{username} оценил панораму Амурского залива из отеля AZIMUT (Набережная, 10)!",
       "speech": "Весь Амурский залив как на ладони! 🏨🌅",
-      "label": { "text": "🏨 Отель AZIMUT (Набережная, 10 • ★ 4.2)", "x": 40, "y": 30.5, "z": 130 }
+      "label": {
+        "text": "🏨 Отель AZIMUT (Набережная, 10 • ★ 4.2)",
+        "x": 183.75,
+        "y": 30.5,
+        "z": 131.75
+      }
     },
     {
       "id": "yachtclub",
+      "parentId": "yacht_club_boathouse",
       "name": "Яхт-клуб «Семь Футов» (Шмидта, 17)",
-      "prompt": "Проверить регату в Яхт-клубе «Семь Футов» (+₽1,000)",
+      "prompt": "Затусить в Яхт-клубе «Семь Футов»",
       "x": -18,
-      "z": 118,
+      "z": 148,
       "radius": 6,
       "reward": 1000,
       "toast": "⛵ @{username} посетил легендарный Яхт-клуб «Семь Футов»!",
       "speech": "Семь футов под килем, Владивосток! ⛵🌊",
-      "label": { "text": "⛵ Яхт-клуб «Семь Футов» (★ 4.6)", "x": -24, "y": 6.2, "z": 118 }
+      "label": {
+        "text": "⛵ Яхт-клуб «Семь Футов» (★ 4.6)",
+        "x": -24,
+        "y": 6.2,
+        "z": 118
+      }
     }
   ],
   "teleports": {
-    "fountain": { "x": 0, "z": 14, "name": "Центральный Фонтан (Спортивная Гавань)" },
-    "supra": { "x": 25, "z": 16, "name": "Грузинский дом «Супра» (ул. Адмирала Фокина, 1б)" },
-    "tiger": { "x": -6, "z": -32, "name": "Бронзовый Амурский Тигр" },
-    "pyanse": { "x": 4, "z": 28, "name": "Стритфуд «Пян-се»" },
-    "pier": { "x": -34, "z": 48, "name": "Пляж «Юбилейный» & Пирс" },
-    "fortress": { "x": 26, "z": -92, "name": "Музей «Владивостокская крепость» (ул. Батарейная, 4а)" },
-    "oceanarium": { "x": 6, "z": -102, "name": "Океанариум (ул. Батарейная, 4)" },
-    "olympiets": { "x": 24, "z": -134, "name": "СК «Олимпиец» (ул. Батарейная, 2)" },
-    "okean": { "x": 20, "z": 88, "name": "Кинотеатр «Океан IMAX» (ул. Набережная, 3)" },
-    "azimut": { "x": 28, "z": 130, "name": "AZIMUT Сити Отель (ул. Набережная, 10)" },
-    "yachtclub": { "x": -18, "z": 118, "name": "Яхт-клуб «Семь Футов» (ул. Лейтенанта Шмидта, 17)" }
+    "fountain": {
+      "x": 66.43,
+      "z": 15.73,
+      "name": "Центральный Фонтан (Спортивная Гавань)"
+    },
+    "supra": {
+      "x": 117.37,
+      "z": -61.91,
+      "name": "Грузинский дом «Супра» (ул. Адмирала Фокина, 1б)"
+    },
+    "tiger": {
+      "x": -6,
+      "z": -32,
+      "name": "Бронзовый Амурский Тигр"
+    },
+    "pyanse": {
+      "x": 1.8,
+      "z": 36.85,
+      "name": "Стритфуд «Пян-се»"
+    },
+    "pier": {
+      "x": -34,
+      "z": 48,
+      "name": "Пляж «Юбилейный» & Пирс"
+    },
+    "fortress": {
+      "x": 60.32,
+      "z": -94.34,
+      "name": "Музей «Владивостокская крепость» (ул. Батарейная, 4а)"
+    },
+    "oceanarium": {
+      "x": 33.79,
+      "z": -48.42,
+      "name": "Океанариум (ул. Батарейная, 4)"
+    },
+    "olympiets": {
+      "x": 42.91,
+      "z": -109.79,
+      "name": "СК «Олимпиец» (ул. Батарейная, 2)"
+    },
+    "okean": {
+      "x": 100.73,
+      "z": 118.18,
+      "name": "Кинотеатр «Океан IMAX» (ул. Набережная, 3)"
+    },
+    "azimut": {
+      "x": 171.75,
+      "z": 131.75,
+      "name": "AZIMUT Сити Отель (ул. Набережная, 10)"
+    },
+    "yachtclub": {
+      "x": -18,
+      "z": 118,
+      "name": "Яхт-клуб «Семь Футов» (ул. Лейтенанта Шмидта, 17)"
+    }
   },
-  "staticColliders": [
-    { "type": "circle", "x": 0, "z": 0, "radius": 9.8, "height": 1.05, "climbable": true, "name": "Фонтан (бортик)" },
-    { "type": "circle", "x": 0, "z": 0, "radius": 3.1, "height": 1.85, "climbable": true, "name": "Фонтан (центр)" },
-    { "type": "box", "x": -10, "z": -32, "width": 3.6, "depth": 2.4, "height": 1.1, "climbable": true, "name": "Постамент Тигра" },
-    { "type": "box", "x": -10, "z": -32, "width": 2.1, "depth": 0.9, "height": 2.15, "climbable": true, "name": "Статуя Тигра" },
-    { "type": "box", "x": 9.5, "z": 28, "width": 4.6, "depth": 6.4, "height": 4.5, "climbable": false, "name": "ПЯН-СЕ" },
-    { "type": "box", "x": 9.5, "z": 44, "width": 4.6, "depth": 6.4, "height": 4.5, "climbable": false, "name": "ЧИФАНЬКА" },
-    { "type": "box", "x": 9.5, "z": 60, "width": 4.6, "depth": 6.4, "height": 4.5, "climbable": false, "name": "МОРСКОЙ КОФЕ" },
-    { "type": "box", "x": -4, "z": -88, "width": 9.2, "depth": 5.4, "height": 24, "climbable": false, "name": "Колесо обозрения" },
-    { "type": "box", "x": 38, "z": -45, "width": 16.5, "depth": 56.5, "height": 14, "climbable": false, "name": "Стадион Динамо" },
-    { "type": "box", "x": 38, "z": 92, "width": 20.5, "depth": 28.5, "height": 18, "climbable": false, "name": "Кинотеатр Океан IMAX" },
-    { "type": "circle", "x": 6, "z": -118, "radius": 12.0, "height": 11, "climbable": false, "name": "Океанариум" },
-    { "type": "box", "x": 36, "z": 16, "width": 11.2, "depth": 13.2, "height": 7.8, "climbable": false, "name": "Ресторан Супра" },
-    { "type": "box", "x": 28.9, "z": 16, "width": 3.2, "depth": 11.0, "height": 0.75, "climbable": true, "name": "Терраса Супры" },
-    { "type": "box", "x": 35, "z": -92, "width": 9.0, "depth": 22.0, "height": 1.25, "climbable": true, "name": "Батарея Крепости" },
-    { "type": "box", "x": 41, "z": -92, "width": 10.0, "depth": 16.0, "height": 5.8, "climbable": false, "name": "Музей Владивостокская крепость" },
-    { "type": "box", "x": 38, "z": -134, "width": 18.4, "depth": 28.4, "height": 11.5, "climbable": false, "name": "СК Олимпиец" },
-    { "type": "box", "x": 42, "z": 130, "width": 14.5, "depth": 30.5, "height": 28, "climbable": false, "name": "Отель AZIMUT" },
-    { "type": "box", "x": -10, "z": 118, "width": 7.2, "depth": 9.2, "height": 4.6, "climbable": false, "name": "Яхт-клуб Семь Футов" },
-    { "type": "box", "x": 58, "z": 0, "width": 12, "depth": 340, "height": 40, "climbable": false, "name": "Восточный склон сопок" },
-    { "type": "box", "x": 15, "z": -158, "width": 90, "depth": 12, "height": 40, "climbable": false, "name": "Северная сопка" },
-    { "type": "box", "x": 15, "z": 158, "width": 90, "depth": 12, "height": 40, "climbable": false, "name": "Южная сопка" }
-  ],
   "hills": {
     "east": [
-      { "x": 68, "z": -135, "r": 32, "h": 46, "label": "" },
-      { "x": 74, "z": -90, "r": 36, "h": 56, "label": "⛰️ Алексеевская сопка" },
-      { "x": 72, "z": -40, "r": 34, "h": 64, "label": "⛰️ Сопка Орлиное Гнездо" },
-      { "x": 70, "z": 10, "r": 32, "h": 52, "label": "" },
-      { "x": 72, "z": 58, "r": 36, "h": 60, "label": "⛰️ Тигровая сопка" },
-      { "x": 74, "z": 108, "r": 34, "h": 50, "label": "" },
-      { "x": 68, "z": 148, "r": 32, "h": 46, "label": "" }
+      {
+        "x": 55.85,
+        "z": -209.38,
+        "r": 54.67,
+        "h": 48,
+        "label": "",
+        "y": -0.5,
+        "rotY": -1.43
+      },
+      {
+        "x": 303.23,
+        "z": -139.6,
+        "r": 39.54,
+        "h": 56,
+        "label": "⛰️ Алексеевская сопка"
+      },
+      {
+        "x": 457.96,
+        "z": -144.12,
+        "r": 79.06,
+        "h": 148.81,
+        "label": "⛰️ Сопка Орлиное Гнездо",
+        "y": -0.5,
+        "rotY": 0.38
+      },
+      {
+        "x": 327.83,
+        "z": -67.65,
+        "r": 48.7,
+        "h": 52,
+        "label": "",
+        "y": -0.5,
+        "rotY": 0
+      },
+      {
+        "x": 329.62,
+        "z": 18.22,
+        "r": 55.57,
+        "h": 60,
+        "label": "⛰️ Тигровая сопка",
+        "y": -0.5,
+        "rotY": 0.04
+      },
+      {
+        "x": 188.3,
+        "z": 195.52,
+        "r": 30.78,
+        "h": 56.18,
+        "label": "",
+        "y": -0.11,
+        "rotY": 0
+      },
+      {
+        "x": 298,
+        "z": 148,
+        "r": 32,
+        "h": 46,
+        "label": ""
+      },
+      {
+        "x": 300.01,
+        "z": -173.25,
+        "r": 73.46,
+        "h": 52.24,
+        "seed": 10
+      },
+      {
+        "x": 315.45,
+        "z": 124.92,
+        "r": 73.3,
+        "h": 56.33,
+        "seed": 10,
+        "y": -0.5,
+        "rotY": 0
+      },
+      {
+        "x": 277.58,
+        "z": 176.92,
+        "r": 45,
+        "h": 32,
+        "seed": 10
+      },
+      {
+        "x": 132.91,
+        "z": -205.59,
+        "r": 54.67,
+        "h": 48,
+        "label": "",
+        "y": -0.5,
+        "rotY": -1.43
+      },
+      {
+        "x": 208.29,
+        "z": -202.61,
+        "r": 54.67,
+        "h": 48,
+        "label": "",
+        "y": -0.5,
+        "rotY": -1.43
+      },
+      {
+        "x": 155.82,
+        "z": 195.51,
+        "r": 30.78,
+        "h": 56.18,
+        "label": "",
+        "y": -0.11,
+        "rotY": 0
+      },
+      {
+        "x": 124.93,
+        "z": 194.15,
+        "r": 30.78,
+        "h": 56.18,
+        "label": "",
+        "y": -0.11,
+        "rotY": 0
+      }
     ],
     "north": [
-      { "x": -24, "z": -168, "r": 28, "h": 34, "label": "🌲 Мыс Боброва" },
-      { "x": 6, "z": -172, "r": 32, "h": 42, "label": "" },
-      { "x": 38, "z": -168, "r": 32, "h": 48, "label": "" }
+      {
+        "x": -29.57,
+        "z": -184.65,
+        "r": 28,
+        "h": 34,
+        "label": "🌲 Мыс Боброва",
+        "y": -0.5,
+        "rotY": 0
+      },
+      {
+        "x": 6.75,
+        "z": -198.15,
+        "r": 32,
+        "h": 42,
+        "label": "",
+        "y": 2.07,
+        "rotY": 0
+      }
     ],
     "south": [
-      { "x": -20, "z": 168, "r": 28, "h": 36, "label": "" },
-      { "x": 10, "z": 172, "r": 32, "h": 45, "label": "⛰️ Крестовая сопка (Эгершельд)" },
-      { "x": 40, "z": 168, "r": 32, "h": 48, "label": "" }
+      {
+        "x": -1.89,
+        "z": 187.56,
+        "r": 36.96,
+        "h": 36,
+        "label": "",
+        "y": -0.5,
+        "rotY": 0.18
+      },
+      {
+        "x": 62.99,
+        "z": 201.34,
+        "r": 61.76,
+        "h": 45,
+        "label": "⛰️ Крестовая сопка (Эгершельд)",
+        "y": -0.5,
+        "rotY": 0.64
+      },
+      {
+        "x": 221.94,
+        "z": 196.9,
+        "r": 32,
+        "h": 48,
+        "label": "",
+        "y": -0.5,
+        "rotY": 0
+      }
     ],
     "westShoreRidge": [
-      { "z": -320, "r": 95, "h": 28 },
-      { "z": -230, "r": 110, "h": 36 },
-      { "z": -140, "r": 95, "h": 30 },
-      { "z": -55, "r": 120, "h": 42 },
-      { "z": 35, "r": 105, "h": 34 },
-      { "z": 125, "r": 115, "h": 38 },
-      { "z": 220, "r": 100, "h": 31 },
-      { "z": 310, "r": 90, "h": 25 }
+      {
+        "z": -320,
+        "r": 95,
+        "h": 28
+      },
+      {
+        "z": -230,
+        "r": 110,
+        "h": 36
+      },
+      {
+        "z": -140,
+        "r": 95,
+        "h": 30
+      },
+      {
+        "z": -55,
+        "r": 120,
+        "h": 42
+      },
+      {
+        "z": 35,
+        "r": 105,
+        "h": 34
+      },
+      {
+        "z": 125,
+        "r": 115,
+        "h": 38
+      },
+      {
+        "z": 220,
+        "r": 100,
+        "h": 31
+      },
+      {
+        "z": 310,
+        "r": 90,
+        "h": 25
+      }
     ]
   },
   "tankers": [
-    { "name": "Танкер «Приморье»", "x": -135, "z": -85, "scale": 1.15, "speed": 1.3, "dir": 1, "hullColor": 8330525 },
-    { "name": "Танкер «Амурский Залив»", "x": -195, "z": 35, "scale": 1.35, "speed": 0.9, "dir": -1, "hullColor": 1976635 },
-    { "name": "Сухогруз «Владивосток»", "x": -155, "z": 115, "scale": 1.05, "speed": 1.1, "dir": -1, "hullColor": 988970 },
-    { "name": "Танкер «Восток-Ойл»", "x": -245, "z": -25, "scale": 1.45, "speed": 0.65, "dir": 1, "hullColor": 10033947 }
+    {
+      "name": "Танкер «Приморье»",
+      "x": -135,
+      "z": -85,
+      "scale": 1.15,
+      "speed": 1.3,
+      "dir": 1,
+      "hullColor": 8330525
+    },
+    {
+      "name": "Танкер «Амурский Залив»",
+      "x": -195,
+      "z": 35,
+      "scale": 1.35,
+      "speed": 0.9,
+      "dir": -1,
+      "hullColor": 1976635
+    },
+    {
+      "name": "Сухогруз «Владивосток»",
+      "x": -155,
+      "z": 115,
+      "scale": 1.05,
+      "speed": 1.1,
+      "dir": -1,
+      "hullColor": 988970
+    },
+    {
+      "name": "Танкер «Восток-Ойл»",
+      "x": -245,
+      "z": -25,
+      "scale": 1.45,
+      "speed": 0.65,
+      "dir": 1,
+      "hullColor": 10033947
+    }
   ],
   "sailboats": [
-    [-56, 38],
-    [-68, 58],
-    [-52, -24],
-    [-75, -65]
+    {
+      "id": "sailboat_0",
+      "name": "Яхта «Белый Парус» #1",
+      "model": "models/sailboat_white.glb",
+      "x": -56,
+      "y": -1.1,
+      "z": 38,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "sailboat_1",
+      "name": "Яхта «Амурский Бриз» #2",
+      "model": "models/sailboat_blue.glb",
+      "x": -68,
+      "y": -1.1,
+      "z": 58,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "sailboat_2",
+      "name": "Яхта «Семь Футов» #3",
+      "model": "models/sailboat_white.glb",
+      "x": -52,
+      "y": -1.1,
+      "z": -24,
+      "rotY": 0,
+      "scale": 1
+    },
+    {
+      "id": "sailboat_3",
+      "name": "Яхта «Владивосток» #4",
+      "model": "models/sailboat_blue.glb",
+      "x": -75,
+      "y": -1.1,
+      "z": -65,
+      "rotY": 0,
+      "scale": 1
+    }
   ],
   "npcs": {
     "count": 14,
-    "colors": [14753096, 2450411, 366185, 14251782, 8141549, 561586, 889992]
+    "colors": [
+      14753096,
+      2450411,
+      366185,
+      14251782,
+      8141549,
+      561586,
+      889992
+    ]
   },
   "zones": [
-    { "condition": "x_lt", "threshold": -16, "label": "Пляж «Юбилейный» & Амурский залив" },
-    { "condition": "abs_z_lt", "threshold": 16, "label": "Площадь у Большого Фонтана" },
-    { "condition": "z_lt", "threshold": -65, "label": "Парк аттракционов & Колесо обозрения" },
-    { "condition": "z_gt", "threshold": 70, "label": "Набережная у к/т «Океан»" },
-    { "condition": "z_between", "min": 20, "max": 65, "label": "Фудкорт Набки (Пян-се & Чифаньки)" }
+    {
+      "condition": "x_lt",
+      "threshold": -16,
+      "label": "Пляж «Юбилейный» & Амурский залив"
+    },
+    {
+      "condition": "abs_z_lt",
+      "threshold": 16,
+      "label": "Площадь у Большого Фонтана"
+    },
+    {
+      "condition": "z_lt",
+      "threshold": -65,
+      "label": "Парк аттракционов & Колесо обозрения"
+    },
+    {
+      "condition": "z_gt",
+      "threshold": 70,
+      "label": "Набережная у к/т «Океан»"
+    },
+    {
+      "condition": "z_between",
+      "min": 20,
+      "max": 65,
+      "label": "Фудкорт Набки (Пян-се & Чифаньки)"
+    }
   ],
   "defaultZoneLabel": "Спортивная набережная — Променад"
 }

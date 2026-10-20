@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <base href="/">
+    <title>Nabka Visual World &amp; Model Editor</title>
+    <!-- Three.js r128 + Controls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js" crossorigin="anonymous"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Local Tailwind CSS from static/css/tailwind.css -->
+    <link rel="stylesheet" href="/css/tailwind.css">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #020617;
+            color: #e2e8f0;
+            font-family: Inter, system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        #editor-header {
+            height: 50px;
+            background: rgba(15, 23, 42, 0.95);
+            border-bottom: 1px solid rgba(56, 189, 248, 0.25);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 14px;
+            gap: 10px;
+            z-index: 20;
+        }
+        #editor-workspace {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 290px 1fr 340px;
+            min-height: 0;
+            position: relative;
+        }
+        .panel {
+            background: rgba(15, 23, 42, 0.94);
+            border-right: 1px solid rgba(148, 163, 184, 0.16);
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .panel-right {
+            border-right: none;
+            border-left: 1px solid rgba(148, 163, 184, 0.16);
+        }
+        .panel-title {
+            padding: 10px 12px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #38bdf8;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .panel-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        .btn {
+            background: #1e293b;
+            color: #e2e8f0;
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            border-radius: 7px;
+            padding: 6px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.12s ease;
+        }
+        .btn:hover {
+            background: #334155;
+            border-color: #38bdf8;
+        }
+        .btn.active {
+            background: #0284c7;
+            color: #fff;
+            border-color: #38bdf8;
+        }
+        .btn-primary {
+            background: #0284c7;
+            color: #fff;
+            border-color: #38bdf8;
+        }
+        .btn-primary:hover {
+            background: #0369a1;
+        }
+        .btn-amber {
+            background: #d97706;
+            color: #fff;
+            border-color: #fbbf24;
+        }
+        .btn-amber:hover {
+            background: #b45309;
+        }
+        .btn-danger {
+            background: #991b1b;
+            color: #fecaca;
+            border-color: #ef4444;
+        }
+        .btn-danger:hover {
+            background: #7f1d1d;
+        }
+        .tree-group {
+            margin-bottom: 10px;
+        }
+        .tree-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px 8px;
+            background: rgba(30, 41, 59, 0.75);
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 4px;
+        }
+        .tree-item {
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            color: #cbd5e1;
+            border: 1px solid transparent;
+        }
+        .tree-item:hover {
+            background: rgba(51, 65, 85, 0.55);
+        }
+        .tree-item.selected {
+            background: rgba(2, 132, 199, 0.28);
+            border-color: #38bdf8;
+            color: #fff;
+            font-weight: 600;
+        }
+        .field-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 10px;
+        }
+        .field-grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+        }
+        .field-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .field-input, .field-select {
+            background: #0f172a;
+            border: 1px solid rgba(148, 163, 184, 0.3);
+            border-radius: 6px;
+            color: #f8fafc;
+            padding: 6px 8px;
+            font-size: 12px;
+            width: 100%;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .field-input:focus, .field-select:focus {
+            outline: none;
+            border-color: #38bdf8;
+        }
+        #viewport-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #020617;
+        }
+        #viewport-overlay {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 11px;
+            color: #94a3b8;
+            pointer-events: none;
+            display: flex;
+            gap: 14px;
+        }
+        #status-toast {
+            position: absolute;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(2, 132, 199, 0.95);
+            color: #fff;
+            padding: 7px 14px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+            z-index: 30;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <header id="editor-header">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span style="background:linear-gradient(90deg,#f59e0b,#ea580c);color:#020617;font-weight:900;padding:4px 10px;border-radius:7px;font-size:12px;">
+                НАБКА EDITOR
+            </span>
+            <span style="font-size:12px;color:#94a3b8;">Standalone Visual Map &amp; GLB Model Editor</span>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:6px;">
+            <button id="btn-undo" class="btn" title="Undo last action (Shortcut: Ctrl+Z)" disabled style="opacity:0.45;">
+                <i class="fa-solid fa-rotate-left"></i> Undo
+            </button>
+            <button id="btn-redo" class="btn" title="Redo action (Shortcut: Ctrl+Y / Ctrl+Shift+Z)" disabled style="opacity:0.45;">
+                <i class="fa-solid fa-rotate-right"></i>
+            </button>
+            <button id="btn-mode-translate" class="btn active" title="Move tool (Shortcut: W)">
+                <i class="fa-solid fa-arrows-up-down-left-right"></i> Move (W)
+            </button>
+            <button id="btn-mode-rotate" class="btn" title="Rotate tool (Shortcut: E)">
+                <i class="fa-solid fa-rotate"></i> Rotate (E)
+            </button>
+            <button id="btn-mode-scale" class="btn" title="Scale / Size tool (Shortcut: R)">
+                <i class="fa-solid fa-expand"></i> Scale (R)
+            </button>
+            <button id="btn-mode-pan" class="btn" title="Pan Camera with Left-Click (Shortcut: H or hold Space/Shift)">
+                <i class="fa-solid fa-hand"></i> Pan (H)
+            </button>
+            <button id="btn-reset-camera" class="btn" title="Reset Camera View to Map Overview without losing changes (Shortcut: Home or C)">
+                <i class="fa-solid fa-video"></i> Reset View (C)
+            </button>
+            <label class="btn" style="cursor:pointer;" title="Show bounding boxes automatically computed from 3D model geometry">
+                <input type="checkbox" id="chk-show-colliders" checked> Bounding Boxes
+            </label>
+            <label class="btn" style="cursor:pointer;">
+                <input type="checkbox" id="chk-show-pois" checked> POIs
+            </label>
+            <label class="btn" style="cursor:pointer;">
+                <input type="checkbox" id="chk-show-bounds" checked> Bounds
+            </label>
+            <button id="btn-make-square" class="btn" title="Scale base terrain, bounds, and eastern hills to a 340x340 square map">
+                <i class="fa-solid fa-vector-square"></i> Square (340×340)
+            </button>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:6px;">
+            <button id="btn-export-all-glb" class="btn btn-amber" title="Generate and save all 35 .glb files to static/models/">
+                <i class="fa-solid fa-cubes"></i> Export All (.glb)
+            </button>
+            <button id="btn-upload-glb" class="btn" title="Upload an edited .glb from Blockbench or Blender into static/models/">
+                <i class="fa-solid fa-file-arrow-up"></i> Import .glb
+            </button>
+            <input type="file" id="input-upload-glb" accept=".glb" style="display:none">
+            <button id="btn-save-disk" class="btn btn-primary" title="Save directly to static/data/world_map.json">
+                <i class="fa-solid fa-floppy-disk"></i> Save world_map.json
+            </button>
+            <button id="btn-download-json" class="btn" title="Download world_map.json file">
+                <i class="fa-solid fa-download"></i> JSON
+            </button>
+        </div>
+    </header>
+
+    <div id="editor-workspace">
+        <!-- Left Panel: Scene Outliner -->
+        <aside class="panel">
+            <div class="panel-title">
+                <span>Scene Outliner</span>
+                <span id="outliner-count" style="color:#64748b;">0 items</span>
+            </div>
+            <div style="padding:8px 10px;border-bottom:1px solid rgba(148,163,184,0.12);display:flex;gap:6px;">
+                <input id="outliner-filter" class="field-input" placeholder="Filter entities or models...">
+            </div>
+            <div id="outliner-list" class="panel-scroll"></div>
+        </aside>
+
+        <!-- Center: 3D Viewport -->
+        <main id="viewport-container">
+            <div id="status-toast"></div>
+            <div id="viewport-overlay">
+                <span><b>LMB</b> Select / Orbit</span>
+                <span><b>RMB / MMB / Space+LMB / Arrows</b> Pan Camera</span>
+                <span><b>Wheel</b> Zoom to Cursor</span>
+                <span><b>W / E / R / H</b> Move / Rotate / Scale / Pan</span>
+                <span><b>Ctrl+Z / Ctrl+Y</b> Undo / Redo</span>
+                <span><b>F</b> Focus</span>
+                <span><b>C / Home</b> Reset View</span>
+                <span><b>Del</b> Delete</span>
+            </div>
+        </main>
+
+        <!-- Right Panel: Inspector & Model Tools -->
+        <aside class="panel panel-right">
+            <div class="panel-title">
+                <span>Property Inspector</span>
+                <span id="inspector-category" style="color:#fbbf24;">None</span>
+            </div>
+            <div id="inspector-content" class="panel-scroll">
+                <div style="color:#64748b;font-size:12px;line-height:1.5;padding:8px;">
+                    Click any building, stall, car, prop, collider, or POI in the 3D viewport or Scene Outliner to inspect and edit its transform, properties, or <code>.glb</code> model.
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script type="module" src="/editor/editor.js"></script>
+</body>
+</html>

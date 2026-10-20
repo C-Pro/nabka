@@ -2,7 +2,13 @@ package game
 
 import (
 	"context"
+	"encoding/json"
+	"io/fs"
+	"os"
 	"sync"
+	"time"
+
+	"nabka"
 
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -54,6 +60,8 @@ type HubSnapshot struct {
 
 // Hub maintains the set of active clients, tracks world state (cars and users), and broadcasts messages via an actor loop.
 type Hub struct {
+	sequence    uint64
+	started     time.Time
 	clients     map[string]*Client
 	cars        map[string]*CarState
 	users       map[string]*UserState
@@ -63,6 +71,31 @@ type Hub struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+func loadWorldMapVehicleIDs() []string {
+	raw, err := os.ReadFile("static/data/world_map.json")
+	if err != nil {
+		raw, err = fs.ReadFile(nabka.FS(), "data/world_map.json")
+		if err != nil {
+			return nil
+		}
+	}
+	var parsed struct {
+		Vehicles []struct {
+			ID string `json:"id"`
+		} `json:"vehicles"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil
+	}
+	var ids []string
+	for _, v := range parsed.Vehicles {
+		if v.ID != "" {
+			ids = append(ids, v.ID)
+		}
+	}
+	return ids
 }
 
 // NewHub creates and starts a new Hub instance.
@@ -80,9 +113,13 @@ func NewHub(parentCtx context.Context, allowedCars ...string) *Hub {
 		allowedMap["car_2"] = struct{}{}
 		allowedMap["car_3"] = struct{}{}
 		allowedMap["car_4"] = struct{}{}
+		for _, id := range loadWorldMapVehicleIDs() {
+			allowedMap[id] = struct{}{}
+		}
 	}
 
 	h := &Hub{
+		started:     time.Now(),
 		clients:     make(map[string]*Client),
 		cars:        make(map[string]*CarState),
 		users:       make(map[string]*UserState),
@@ -267,17 +304,22 @@ func (h *Hub) run() {
 				// Send all currently tracked car positions to the newly joined client
 				for _, car := range h.cars {
 					carMsg, err := msgpack.Marshal(OutboundDrivingMoveMsg{
-						Username: car.Driver, // "" if parked, or driver username
-						Type:     TypeMove,
-						Mode:     ModeDriving,
-						CarID:    car.CarID,
-						X:        car.X,
-						Y:        car.Y,
-						Z:        car.Z,
-						Speed:    car.Speed,
-						Yaw:      car.Yaw,
-						Drift:    car.Drift,
-						Lights:   car.Lights,
+						Username:     car.Driver, // "" if parked, or driver username
+						Type:         TypeMove,
+						Mode:         ModeDriving,
+						CarID:        car.CarID,
+						X:            car.X,
+						Y:            car.Y,
+						Z:            car.Z,
+						Speed:        car.Speed,
+						VX:           car.VX,
+						VZ:           car.VZ,
+						YawRate:      car.YawRate,
+						Sequence:     car.Sequence,
+						SampleTimeMS: car.SampleTimeMS,
+						Yaw:          car.Yaw,
+						Drift:        car.Drift,
+						Lights:       car.Lights,
 					})
 					if err == nil {
 						select {
@@ -306,17 +348,22 @@ func (h *Hub) run() {
 					var err error
 					if userState.Mode == ModeDriving {
 						userMsg, err = msgpack.Marshal(OutboundDrivingMoveMsg{
-							Username: userState.Username,
-							Type:     TypeMove,
-							Mode:     ModeDriving,
-							CarID:    userState.CarID,
-							X:        userState.X,
-							Y:        userState.Y,
-							Z:        userState.Z,
-							Speed:    userState.Speed,
-							Yaw:      userState.Yaw,
-							Drift:    userState.Drift,
-							Lights:   userState.Lights,
+							Username:     userState.Username,
+							Type:         TypeMove,
+							Mode:         ModeDriving,
+							CarID:        userState.CarID,
+							X:            userState.X,
+							Y:            userState.Y,
+							Z:            userState.Z,
+							Speed:        userState.Speed,
+							VX:           userState.VX,
+							VZ:           userState.VZ,
+							YawRate:      userState.YawRate,
+							Sequence:     userState.Sequence,
+							SampleTimeMS: userState.SampleTimeMS,
+							Yaw:          userState.Yaw,
+							Drift:        userState.Drift,
+							Lights:       userState.Lights,
 						})
 					} else {
 						userMsg, err = msgpack.Marshal(OutboundPedestrianMoveMsg{
@@ -386,6 +433,7 @@ func (h *Hub) run() {
 					if car, carExists := h.cars[prev.CarID]; carExists && car.Driver == c.sender.Username {
 						car.Driver = ""
 						car.Speed = 0
+						car.VX, car.VZ, car.YawRate = 0, 0, 0
 						car.Drift = false
 						prevCar = car
 					}
@@ -427,17 +475,22 @@ func (h *Hub) run() {
 								// Car is currently occupied by another active player!
 								// Send direct authoritative vehicle update to the losing client so they exit/reconcile immediately
 								rejectMsg, err := msgpack.Marshal(OutboundDrivingMoveMsg{
-									Username: currentCar.Driver,
-									Type:     TypeMove,
-									Mode:     ModeDriving,
-									CarID:    currentCar.CarID,
-									X:        currentCar.X,
-									Y:        currentCar.Y,
-									Z:        currentCar.Z,
-									Speed:    currentCar.Speed,
-									Yaw:      currentCar.Yaw,
-									Drift:    currentCar.Drift,
-									Lights:   currentCar.Lights,
+									Username:     currentCar.Driver,
+									Type:         TypeMove,
+									Mode:         ModeDriving,
+									CarID:        currentCar.CarID,
+									X:            currentCar.X,
+									Y:            currentCar.Y,
+									Z:            currentCar.Z,
+									Speed:        currentCar.Speed,
+									VX:           currentCar.VX,
+									VZ:           currentCar.VZ,
+									YawRate:      currentCar.YawRate,
+									Sequence:     currentCar.Sequence,
+									SampleTimeMS: currentCar.SampleTimeMS,
+									Yaw:          currentCar.Yaw,
+									Drift:        currentCar.Drift,
+									Lights:       currentCar.Lights,
 								})
 								if err == nil {
 									select {
@@ -457,34 +510,49 @@ func (h *Hub) run() {
 					if pCar, carExists := h.cars[prev.CarID]; carExists && pCar.Driver == c.sender.Username {
 						pCar.Driver = ""
 						pCar.Speed = 0
+						pCar.VX, pCar.VZ, pCar.YawRate = 0, 0, 0
 						pCar.Drift = false
 						prevCar = pCar
 					}
 				}
 
+				h.sequence++
+				c.move.Sequence = h.sequence
+				c.move.SampleTimeMS = float64(time.Since(h.started)) / float64(time.Millisecond)
+				c.data, _ = msgpack.Marshal(c.move)
 				h.cars[c.move.CarID] = &CarState{
-					CarID:  c.move.CarID,
-					X:      c.move.X,
-					Y:      c.move.Y,
-					Z:      c.move.Z,
-					Speed:  c.move.Speed,
-					Yaw:    c.move.Yaw,
-					Drift:  c.move.Drift,
-					Lights: c.move.Lights,
-					Driver: c.sender.Username,
+					CarID:        c.move.CarID,
+					X:            c.move.X,
+					Y:            c.move.Y,
+					Z:            c.move.Z,
+					Speed:        c.move.Speed,
+					VX:           c.move.VX,
+					VZ:           c.move.VZ,
+					YawRate:      c.move.YawRate,
+					Sequence:     c.move.Sequence,
+					SampleTimeMS: c.move.SampleTimeMS,
+					Yaw:          c.move.Yaw,
+					Drift:        c.move.Drift,
+					Lights:       c.move.Lights,
+					Driver:       c.sender.Username,
 				}
 
 				h.users[c.sender.Username] = &UserState{
-					Username: c.sender.Username,
-					Mode:     ModeDriving,
-					CarID:    c.move.CarID,
-					X:        c.move.X,
-					Y:        c.move.Y,
-					Z:        c.move.Z,
-					Speed:    c.move.Speed,
-					Yaw:      c.move.Yaw,
-					Drift:    c.move.Drift,
-					Lights:   c.move.Lights,
+					Username:     c.sender.Username,
+					Mode:         ModeDriving,
+					CarID:        c.move.CarID,
+					X:            c.move.X,
+					Y:            c.move.Y,
+					Z:            c.move.Z,
+					Speed:        c.move.Speed,
+					VX:           c.move.VX,
+					VZ:           c.move.VZ,
+					YawRate:      c.move.YawRate,
+					Sequence:     c.move.Sequence,
+					SampleTimeMS: c.move.SampleTimeMS,
+					Yaw:          c.move.Yaw,
+					Drift:        c.move.Drift,
+					Lights:       c.move.Lights,
 				}
 
 				h.broadcastData(c.data, c.sender)
@@ -543,6 +611,7 @@ func (h *Hub) cleanupUserStateLocked(username string) *CarState {
 			if car, carExists := h.cars[prev.CarID]; carExists && car.Driver == username {
 				car.Driver = ""
 				car.Speed = 0
+				car.VX, car.VZ, car.YawRate = 0, 0, 0
 				car.Drift = false
 				releasedCar = car
 			}
@@ -555,17 +624,22 @@ func (h *Hub) cleanupUserStateLocked(username string) *CarState {
 // broadcastCarStateLocked publishes authoritative car state (e.g. parked) to all clients.
 func (h *Hub) broadcastCarStateLocked(car *CarState) {
 	carMsg, err := msgpack.Marshal(OutboundDrivingMoveMsg{
-		Username: car.Driver, // "" when parked
-		Type:     TypeMove,
-		Mode:     ModeDriving,
-		CarID:    car.CarID,
-		X:        car.X,
-		Y:        car.Y,
-		Z:        car.Z,
-		Speed:    car.Speed,
-		Yaw:      car.Yaw,
-		Drift:    car.Drift,
-		Lights:   car.Lights,
+		Username:     car.Driver, // "" when parked
+		Type:         TypeMove,
+		Mode:         ModeDriving,
+		CarID:        car.CarID,
+		X:            car.X,
+		Y:            car.Y,
+		Z:            car.Z,
+		Speed:        car.Speed,
+		VX:           car.VX,
+		VZ:           car.VZ,
+		YawRate:      car.YawRate,
+		Sequence:     car.Sequence,
+		SampleTimeMS: car.SampleTimeMS,
+		Yaw:          car.Yaw,
+		Drift:        car.Drift,
+		Lights:       car.Lights,
 	})
 	if err == nil {
 		h.broadcastData(carMsg, nil)
@@ -631,17 +705,22 @@ func (h *Hub) broadcastData(data []byte, exclude *Client) {
 				var parkedCarMsg []byte
 				if releasedCar != nil {
 					parkedCarMsg, _ = msgpack.Marshal(OutboundDrivingMoveMsg{
-						Username: releasedCar.Driver, // ""
-						Type:     TypeMove,
-						Mode:     ModeDriving,
-						CarID:    releasedCar.CarID,
-						X:        releasedCar.X,
-						Y:        releasedCar.Y,
-						Z:        releasedCar.Z,
-						Speed:    releasedCar.Speed,
-						Yaw:      releasedCar.Yaw,
-						Drift:    releasedCar.Drift,
-						Lights:   releasedCar.Lights,
+						Username:     releasedCar.Driver, // ""
+						Type:         TypeMove,
+						Mode:         ModeDriving,
+						CarID:        releasedCar.CarID,
+						X:            releasedCar.X,
+						Y:            releasedCar.Y,
+						Z:            releasedCar.Z,
+						Speed:        releasedCar.Speed,
+						VX:           releasedCar.VX,
+						VZ:           releasedCar.VZ,
+						YawRate:      releasedCar.YawRate,
+						Sequence:     releasedCar.Sequence,
+						SampleTimeMS: releasedCar.SampleTimeMS,
+						Yaw:          releasedCar.Yaw,
+						Drift:        releasedCar.Drift,
+						Lights:       releasedCar.Lights,
 					})
 				}
 

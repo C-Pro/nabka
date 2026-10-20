@@ -1110,6 +1110,10 @@ func TestNewlyJoinedClientReceivesCarAndUserPositions(t *testing.T) {
 }
 
 func TestEmbeddedModularStaticAssetsHTTP(t *testing.T) {
+	// Close this test's HTTP keep-alives before server shutdown.
+	transport := &http.Transport{DisableKeepAlives: true}
+	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	t.Cleanup(transport.CloseIdleConnections)
 	_, wsURL := startTestServer(t, 5*time.Second)
 	httpBase := strings.TrimSuffix(strings.Replace(wsURL, "ws://", "http://", 1), "/ws")
 
@@ -1123,7 +1127,8 @@ func TestEmbeddedModularStaticAssetsHTTP(t *testing.T) {
 		{"/js/main.js", "loadGameData"},
 		{"/js/msgpack.js", "MsgPackCodec"},
 		{"/js/physics.js", "PhysicsEngine"},
-		{"/data/world_map.json", "staticColliders"},
+		{"/js/vehicle-motion.js", "VehicleSnapshotBuffer"},
+		{"/data/world_map.json", "landmarks"},
 		{"/data/npc_dialogues.json", "Дэн с Зелёнки"},
 		{"/favicon.svg", `<svg xmlns="http://www.w3.org/2000/svg"`},
 		{"/sw.js", `self.registration.unregister`},
@@ -1131,7 +1136,7 @@ func TestEmbeddedModularStaticAssetsHTTP(t *testing.T) {
 	}
 
 	for _, tc := range paths {
-		resp, err := http.Get(httpBase + tc.path)
+		resp, err := client.Get(httpBase + tc.path)
 		if err != nil {
 			t.Fatalf("GET %s failed: %v", tc.path, err)
 		}
@@ -1161,7 +1166,7 @@ func TestEmbeddedModularStaticAssetsHTTP(t *testing.T) {
 	}
 
 	// Test favicon.ico specifically for 200 OK and binary content
-	respIco, err := http.Get(httpBase + "/favicon.ico")
+	respIco, err := client.Get(httpBase + "/favicon.ico")
 	if err != nil {
 		t.Fatalf("GET /favicon.ico failed: %v", err)
 	}
@@ -1173,7 +1178,31 @@ func TestEmbeddedModularStaticAssetsHTTP(t *testing.T) {
 		t.Fatalf("GET /favicon.ico Content-Type = %q, want image/x-icon", ct)
 	}
 
-	resp404, err := http.Get(httpBase + "/js/does-not-exist.js")
+	// Test audio mp3 files for 200 OK and audio/mpeg Content-Type
+	for _, audioPath := range []string{
+		"/audio/nabka_ambience.mp3",
+		"/audio/ch1.mp3",
+		"/audio/roadster_start.mp3",
+		"/audio/roadster_idle.mp3",
+		"/audio/roadster_driving.mp3",
+		"/audio/drift1.mp3",
+	} {
+		respAudio, err := client.Get(httpBase + audioPath)
+		if err != nil {
+			t.Fatalf("GET %s failed: %v", audioPath, err)
+		}
+		if respAudio.StatusCode != http.StatusOK {
+			_ = respAudio.Body.Close()
+			t.Fatalf("GET %s status = %d, want 200", audioPath, respAudio.StatusCode)
+		}
+		if ct := respAudio.Header.Get("Content-Type"); ct != "audio/mpeg" {
+			_ = respAudio.Body.Close()
+			t.Fatalf("GET %s Content-Type = %q, want audio/mpeg", audioPath, ct)
+		}
+		_ = respAudio.Body.Close()
+	}
+
+	resp404, err := client.Get(httpBase + "/js/does-not-exist.js")
 	if err != nil {
 		t.Fatalf("GET missing path failed: %v", err)
 	}

@@ -4,6 +4,7 @@ import { TextureFactory } from './textures.js';
 import { SoundManager } from './audio.js';
 import { completePOI, triggerPlayerSpeech, showToast } from './ui.js';
 import { updatePromenadeNPCs } from './entities.js';
+import { ModelLoader, ModelBuilders, DEFAULT_LANDMARKS, generateDefaultPromenadeProps, computeModelBoundingBox } from './models.js';
 
 export const World = {
     scene: null,
@@ -25,6 +26,10 @@ export const World = {
     seagulls: [],
     distantTankers: [],
     worldLabels: [],
+    landmarkGroups: [],
+    stallGroups: [],
+    propGroups: [],
+    streetLightsActive: false,
     worldMap: null,
     sunMesh: null,
     currentTimePhase: null,
@@ -56,6 +61,8 @@ export const World = {
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 1.0;
 
         this.clock = new THREE.Clock();
 
@@ -69,13 +76,13 @@ export const World = {
         this.skyDomeMesh = new THREE.Mesh(skyGeo, skyMat);
         this.scene.add(this.skyDomeMesh);
 
-        this.ambientLight = new THREE.AmbientLight(0xffedd5, 0.65);
+        this.ambientLight = new THREE.AmbientLight(0xffedd5, 0.45);
         this.scene.add(this.ambientLight);
 
-        this.hemiLight = new THREE.HemisphereLight(0x7dd3fc, 0x1e293b, 0.45);
+        this.hemiLight = new THREE.HemisphereLight(0x7dd3fc, 0x1e293b, 0.35);
         this.scene.add(this.hemiLight);
 
-        this.sunLight = new THREE.DirectionalLight(0xff9e5e, 1.35);
+        this.sunLight = new THREE.DirectionalLight(0xff9e5e, 1.15);
         this.sunLight.position.set(-140, 85, -40);
         this.sunLight.castShadow = true;
         this.sunLight.shadow.mapSize.width = 2048;
@@ -127,32 +134,129 @@ export const World = {
 
     buildVladivostokNabka(worldMap) {
         this.worldMap = worldMap;
-        PhysicsEngine.clear();
-        if (worldMap && Array.isArray(worldMap.staticColliders)) {
-            PhysicsEngine.loadFromConfig(worldMap.staticColliders);
+        this.terrainMeshes = [];
+        this.landmarkGroups = [];
+        this.stallGroups = [];
+        this.propGroups = [];
+        this.hillGroups = [];
+        this.interactables = [];
+        this.seagulls = [];
+        this.distantTankers = [];
+        this.worldLabels = [];
+        if (typeof document !== 'undefined') {
+            const labelContainer = document.getElementById('world-labels-container');
+            if (labelContainer) labelContainer.innerHTML = '';
         }
+        PhysicsEngine.clear();
 
-        // 1. Amur Bay Ocean
-        const oceanGeo = new THREE.PlaneGeometry(320, 440, 48, 48);
-        oceanGeo.rotateX(-Math.PI / 2);
-        const oceanMat = new THREE.MeshStandardMaterial({
-            color: 0x0369a1,
-            roughness: 0.22,
-            metalness: 0.75,
-            flatShading: true
-        });
-        this.oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
-        this.oceanMesh.position.set(-178, -1.6, 0);
-        this.oceanMesh.receiveShadow = true;
-        this.scene.add(this.oceanMesh);
+        const defaultTerrain = [
+            { id: 'ocean', name: 'Амурский залив (Океан)', type: 'ocean', x: -178, y: -1.6, z: 0, width: 320, height: 0.1, depth: 440, color: 0x0369a1 },
+            { id: 'beach', name: 'Пляж Юбилейный', type: 'beach', x: -22, y: -1.1, z: 0, width: 14, height: 1.2, depth: 340, color: 0x94826a },
+            { id: 'promenade', name: 'Плиточный променад Набки', type: 'promenade', x: 0, y: -0.5, z: 0, width: 30, height: 1.0, depth: 340, color: 0xcbd5e1 },
+            { id: 'road', name: 'Асфальтовая дорога', type: 'road', x: 23, y: -0.5, z: 0, width: 16, height: 0.95, depth: 340, color: 0x1e293b },
+            { id: 'east_ground', name: 'Восточный городской квартал', type: 'ground', x: 53, y: -0.5, z: 0, width: 45, height: 1.1, depth: 340, color: 0x334155 }
+        ];
+        const terrainList = (worldMap && Array.isArray(worldMap.terrain) && worldMap.terrain.length > 0)
+            ? worldMap.terrain
+            : defaultTerrain;
 
-        // 2. Sandy & Pebble Beach
-        const beachGeo = new THREE.BoxGeometry(14, 1.2, 340);
-        const beachMat = new THREE.MeshStandardMaterial({ color: 0x94826a, roughness: 0.9 });
-        const beachMesh = new THREE.Mesh(beachGeo, beachMat);
-        beachMesh.position.set(-22, -1.1, 0);
-        beachMesh.receiveShadow = true;
-        this.scene.add(beachMesh);
+        for (const slab of terrainList) {
+            const w = slab.width || 30;
+            const h = slab.height || 1.0;
+            const d = slab.depth || 340;
+            let mesh;
+
+            if (slab.type === 'ocean' || slab.id === 'ocean') {
+                const oceanGeo = new THREE.PlaneGeometry(w, d, 48, 48);
+                oceanGeo.rotateX(-Math.PI / 2);
+                const oceanMat = new THREE.MeshStandardMaterial({
+                    color: slab.color ?? 0x0369a1,
+                    roughness: 0.22,
+                    metalness: 0.75,
+                    flatShading: true
+                });
+                mesh = new THREE.Mesh(oceanGeo, oceanMat);
+                this.oceanMesh = mesh;
+            } else if (slab.type === 'promenade' || slab.id === 'promenade') {
+                const promTex = TextureFactory.createPromenadeTileTexture();
+                const promGeo = new THREE.BoxGeometry(w, h, d);
+                const promMat = new THREE.MeshStandardMaterial({ map: promTex, roughness: 0.65 });
+                mesh = new THREE.Mesh(promGeo, promMat);
+            } else if (slab.type === 'road' || slab.type === 'road_x' || slab.id === 'road') {
+                const isX = slab.type === 'road_x' || (w > d && d <= 30);
+                const roadTex = TextureFactory.createAsphaltRoadTexture(isX ? 'x' : 'z');
+                if (roadTex) {
+                    if (isX) {
+                        roadTex.repeat.set(Math.max(1, Math.round(w / 14)), 1);
+                    } else {
+                        roadTex.repeat.set(1, Math.max(1, Math.round(d / 14)));
+                    }
+                }
+                const roadGeo = new THREE.BoxGeometry(w, h, d);
+                const roadMat = new THREE.MeshStandardMaterial({
+                    map: roadTex,
+                    color: (roadTex ? 0xffffff : (slab.color ?? 0x1e293b)),
+                    roughness: 0.82
+                });
+                mesh = new THREE.Mesh(roadGeo, roadMat);
+            } else if (slab.type === 'sidewalk') {
+                const swTex = TextureFactory.createSidewalkTileTexture();
+                if (swTex) {
+                    swTex.repeat.set(Math.max(1, Math.round(w / 3)), Math.max(1, Math.round(d / 3)));
+                }
+                const swGeo = new THREE.BoxGeometry(w, h, d);
+                const swMat = new THREE.MeshStandardMaterial({
+                    map: swTex,
+                    color: (swTex ? 0xffffff : (slab.color ?? 0xcbd5e1)),
+                    roughness: 0.72
+                });
+                mesh = new THREE.Mesh(swGeo, swMat);
+            } else if (slab.type === 'grass' || slab.type === 'lawn' || slab.type === 'park') {
+                const grassTex = TextureFactory.createGrassTexture();
+                if (grassTex) {
+                    grassTex.repeat.set(Math.max(1, Math.round(w / 8)), Math.max(1, Math.round(d / 8)));
+                }
+                const grassGeo = new THREE.BoxGeometry(w, h, d);
+                const grassMat = new THREE.MeshStandardMaterial({
+                    map: grassTex,
+                    color: (grassTex ? 0xffffff : (slab.color ?? 0x2e7d32)),
+                    roughness: 0.92
+                });
+                mesh = new THREE.Mesh(grassGeo, grassMat);
+            } else if (slab.type === 'plaza') {
+                const plazaTex = TextureFactory.createPlazaPavingTexture();
+                if (plazaTex) {
+                    plazaTex.repeat.set(Math.max(1, Math.round(w / 6)), Math.max(1, Math.round(d / 6)));
+                }
+                const plazaGeo = new THREE.BoxGeometry(w, h, d);
+                const plazaMat = new THREE.MeshStandardMaterial({
+                    map: plazaTex,
+                    color: (plazaTex ? 0xffffff : (slab.color ?? 0xa8a29e)),
+                    roughness: 0.68
+                });
+                mesh = new THREE.Mesh(plazaGeo, plazaMat);
+            } else {
+                const boxGeo = new THREE.BoxGeometry(w, h, d);
+                const boxMat = new THREE.MeshStandardMaterial({
+                    color: slab.color ?? 0x334155,
+                    roughness: 0.85
+                });
+                mesh = new THREE.Mesh(boxGeo, boxMat);
+            }
+
+            mesh.position.set(slab.x || 0, slab.y ?? -0.5, slab.z || 0);
+            if (slab.rotY !== undefined) {
+                mesh.rotation.y = slab.rotY;
+            }
+            mesh.receiveShadow = true;
+            mesh.userData = {
+                editorCategory: 'terrain',
+                editorId: slab.id,
+                configRef: slab
+            };
+            this.scene.add(mesh);
+            this.terrainMeshes.push(mesh);
+        }
 
         for (let i = 0; i < 4; i++) {
             const stepGeo = new THREE.BoxGeometry(1.4, 0.4, 260);
@@ -163,50 +267,11 @@ export const World = {
             this.scene.add(step);
         }
 
-        // 3. Main Tiled Promenade
-        const promTex = TextureFactory.createPromenadeTileTexture();
-        const promGeo = new THREE.BoxGeometry(30, 1.0, 340);
-        const promMat = new THREE.MeshStandardMaterial({ map: promTex, roughness: 0.65 });
-        const promMesh = new THREE.Mesh(promGeo, promMat);
-        promMesh.position.set(0, -0.5, 0);
-        promMesh.receiveShadow = true;
-        this.scene.add(promMesh);
-
-        // 4. Eastern Asphalt Roadway
-        const roadGeo = new THREE.BoxGeometry(16, 0.95, 340);
-        const roadMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85 });
-        const roadMesh = new THREE.Mesh(roadGeo, roadMat);
-        roadMesh.position.set(23, -0.5, 0);
-        roadMesh.receiveShadow = true;
-        this.scene.add(roadMesh);
-
-        for (let z = -150; z <= 150; z += 12) {
-            const lineGeo = new THREE.PlaneGeometry(0.35, 5);
-            lineGeo.rotateX(-Math.PI / 2);
-            const lineMat = new THREE.MeshBasicMaterial({ color: 0xf8fafc });
-            const line = new THREE.Mesh(lineGeo, lineMat);
-            line.position.set(23, 0.02, z);
-            this.scene.add(line);
-        }
-
-        const eastWalkGeo = new THREE.BoxGeometry(45, 1.1, 340);
-        const eastWalkMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.85 });
-        const eastWalk = new THREE.Mesh(eastWalkGeo, eastWalkMat);
-        eastWalk.position.set(53, -0.5, 0);
-        eastWalk.receiveShadow = true;
-        this.scene.add(eastWalk);
-
         this.buildSeasideBalustrade();
-        this.buildCentralFountain(0, 0);
-        this.buildBronzeTigerStatue(-10, -32);
+        this.buildLandmarks(worldMap);
         this.buildStreetFoodRow(worldMap ? worldMap.stalls : []);
         this.buildPierAndYachts(worldMap ? worldMap.sailboats : []);
-        this.buildFerrisWheel(-4, -88);
-        this.buildDynamoStadium(38, -45);
-        this.buildOceanCinema(38, 92);
-        this.buildPromenadeProps();
-        this.buildOceanarium(6, -118);
-        this.buildGoogleMapsAuthenticPOIs();
+        this.buildPromenadeProps(worldMap ? worldMap.props : null);
         this.registerPOIInteractables(worldMap);
         this.buildVladivostokSopkiAndBayHorizon(worldMap);
         this.initSeagullsAndDriftParticles();
@@ -234,33 +299,7 @@ export const World = {
         }
     },
 
-    buildCentralFountain(x, z) {
-        const group = new THREE.Group();
-        group.position.set(x, 0, z);
-
-        const outerRim = new THREE.Mesh(
-            new THREE.CylinderGeometry(9.5, 10.2, 1.1, 32),
-            new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.4 })
-        );
-        outerRim.position.y = 0.55;
-        outerRim.castShadow = true;
-        outerRim.receiveShadow = true;
-        group.add(outerRim);
-
-        const poolWater = new THREE.Mesh(
-            new THREE.CylinderGeometry(8.8, 8.8, 0.95, 32),
-            new THREE.MeshStandardMaterial({ color: 0x0ea5e9, emissive: 0x0284c7, emissiveIntensity: 0.45, roughness: 0.15 })
-        );
-        poolWater.position.y = 0.62;
-        group.add(poolWater);
-
-        const centerTier = new THREE.Mesh(
-            new THREE.CylinderGeometry(2.5, 3.2, 1.8, 20),
-            new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.5, roughness: 0.3 })
-        );
-        centerTier.position.y = 1.1;
-        group.add(centerTier);
-
+    attachFountainParticles(group) {
         const dropCount = 120;
         const dropGeo = new THREE.BufferGeometry();
         const positions = new Float32Array(dropCount * 3);
@@ -281,84 +320,378 @@ export const World = {
         dropGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         const dropMat = new THREE.PointsMaterial({ color: 0xe0f2fe, size: 0.38, transparent: true, opacity: 0.85 });
         this.fountainParticles = new THREE.Points(dropGeo, dropMat);
+        this.fountainParticles.name = 'fountainParticles';
         this.fountainParticles.userData.velocities = velocities;
         group.add(this.fountainParticles);
+    },
 
+    attachBoundingBoxCordon(group, localBox, scale = 1) {
+        if (!group || typeof THREE === 'undefined') return null;
+
+        const existing = group.getObjectByName('bounding_box_cordon');
+        if (existing) {
+            group.remove(existing);
+        }
+
+        if (!localBox) return null;
+        const minX = localBox.minX;
+        const maxX = localBox.maxX;
+        const minZ = localBox.minZ;
+        const maxZ = localBox.maxZ;
+        if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) return null;
+
+        const width = maxX - minX;
+        const depth = maxZ - minZ;
+        if (width <= 0 || depth <= 0) return null;
+
+        const s = (Number.isFinite(scale) && scale > 0) ? scale : 1;
+
+        // Human-scale world dimensions converted to group local coordinates
+        const localPoleH = 1.15 / s;
+        const localPoleR = 0.035 / s;
+        const localBaseR = 0.16 / s;
+        const localBaseH = 0.045 / s;
+        const localCapR = 0.045 / s;
+
+        const localRibbonH = 0.15 / s;
+        const localTopY = 0.90 / s;
+        const localBottomY = 0.48 / s;
+
+        const cordon = new THREE.Group();
+        cordon.name = 'bounding_box_cordon';
+        cordon.userData = { isCordon: true, noCollide: true };
+
+        // Shared geometries and materials for stanchion poles
+        const baseGeo = new THREE.CylinderGeometry(localBaseR * 0.85, localBaseR, localBaseH, 12);
+        const postGeo = new THREE.CylinderGeometry(localPoleR, localPoleR, localPoleH, 8);
+        const capGeo = new THREE.SphereGeometry(localCapR, 8, 8);
+
+        const darkMat = new THREE.MeshStandardMaterial({
+            color: 0x18181b,
+            roughness: 0.85,
+            metalness: 0.2
+        });
+
+        const poleTex = (TextureFactory.createHazardPoleTexture && TextureFactory.createHazardPoleTexture()) || null;
+        const poleMat = poleTex
+            ? new THREE.MeshStandardMaterial({ map: poleTex, roughness: 0.4, metalness: 0.1 })
+            : new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.4, metalness: 0.1 });
+
+        const ribbonTex = (TextureFactory.createPoliceRibbonTexture && TextureFactory.createPoliceRibbonTexture()) || null;
+        const ribbonMat = ribbonTex
+            ? new THREE.MeshStandardMaterial({ map: ribbonTex, roughness: 0.35, metalness: 0.05, side: THREE.DoubleSide })
+            : new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.35, side: THREE.DoubleSide });
+
+        function createPole(px, pz) {
+            const poleGroup = new THREE.Group();
+            poleGroup.position.set(px, 0, pz);
+            poleGroup.userData = { isCordon: true, noCollide: true };
+
+            const baseMesh = new THREE.Mesh(baseGeo, darkMat);
+            baseMesh.position.y = localBaseH / 2;
+            baseMesh.userData = { isCordon: true, noCollide: true };
+            poleGroup.add(baseMesh);
+
+            const postMesh = new THREE.Mesh(postGeo, poleMat);
+            postMesh.position.y = localBaseH + localPoleH / 2;
+            postMesh.userData = { isCordon: true, noCollide: true };
+            poleGroup.add(postMesh);
+
+            const capMesh = new THREE.Mesh(capGeo, darkMat);
+            capMesh.position.y = localBaseH + localPoleH + localCapR * 0.65;
+            capMesh.userData = { isCordon: true, noCollide: true };
+            poleGroup.add(capMesh);
+
+            return poleGroup;
+        }
+
+        // 4 sides around the bounding box perimeter
+        const sides = [
+            // North: along X at Z = minZ
+            { x0: minX, z0: minZ, x1: maxX, z1: minZ, len: width, cx: (minX + maxX) / 2, cz: minZ, rotY: 0 },
+            // East: along Z at X = maxX
+            { x0: maxX, z0: minZ, x1: maxX, z1: maxZ, len: depth, cx: maxX, cz: (minZ + maxZ) / 2, rotY: Math.PI / 2 },
+            // South: along X at Z = maxZ
+            { x0: maxX, z0: maxZ, x1: minX, z1: maxZ, len: width, cx: (minX + maxX) / 2, cz: maxZ, rotY: 0 },
+            // West: along Z at X = minX
+            { x0: minX, z0: maxZ, x1: minX, z1: minZ, len: depth, cx: minX, cz: (minZ + maxZ) / 2, rotY: Math.PI / 2 }
+        ];
+
+        // 1. Place evenly-spaced stanchion poles along each side
+        for (const side of sides) {
+            const worldSideLen = side.len * s;
+            const numSegs = Math.max(1, Math.round(worldSideLen / 3.8));
+            for (let i = 0; i < numSegs; i++) {
+                const t = i / numSegs;
+                const px = side.x0 + (side.x1 - side.x0) * t;
+                const pz = side.z0 + (side.z1 - side.z0) * t;
+                cordon.add(createPole(px, pz));
+            }
+        }
+
+        // 2. Build dual-tier yellow/black banded hazard ribbons on each of the 4 sides
+        for (const side of sides) {
+            const worldSideLen = side.len * s;
+            const uRepeats = Math.max(1, Math.round((worldSideLen / 2.0) * 10) / 10);
+
+            function buildRibbonQuad(yCenter) {
+                const geo = new THREE.PlaneGeometry(side.len, localRibbonH);
+                const uvAttr = geo.getAttribute('uv');
+                if (uvAttr) {
+                    for (let i = 0; i < uvAttr.count; i++) {
+                        uvAttr.setX(i, uvAttr.getX(i) * uRepeats);
+                    }
+                    uvAttr.needsUpdate = true;
+                }
+                const mesh = new THREE.Mesh(geo, ribbonMat);
+                mesh.position.set(side.cx, yCenter, side.cz);
+                mesh.rotation.y = side.rotY;
+                mesh.userData = { isCordon: true, noCollide: true };
+                return mesh;
+            }
+
+            cordon.add(buildRibbonQuad(localTopY));
+            cordon.add(buildRibbonQuad(localBottomY));
+        }
+
+        group.add(cordon);
+        return cordon;
+    },
+
+    attachBoundingBoxFence(group, localBox, scale = 1) {
+        if (!group || typeof THREE === 'undefined') return null;
+
+        const existing = group.getObjectByName('bounding_box_fence');
+        if (existing) {
+            group.remove(existing);
+        }
+
+        if (!localBox) return null;
+        const minX = localBox.minX;
+        const maxX = localBox.maxX;
+        const minZ = localBox.minZ;
+        const maxZ = localBox.maxZ;
+        if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) return null;
+
+        const width = maxX - minX;
+        const depth = maxZ - minZ;
+        if (width <= 0 || depth <= 0) return null;
+
+        const s = (Number.isFinite(scale) && scale > 0) ? scale : 1;
+
+        // Human-scale world dimensions converted to group local coordinates
+        const localPostH = 1.35 / s;
+        const localPostR = 0.08 / s;
+        const localCapR = 0.10 / s;
+
+        const localRailH = 0.06 / s;
+        const localRailW = 0.05 / s;
+        const localTopRailY = 1.15 / s;
+        const localBottomRailY = 0.20 / s;
+
+        const localPicketH = 1.05 / s;
+        const localPicketR = 0.02 / s;
+        const localSpearH = 0.12 / s;
+        const localSpearR = 0.035 / s;
+
+        const fence = new THREE.Group();
+        fence.name = 'bounding_box_fence';
+        fence.userData = { isFence: true, noCollide: true };
+
+        // Shared materials & geometries for wrought iron park fence
+        const ironMat = new THREE.MeshStandardMaterial({
+            color: 0x18181b,
+            roughness: 0.45,
+            metalness: 0.85
+        });
+
+        const postGeo = new THREE.CylinderGeometry(localPostR * 0.9, localPostR, localPostH, 8);
+        const capGeo = new THREE.SphereGeometry(localCapR, 8, 8);
+        const picketGeo = new THREE.CylinderGeometry(localPicketR, localPicketR, localPicketH, 6);
+        const spearGeo = new THREE.CylinderGeometry(0, localSpearR, localSpearH, 6);
+
+        function createPost(px, pz) {
+            const postGroup = new THREE.Group();
+            postGroup.position.set(px, 0, pz);
+            postGroup.userData = { isFence: true, noCollide: true };
+
+            const shaft = new THREE.Mesh(postGeo, ironMat);
+            shaft.position.y = localPostH / 2;
+            shaft.userData = { isFence: true, noCollide: true };
+            postGroup.add(shaft);
+
+            const cap = new THREE.Mesh(capGeo, ironMat);
+            cap.position.y = localPostH + localCapR * 0.65;
+            cap.userData = { isFence: true, noCollide: true };
+            postGroup.add(cap);
+
+            return postGroup;
+        }
+
+        function createPicket(px, pz) {
+            const picketGroup = new THREE.Group();
+            picketGroup.position.set(px, 0, pz);
+            picketGroup.userData = { isFence: true, noCollide: true };
+
+            const shaft = new THREE.Mesh(picketGeo, ironMat);
+            shaft.position.y = localBottomRailY + localPicketH / 2;
+            shaft.userData = { isFence: true, noCollide: true };
+            picketGroup.add(shaft);
+
+            const spear = new THREE.Mesh(spearGeo, ironMat);
+            spear.position.y = localBottomRailY + localPicketH + localSpearH / 2;
+            spear.userData = { isFence: true, noCollide: true };
+            picketGroup.add(spear);
+
+            return picketGroup;
+        }
+
+        // 4 sides around the bounding box perimeter
+        const sides = [
+            // North: along X at Z = minZ
+            { x0: minX, z0: minZ, x1: maxX, z1: minZ, len: width, cx: (minX + maxX) / 2, cz: minZ, isX: true },
+            // East: along Z at X = maxX
+            { x0: maxX, z0: minZ, x1: maxX, z1: maxZ, len: depth, cx: maxX, cz: (minZ + maxZ) / 2, isX: false },
+            // South: along X at Z = maxZ
+            { x0: maxX, z0: maxZ, x1: minX, z1: maxZ, len: width, cx: (minX + maxX) / 2, cz: maxZ, isX: true },
+            // West: along Z at X = minX
+            { x0: minX, z0: maxZ, x1: minX, z1: minZ, len: depth, cx: minX, cz: (minZ + maxZ) / 2, isX: false }
+        ];
+
+        for (const side of sides) {
+            const worldSideLen = side.len * s;
+
+            // 1. Posts every ~2.5m
+            const numPosts = Math.max(1, Math.round(worldSideLen / 2.5));
+            for (let i = 0; i < numPosts; i++) {
+                const t = i / numPosts;
+                const px = side.x0 + (side.x1 - side.x0) * t;
+                const pz = side.z0 + (side.z1 - side.z0) * t;
+                fence.add(createPost(px, pz));
+            }
+
+            // 2. Dual horizontal rails (top and bottom)
+            const railGeo = side.isX
+                ? new THREE.BoxGeometry(side.len, localRailH, localRailW)
+                : new THREE.BoxGeometry(localRailW, localRailH, side.len);
+
+            const topRail = new THREE.Mesh(railGeo, ironMat);
+            topRail.position.set(side.cx, localTopRailY, side.cz);
+            topRail.userData = { isFence: true, noCollide: true };
+            fence.add(topRail);
+
+            const bottomRail = new THREE.Mesh(railGeo, ironMat);
+            bottomRail.position.set(side.cx, localBottomRailY, side.cz);
+            bottomRail.userData = { isFence: true, noCollide: true };
+            fence.add(bottomRail);
+
+            // 3. Vertical iron pickets with pointed spearheads every ~0.35m
+            const numPickets = Math.max(1, Math.round(worldSideLen / 0.35));
+            for (let i = 1; i < numPickets; i++) {
+                const t = i / numPickets;
+                const px = side.x0 + (side.x1 - side.x0) * t;
+                const pz = side.z0 + (side.z1 - side.z0) * t;
+                const nearPost = (i % Math.round(numPickets / numPosts)) === 0;
+                if (!nearPost) {
+                    fence.add(createPicket(px, pz));
+                }
+            }
+        }
+
+        group.add(fence);
+        return fence;
+    },
+
+    resolveLandmarkFallbackBuilder(lm) {
+        const id = lm.id || '';
+        const model = lm.model || '';
+        if (ModelBuilders[id]) return () => ModelBuilders[id]();
+        if (id.startsWith('bridge_pylon') || model.includes('bridge_pylon')) return () => ModelBuilders.bridge_pylon();
+        const baseName = model.replace(/^.*\/|\.glb$/g, '');
+        if (ModelBuilders[baseName]) return () => ModelBuilders[baseName]();
+        return () => new THREE.Group();
+    },
+
+    buildLandmarks(worldMap) {
+        const landmarks = (worldMap && Array.isArray(worldMap.landmarks)) ? worldMap.landmarks : DEFAULT_LANDMARKS;
+        for (const lm of landmarks) {
+            if (!lm) continue;
+            const fallbackFn = this.resolveLandmarkFallbackBuilder(lm);
+            const group = ModelLoader.instantiate(lm.model, fallbackFn) || fallbackFn();
+            const localBox = (group.userData && group.userData.boundingBox) || computeModelBoundingBox(group);
+            group.position.set(lm.x || 0, lm.y || 0, lm.z || 0);
+            group.rotation.y = lm.rotY || 0;
+            if (lm.scale !== undefined && lm.scale !== 1) {
+                group.scale.setScalar(lm.scale);
+            }
+            const computedCollider = PhysicsEngine.addModelCollider(lm, 'landmarks', localBox);
+            group.userData = {
+                ...group.userData,
+                boundingBox: localBox,
+                computedCollider,
+                editorCategory: 'landmarks',
+                editorId: lm.id,
+                configRef: lm
+            };
+
+            if (lm.hasFountainParticles || lm.id === 'fountain') {
+                this.attachFountainParticles(group);
+            }
+            if (lm.isFerrisWheel || lm.id === 'ferris_wheel') {
+                const wheelNode = group.getObjectByName ? group.getObjectByName('ferrisWheelGroup') : null;
+                if (wheelNode) this.ferrisWheelGroup = wheelNode;
+            }
+            if (lm.id === 'fountain' || lm.id === 'ferris_wheel' || lm.isFerrisWheel || lm.hasFountainParticles || lm.hasPoliceTape || lm.hasBoundingBoxCordon) {
+                this.attachBoundingBoxCordon(group, localBox, lm.scale || 1);
+            }
+            if (lm.id === 'oceanarium' || lm.hasFence || lm.hasBoundingBoxFence) {
+                this.attachBoundingBoxFence(group, localBox, lm.scale || 1);
+            }
+            if (lm.label && lm.label.text) {
+                this.registerWorldLabel(lm.label.text, lm.label.x, lm.label.y, lm.label.z);
+            }
+
+            this.scene.add(group);
+            this.landmarkGroups.push(group);
+        }
+    },
+
+    buildCentralFountain(x, z) {
+        const group = ModelLoader.instantiate('models/fountain.glb', () => ModelBuilders.fountain());
+        group.position.set(x, 0, z);
+        this.attachFountainParticles(group);
         this.scene.add(group);
+        return group;
     },
 
     buildBronzeTigerStatue(x, z) {
-        const group = new THREE.Group();
+        const group = ModelLoader.instantiate('models/tiger_statue.glb', () => ModelBuilders.tiger_statue());
         group.position.set(x, 0, z);
-
-        const ped = new THREE.Mesh(
-            new THREE.BoxGeometry(3.6, 1.1, 2.4),
-            new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.7 })
-        );
-        ped.position.y = 0.55;
-        ped.castShadow = true;
-        group.add(ped);
-
-        const bronzeMat = new THREE.MeshStandardMaterial({
-            color: 0xb45309,
-            metalness: 0.85,
-            roughness: 0.28
-        });
-
-        const body = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.85, 0.85), bronzeMat);
-        body.position.set(0, 1.65, 0);
-        body.castShadow = true;
-        group.add(body);
-
-        const head = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.7, 0.75), bronzeMat);
-        head.position.set(-1.15, 2.0, 0);
-        group.add(head);
-
-        [[-0.75, 0.3], [-0.75, -0.3], [0.75, 0.3], [0.75, -0.3]].forEach(([lx, lz]) => {
-            const leg = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.8, 0.3), bronzeMat);
-            leg.position.set(lx, 1.25, lz);
-            group.add(leg);
-        });
-
-        const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 1.3), bronzeMat);
-        tail.rotation.z = -0.8;
-        tail.position.set(1.35, 1.55, 0);
-        group.add(tail);
-
         this.scene.add(group);
+        return group;
     },
 
     buildStreetFoodRow(stalls = []) {
         stalls.forEach(s => {
-            const group = new THREE.Group();
-            group.position.set(s.x, 0, s.z);
-
-            const booth = new THREE.Mesh(
-                new THREE.BoxGeometry(4.4, 3.4, 6.2),
-                new THREE.MeshStandardMaterial({ color: s.bodyColor, roughness: 0.5 })
-            );
-            booth.position.y = 1.7;
-            booth.castShadow = true;
-            booth.receiveShadow = true;
-            group.add(booth);
-
-            const win = new THREE.Mesh(
-                new THREE.PlaneGeometry(4.2, 1.5),
-                new THREE.MeshBasicMaterial({ color: 0xfef3c7 })
-            );
-            win.rotation.y = -Math.PI / 2;
-            win.position.set(-2.22, 1.85, 0);
-            group.add(win);
-
-            const signTex = TextureFactory.createSignTexture(s.title, s.sub, s.bg, s.accent);
-            const signBoard = new THREE.Mesh(
-                new THREE.BoxGeometry(0.4, 1.5, 5.8),
-                new THREE.MeshBasicMaterial({ map: signTex })
-            );
-            signBoard.position.set(-2.1, 4.15, 0);
-            group.add(signBoard);
-
+            const modelUrl = s.model || `models/stall_${s.id}.glb`;
+            const group = ModelLoader.instantiate(modelUrl, () => ModelBuilders.stall(s));
+            const localBox = (group.userData && group.userData.boundingBox) || computeModelBoundingBox(group);
+            group.position.set(s.x || 0, s.y || 0, s.z || 0);
+            group.rotation.y = s.rotY || 0;
+            if (s.scale !== undefined && s.scale !== 1) {
+                group.scale.setScalar(s.scale);
+            }
+            const computedCollider = PhysicsEngine.addModelCollider(s, 'stalls', localBox);
+            group.userData = {
+                ...group.userData,
+                boundingBox: localBox,
+                computedCollider,
+                editorCategory: 'stalls',
+                editorId: s.id,
+                configRef: s
+            };
             this.scene.add(group);
+            this.stallGroups.push(group);
 
             this.interactables.push({
                 id: s.id,
@@ -379,416 +712,223 @@ export const World = {
     },
 
     buildPierAndYachts(boatPositions = []) {
-        const pierGeo = new THREE.BoxGeometry(36, 0.6, 7);
-        const pierMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 });
-        const pier = new THREE.Mesh(pierGeo, pierMat);
-        pier.position.set(-32, 0.1, 48);
-        pier.receiveShadow = true;
-        this.scene.add(pier);
+        boatPositions.forEach((entry, idx) => {
+            const isArray = Array.isArray(entry);
+            const bx = isArray ? entry[0] : (entry.x || 0);
+            const by = isArray ? -1.1 : (entry.y !== undefined ? entry.y : -1.1);
+            const bz = isArray ? entry[1] : (entry.z || 0);
+            const rotY = (!isArray && entry.rotY !== undefined) ? entry.rotY : 0;
+            const scale = (!isArray && entry.scale !== undefined) ? entry.scale : 1;
+            const sailColor = idx % 2 === 0 ? 0xffffff : 0x38bdf8;
+            const defaultModel = idx % 2 === 0 ? 'models/sailboat_white.glb' : 'models/sailboat_blue.glb';
+            const modelUrl = (!isArray && entry.model) ? entry.model : defaultModel;
 
-        boatPositions.forEach(([bx, bz], idx) => {
-            const boat = new THREE.Group();
-            boat.position.set(bx, -1.1, bz);
-
-            const hull = new THREE.Mesh(
-                new THREE.BoxGeometry(7.5, 1.4, 2.8),
-                new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3 })
-            );
-            boat.add(hull);
-
-            const mast = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.1, 0.12, 11),
-                new THREE.MeshStandardMaterial({ color: 0xe2e8f0 })
-            );
-            mast.position.y = 5.5;
-            boat.add(mast);
-
-            const sail = new THREE.Mesh(
-                new THREE.PlaneGeometry(4.5, 8.5),
-                new THREE.MeshStandardMaterial({ color: idx % 2 === 0 ? 0xffffff : 0x38bdf8, side: THREE.DoubleSide })
-            );
-            sail.position.set(1.2, 5.5, 0);
-            boat.add(sail);
-
+            const boat = ModelLoader.instantiate(modelUrl, () => ModelBuilders.sailboat(sailColor));
+            const localBox = (boat.userData && boat.userData.boundingBox) || computeModelBoundingBox(boat);
+            boat.position.set(bx, by, bz);
+            boat.rotation.y = rotY;
+            if (scale !== 1) boat.scale.setScalar(scale);
+            boat.userData = {
+                ...boat.userData,
+                boundingBox: localBox,
+                editorCategory: 'sailboats',
+                editorId: `sailboat_${idx}`,
+                editorIndex: idx,
+                configRef: entry
+            };
             this.scene.add(boat);
         });
     },
 
     buildFerrisWheel(x, z) {
-        const supportGroup = new THREE.Group();
+        const supportGroup = ModelLoader.instantiate('models/ferris_wheel.glb', () => ModelBuilders.ferris_wheel());
         supportGroup.position.set(x, 0, z);
-
-        const legMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.6, roughness: 0.3 });
-        [-2.2, 2.2].forEach(lz => {
-            const legA = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 22), legMat);
-            legA.position.set(-4, 10, lz);
-            legA.rotation.z = -0.22;
-            supportGroup.add(legA);
-
-            const legB = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 22), legMat);
-            legB.position.set(4, 10, lz);
-            legB.rotation.z = 0.22;
-            supportGroup.add(legB);
-        });
-
-        this.ferrisWheelGroup = new THREE.Group();
-        this.ferrisWheelGroup.position.set(0, 19.5, 0);
-
-        const rim = new THREE.Mesh(
-            new THREE.TorusGeometry(13.5, 0.35, 12, 36),
-            new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.6 })
-        );
-        this.ferrisWheelGroup.add(rim);
-
-        const cabinColors = [0xf43f5e, 0xf59e0b, 0x10b981, 0x3b82f6, 0xa855f7];
-        for (let i = 0; i < 12; i++) {
-            const angle = (i / 12) * Math.PI * 2;
-            const spoke = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 27), legMat);
-            spoke.rotation.z = angle;
-            this.ferrisWheelGroup.add(spoke);
-
-            const cabin = new THREE.Mesh(
-                new THREE.BoxGeometry(1.8, 1.8, 1.8),
-                new THREE.MeshStandardMaterial({ color: cabinColors[i % cabinColors.length], roughness: 0.3 })
-            );
-            cabin.position.set(Math.cos(angle) * 13.5, Math.sin(angle) * 13.5, 0);
-            this.ferrisWheelGroup.add(cabin);
-        }
-
-        supportGroup.add(this.ferrisWheelGroup);
+        const wheelNode = supportGroup.getObjectByName ? supportGroup.getObjectByName('ferrisWheelGroup') : null;
+        if (wheelNode) this.ferrisWheelGroup = wheelNode;
         this.scene.add(supportGroup);
+        return supportGroup;
     },
 
     buildDynamoStadium(x, z) {
-        const group = new THREE.Group();
+        const group = ModelLoader.instantiate('models/dynamo_stadium.glb', () => ModelBuilders.dynamo_stadium());
         group.position.set(x, 0, z);
-
-        const tex = TextureFactory.createBuildingFacadeTexture('#1e3a8a', '#93c5fd', 8, 4);
-        const mainStand = new THREE.Mesh(
-            new THREE.BoxGeometry(16, 13, 56),
-            new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 })
-        );
-        mainStand.position.y = 6.5;
-        mainStand.castShadow = true;
-        group.add(mainStand);
-
-        const signTex = TextureFactory.createSignTexture('ДИНАМО', 'СТАДИОН • ВЛАДИВОСТОК', '#172554', '#60a5fa');
-        const sign = new THREE.Mesh(
-            new THREE.BoxGeometry(0.5, 3.2, 16),
-            new THREE.MeshBasicMaterial({ map: signTex })
-        );
-        sign.position.set(-8.2, 11.5, 0);
-        group.add(sign);
-
         this.scene.add(group);
         this.registerWorldLabel('🏟️ Стадион «Динамо» (Фокина, 1 • ★ 4.1)', x - 8, 14.5, z);
+        return group;
     },
 
     buildOceanCinema(x, z) {
-        const group = new THREE.Group();
+        const group = ModelLoader.instantiate('models/ocean_cinema.glb', () => ModelBuilders.ocean_cinema());
         group.position.set(x, 0, z);
-
-        const base = new THREE.Mesh(
-            new THREE.BoxGeometry(20, 6, 28),
-            new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6 })
-        );
-        base.position.y = 3;
-        group.add(base);
-
-        const rotundaTex = TextureFactory.createBuildingFacadeTexture('#0f172a', '#38bdf8', 12, 5);
-        const rotunda = new THREE.Mesh(
-            new THREE.CylinderGeometry(11, 11, 12, 28),
-            new THREE.MeshStandardMaterial({ map: rotundaTex, roughness: 0.35, metalness: 0.4 })
-        );
-        rotunda.position.y = 11;
-        group.add(rotunda);
-
-        const signTex = TextureFactory.createSignTexture('ОКЕАН', 'КИНОТЕАТР IMAX • НАБКА', '#0284c7', '#ffffff');
-        const sign = new THREE.Mesh(
-            new THREE.BoxGeometry(0.6, 3.0, 14),
-            new THREE.MeshBasicMaterial({ map: signTex })
-        );
-        sign.position.set(-11.2, 15.8, 0);
-        group.add(sign);
-
         this.scene.add(group);
         this.registerWorldLabel('🎬 К/Т «Океан IMAX» (Набережная, 3 • ★ 4.7)', x - 10, 18.5, z);
+        return group;
     },
 
-    buildPromenadeProps() {
-        const poleMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.7 });
-        const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfde68a });
+    buildPromenadeProps(propsList = null) {
+        const props = Array.isArray(propsList) ? propsList : generateDefaultPromenadeProps();
+        for (const p of props) {
+            if (!p) continue;
+            const isBench = p.type === 'bench' || (p.model && p.model.includes('bench'));
+            const isRoadLamp = p.type === 'road_lamp' || (p.model && p.model.includes('road_lamp'));
+            const isStreetLamp = !isBench && !isRoadLamp;
 
-        for (let z = -120; z <= 120; z += 24) {
-            const lamp = new THREE.Group();
-            lamp.position.set(-12, 0, z);
+            const defaultModel = isBench
+                ? 'models/bench.glb'
+                : (isRoadLamp ? 'models/road_lamp.glb' : 'models/street_lamp.glb');
+            const fallbackFn = isBench
+                ? () => ModelBuilders.bench()
+                : (isRoadLamp ? () => ModelBuilders.road_lamp() : () => ModelBuilders.street_lamp());
 
-            const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 5.2), poleMat);
-            pole.position.y = 2.6;
-            lamp.add(pole);
-
-            const globe = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 10), bulbMat);
-            globe.position.y = 5.3;
-            lamp.add(globe);
-
-            this.scene.add(lamp);
-
-            if (Math.abs(z) > 14) {
-                const bench = new THREE.Mesh(
-                    new THREE.BoxGeometry(0.9, 0.65, 2.6),
-                    new THREE.MeshStandardMaterial({ color: 0x92400e })
-                );
-                bench.position.set(-11.2, 0.325, z + 6);
-                this.scene.add(bench);
-                PhysicsEngine.addBoxCollider(-11.2, z + 6, 1.0, 2.7, 0.65, true, 'Лавочка');
+            const obj = ModelLoader.instantiate(p.model || defaultModel, fallbackFn);
+            const localBox = (obj.userData && obj.userData.boundingBox) || computeModelBoundingBox(obj);
+            obj.position.set(p.x || 0, p.y !== undefined ? p.y : (isBench ? 0.325 : 0), p.z || 0);
+            obj.rotation.y = p.rotY || 0;
+            if (p.scale !== undefined && p.scale !== 1) {
+                obj.scale.setScalar(p.scale);
             }
+
+            // Real illumination for lamps
+            if (isStreetLamp) {
+                // Warm golden light for promenade lamp
+                if (!obj.getObjectByName('lamp_point_light')) {
+                    const light = new THREE.PointLight(0xfef08a, 1.4, 22, 1.8);
+                    light.position.set(0, 5.2, 0);
+                    light.name = 'lamp_point_light';
+                    light.castShadow = false;
+                    obj.add(light);
+                }
+                // Emissive warm glow on globe if supported by material type
+                obj.traverse((child) => {
+                    if (child.isMesh && child.material && (child.name === 'globe' || (child.material.color && child.material.color.getHex() === 0xfde68a))) {
+                        if (child.material.emissive !== undefined && !child.material.isMeshBasicMaterial) {
+                            child.material.emissive = new THREE.Color(0xfef08a);
+                            child.material.emissiveIntensity = 1.0;
+                        }
+                    }
+                });
+                // Soft ground light pool decal
+                if (!obj.getObjectByName('lamp_ground_pool') && TextureFactory && TextureFactory.createLightPoolTexture) {
+                    const poolTex = TextureFactory.createLightPoolTexture('rgba(254, 240, 138, 0.45)', 'rgba(250, 204, 21, 0)');
+                    if (poolTex) {
+                        const poolGeo = new THREE.PlaneGeometry(8, 8);
+                        poolGeo.rotateX(-Math.PI / 2);
+                        const poolMat = new THREE.MeshBasicMaterial({
+                            map: poolTex,
+                            transparent: true,
+                            depthWrite: false,
+                            blending: THREE.AdditiveBlending
+                        });
+                        const poolMesh = new THREE.Mesh(poolGeo, poolMat);
+                        poolMesh.name = 'lamp_ground_pool';
+                        poolMesh.position.set(0, 0.02, 0);
+                        poolMesh.userData = { noCollide: true };
+                        obj.add(poolMesh);
+                    }
+                }
+            } else if (isRoadLamp) {
+                // Bright high-altitude light for highway road lamp
+                if (!obj.getObjectByName('road_lamp_point_light')) {
+                    const light = new THREE.PointLight(0xfffbeb, 2.2, 36, 1.4);
+                    light.position.set(2.4, 8.2, 0);
+                    light.name = 'road_lamp_point_light';
+                    light.castShadow = false;
+                    obj.add(light);
+                }
+                // Wide roadway light pool decal
+                if (!obj.getObjectByName('road_lamp_ground_pool') && TextureFactory && TextureFactory.createLightPoolTexture) {
+                    const poolTex = TextureFactory.createLightPoolTexture('rgba(255, 252, 235, 0.45)', 'rgba(254, 240, 138, 0)');
+                    if (poolTex) {
+                        const poolGeo = new THREE.PlaneGeometry(14, 14);
+                        poolGeo.rotateX(-Math.PI / 2);
+                        const poolMat = new THREE.MeshBasicMaterial({
+                            map: poolTex,
+                            transparent: true,
+                            depthWrite: false,
+                            blending: THREE.AdditiveBlending
+                        });
+                        const poolMesh = new THREE.Mesh(poolGeo, poolMat);
+                        poolMesh.name = 'road_lamp_ground_pool';
+                        poolMesh.position.set(2.4, 0.02, 0);
+                        poolMesh.userData = { noCollide: true };
+                        obj.add(poolMesh);
+                    }
+                }
+            }
+
+            const computedCollider = p.hasCollider !== false
+                ? PhysicsEngine.addModelCollider(p, 'props', localBox)
+                : null;
+            obj.userData = {
+                ...obj.userData,
+                boundingBox: localBox,
+                computedCollider,
+                editorCategory: 'props',
+                editorId: p.id,
+                configRef: p
+            };
+            this.scene.add(obj);
+            this.propGroups.push(obj);
         }
+
+        const lightsOn = (this.currentTimePhase === 'sunset' || this.currentTimePhase === 'dusk' || this.currentTimePhase === 'night');
+        this.setStreetLights(lightsOn);
     },
 
     buildOceanarium(x, z) {
-        const group = new THREE.Group();
+        const group = ModelLoader.instantiate('models/oceanarium.glb', () => ModelBuilders.oceanarium());
+        const localBox = (group.userData && group.userData.boundingBox) || computeModelBoundingBox(group);
+        this.attachBoundingBoxFence(group, localBox, 1);
         group.position.set(x, 0, z);
-
-        const baseCyl = new THREE.Mesh(
-            new THREE.CylinderGeometry(11.5, 12, 5.5, 28),
-            new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.4 })
-        );
-        baseCyl.position.y = 2.75;
-        baseCyl.castShadow = true;
-        group.add(baseCyl);
-
-        const dome = new THREE.Mesh(
-            new THREE.SphereGeometry(11.4, 28, 16, 0, Math.PI * 2, 0, Math.PI / 2),
-            new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.25, metalness: 0.35 })
-        );
-        dome.position.y = 5.4;
-        group.add(dome);
-
-        const signTex = TextureFactory.createSignTexture('ОКЕАНАРИУМ', 'УЛ. БАТАРЕЙНАЯ • НАБКА', '#0c4a6e', '#38bdf8');
-        const sign = new THREE.Mesh(
-            new THREE.BoxGeometry(12, 2.6, 0.5),
-            new THREE.MeshBasicMaterial({ map: signTex })
-        );
-        sign.position.set(0, 6.5, 11.8);
-        group.add(sign);
-
         this.scene.add(group);
+        return group;
     },
 
     buildGoogleMapsAuthenticPOIs() {
-        const arbatPaving = new THREE.Mesh(
-            new THREE.BoxGeometry(28, 0.12, 14),
-            new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.6 })
-        );
-        arbatPaving.position.set(36, 0.06, 2);
-        this.scene.add(arbatPaving);
-        this.registerWorldLabel('🚶 Ул. Адмирала Фокина (Арбат)', 34, 4.5, 2);
-
-        // Supra Restaurant
-        const supraGroup = new THREE.Group();
-        supraGroup.position.set(36, 0, 16);
-
-        const supraTex = TextureFactory.createBuildingFacadeTexture('#7c2d12', '#fde68a', 5, 3);
-        const supraBuilding = new THREE.Mesh(
-            new THREE.BoxGeometry(11, 7.5, 13),
-            new THREE.MeshStandardMaterial({ map: supraTex, roughness: 0.55 })
-        );
-        supraBuilding.position.y = 3.75;
-        supraBuilding.castShadow = true;
-        supraGroup.add(supraBuilding);
-
-        const supraSignTex = TextureFactory.createSignTexture('СУПРА', 'ФОКИНА, 1Б • ГРУЗИНСКИЙ ДОМ', '#451a03', '#fbbf24');
-        const supraSign = new THREE.Mesh(
-            new THREE.BoxGeometry(0.5, 2.4, 10.5),
-            new THREE.MeshBasicMaterial({ map: supraSignTex })
-        );
-        supraSign.position.set(-5.6, 6.2, 0);
-        supraGroup.add(supraSign);
-
-        const terrace = new THREE.Mesh(
-            new THREE.BoxGeometry(3.2, 0.75, 11),
-            new THREE.MeshStandardMaterial({ color: 0x78350f })
-        );
-        terrace.position.set(-7.1, 0.375, 0);
-        supraGroup.add(terrace);
-        this.scene.add(supraGroup);
-
-        // Vladivostok Fortress Museum
-        const fortGroup = new THREE.Group();
-        fortGroup.position.set(35, 0, -92);
-
-        const parapet = new THREE.Mesh(
-            new THREE.BoxGeometry(9, 1.25, 22),
-            new THREE.MeshStandardMaterial({ color: 0x7f1d1d, roughness: 0.85 })
-        );
-        parapet.position.y = 0.625;
-        parapet.castShadow = true;
-        fortGroup.add(parapet);
-
-        const bunker = new THREE.Mesh(
-            new THREE.BoxGeometry(10, 5.5, 16),
-            new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.8 })
-        );
-        bunker.position.set(6, 2.75, 0);
-        fortGroup.add(bunker);
-
-        const cannonMat = new THREE.MeshStandardMaterial({ color: 0x14532d, metalness: 0.6, roughness: 0.4 });
-        [-5, 5].forEach(cz => {
-            const mount = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.9, 1.8), cannonMat);
-            mount.position.set(-1.5, 1.7, cz);
-            fortGroup.add(mount);
-
-            const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.26, 4.6), cannonMat);
-            barrel.rotation.z = Math.PI / 2.2;
-            barrel.position.set(-3.2, 2.2, cz);
-            fortGroup.add(barrel);
-        });
-
-        const fortSignTex = TextureFactory.createSignTexture('КРЕПОСТЬ', 'МУЗЕЙ • БАТАРЕЙНАЯ, 4А', '#450a0a', '#fca5a5');
-        const fortSign = new THREE.Mesh(
-            new THREE.BoxGeometry(0.5, 2.2, 11),
-            new THREE.MeshBasicMaterial({ map: fortSignTex })
-        );
-        fortSign.position.set(0.8, 6.2, 0);
-        fortGroup.add(fortSign);
-        this.scene.add(fortGroup);
-
-        // SC Olympiets
-        const olympGroup = new THREE.Group();
-        olympGroup.position.set(38, 0, -134);
-
-        const olympTex = TextureFactory.createBuildingFacadeTexture('#0f172a', '#38bdf8', 8, 4);
-        const olympHall = new THREE.Mesh(
-            new THREE.BoxGeometry(18, 11, 28),
-            new THREE.MeshStandardMaterial({ map: olympTex, roughness: 0.5 })
-        );
-        olympHall.position.y = 5.5;
-        olympHall.castShadow = true;
-        olympGroup.add(olympHall);
-
-        const olympSignTex = TextureFactory.createSignTexture('СК ОЛИМПИЕЦ', 'БАТАРЕЙНАЯ, 2 • СПОРТКОМПЛЕКС', '#0369a1', '#fde047');
-        const olympSign = new THREE.Mesh(
-            new THREE.BoxGeometry(0.5, 2.8, 15),
-            new THREE.MeshBasicMaterial({ map: olympSignTex })
-        );
-        olympSign.position.set(-9.2, 9.8, 0);
-        olympGroup.add(olympSign);
-        this.scene.add(olympGroup);
-
-        // AZIMUT Hotel
-        const azimutGroup = new THREE.Group();
-        azimutGroup.position.set(42, 0, 130);
-
-        const azimutTex = TextureFactory.createBuildingFacadeTexture('#cbd5e1', '#fef08a', 10, 10);
-        const azimutTower = new THREE.Mesh(
-            new THREE.BoxGeometry(14, 28, 30),
-            new THREE.MeshStandardMaterial({ map: azimutTex, roughness: 0.45 })
-        );
-        azimutTower.position.y = 14;
-        azimutTower.castShadow = true;
-        azimutGroup.add(azimutTower);
-
-        const azimutSignTex = TextureFactory.createSignTexture('AZIMUT ОТЕЛЬ', 'УЛ. НАБЕРЕЖНАЯ, 10 • ВЛАДИВОСТОК', '#991b1b', '#ffffff');
-        const azimutSign = new THREE.Mesh(
-            new THREE.BoxGeometry(0.6, 3.2, 16),
-            new THREE.MeshBasicMaterial({ map: azimutSignTex })
-        );
-        azimutSign.position.set(-7.2, 26.2, 0);
-        azimutGroup.add(azimutSign);
-        this.scene.add(azimutGroup);
-
-        // Seven Feet Yacht Club
-        const marinaPier = new THREE.Mesh(
-            new THREE.BoxGeometry(30, 0.7, 8),
-            new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.7 })
-        );
-        marinaPier.position.set(-28, 0.15, 118);
-        this.scene.add(marinaPier);
-
-        const clubBoathouse = new THREE.Mesh(
-            new THREE.BoxGeometry(7, 4.5, 9),
-            new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.4 })
-        );
-        clubBoathouse.position.set(-10, 2.25, 118);
-        this.scene.add(clubBoathouse);
+        const ids = ['arbat_paving', 'supra_restaurant', 'fortress_museum', 'olympiets_complex', 'azimut_hotel', 'yacht_club_pier', 'yacht_club_boathouse'];
+        const landmarks = DEFAULT_LANDMARKS.filter(l => ids.includes(l.id));
+        this.buildLandmarks({ landmarks });
     },
 
     buildVladivostokSopkiAndBayHorizon(worldMap) {
-        const sopkaGreenMat = new THREE.MeshStandardMaterial({
-            color: 0x15803d,
-            roughness: 0.88,
-            flatShading: true
-        });
-        const sopkaDarkForestMat = new THREE.MeshStandardMaterial({
-            color: 0x166534,
-            roughness: 0.92,
-            flatShading: true
-        });
-        const cliffRockMat = new THREE.MeshStandardMaterial({
-            color: 0x475569,
-            roughness: 0.85,
-            flatShading: true
-        });
+        const createGreenSopka = (h, categoryKey, idx) => {
+            const x = h.x || 0;
+            const y = h.y !== undefined ? h.y : -0.5;
+            const z = h.z || 0;
+            const radius = h.r || 32;
+            const height = h.h || 48;
+            const label = h.label || '';
 
-        const createGreenSopka = (x, z, radius, height, addCollider = true, label = '') => {
-            const hillGroup = new THREE.Group();
-            hillGroup.position.set(x, -0.5, z);
-
-            const cone = new THREE.Mesh(
-                new THREE.ConeGeometry(radius, height, 14, 3),
-                sopkaGreenMat
-            );
-            cone.position.y = height / 2;
-            cone.castShadow = true;
-            cone.receiveShadow = true;
-            hillGroup.add(cone);
-
-            const shoulder = new THREE.Mesh(
-                new THREE.DodecahedronGeometry(radius * 0.68, 1),
-                sopkaDarkForestMat
-            );
-            shoulder.scale.set(1.15, (height * 0.55) / (radius * 0.68), 1.1);
-            shoulder.position.set(-radius * 0.22, height * 0.28, radius * 0.15);
-            hillGroup.add(shoulder);
-
-            const cliff = new THREE.Mesh(
-                new THREE.CylinderGeometry(radius * 0.82, radius * 0.98, Math.min(7, height * 0.22), 12),
-                cliffRockMat
-            );
-            cliff.position.y = Math.min(3.5, height * 0.11);
-            hillGroup.add(cliff);
-
-            const treeCount = Math.min(28, Math.floor(radius * 0.55));
-            for (let t = 0; t < treeCount; t++) {
-                const angle = (t / treeCount) * Math.PI * 2 + (t * 1.7);
-                const distFrac = 0.28 + (t % 5) * 0.13;
-                const r = radius * distFrac;
-                const tx = Math.cos(angle) * r;
-                const tz = Math.sin(angle) * r;
-                const ty = Math.max(1.5, height * (1 - distFrac * 0.92) - 1.5);
-
-                const foliage = new THREE.Mesh(
-                    new THREE.ConeGeometry(2.1 + (t % 3) * 0.6, 5.5 + (t % 3) * 1.4, 7),
-                    sopkaDarkForestMat
-                );
-                foliage.position.set(tx, ty, tz);
-                hillGroup.add(foliage);
+            const hillGroup = ModelLoader.instantiate('models/sopka.glb', () => ModelBuilders.sopka(32, 48));
+            const localBox = (hillGroup.userData && hillGroup.userData.boundingBox) || computeModelBoundingBox(hillGroup);
+            hillGroup.position.set(x, y, z);
+            if (h.rotY !== undefined) {
+                hillGroup.rotation.y = h.rotY;
             }
-
+            hillGroup.scale.set(radius / 32, height / 48, radius / 32);
+            const computedCollider = PhysicsEngine.addModelCollider(h, 'hills', localBox);
+            hillGroup.userData = {
+                ...hillGroup.userData,
+                boundingBox: localBox,
+                computedCollider,
+                editorCategory: `hills.${categoryKey}`,
+                editorSubGroup: categoryKey,
+                editorIndex: idx,
+                editorId: `${categoryKey}_${idx}`,
+                configRef: h
+            };
             this.scene.add(hillGroup);
+            this.hillGroups.push(hillGroup);
 
-            if (addCollider) {
-                PhysicsEngine.addCircleCollider(x, z, radius * 0.78, height, false, label || 'Сопка Владивостока');
-            }
             if (label) {
-                this.registerWorldLabel(label, x, height + 3, z);
+                this.registerWorldLabel(label, x, y + height + 3.5, z);
             }
         };
 
         const hills = (worldMap && worldMap.hills) || {};
-        (hills.east || []).forEach(h => createGreenSopka(h.x, h.z, h.r, h.h, true, h.label));
-        (hills.north || []).forEach(h => createGreenSopka(h.x, h.z, h.r, h.h, true, h.label));
-        (hills.south || []).forEach(h => createGreenSopka(h.x, h.z, h.r, h.h, true, h.label));
+        (hills.east || []).forEach((h, idx) => createGreenSopka(h, 'east', idx));
+        (hills.north || []).forEach((h, idx) => createGreenSopka(h, 'north', idx));
+        (hills.south || []).forEach((h, idx) => createGreenSopka(h, 'south', idx));
 
         this.westShoreMeshes = [];
         const westShoreRidgeData = hills.westShoreRidge || [];
@@ -819,62 +959,21 @@ export const World = {
         this.registerWorldLabel('🌫️ Западный берег Амурского залива (Песчаный • 20 км)', -290, 26, -35);
 
         const tankerSpecs = (worldMap && worldMap.tankers) || [];
-        tankerSpecs.forEach(spec => {
-            const ship = new THREE.Group();
-            ship.position.set(spec.x, -1.35, spec.z);
-            ship.scale.setScalar(spec.scale);
-
-            const hull = new THREE.Mesh(
-                new THREE.BoxGeometry(6.8, 2.6, 34),
-                new THREE.MeshStandardMaterial({ color: spec.hullColor, roughness: 0.6 })
-            );
-            hull.position.y = 1.1;
-            ship.add(hull);
-
-            const waterline = new THREE.Mesh(
-                new THREE.BoxGeometry(7.0, 0.8, 34.2),
-                new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.7 })
-            );
-            waterline.position.y = 0.25;
-            ship.add(waterline);
-
-            const deckPipe = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.35, 0.35, 22),
-                new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.5 })
-            );
-            deckPipe.rotation.x = Math.PI / 2;
-            deckPipe.position.set(0, 2.65, 2);
-            ship.add(deckPipe);
-
-            const bridge = new THREE.Mesh(
-                new THREE.BoxGeometry(5.6, 5.2, 6.2),
-                new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.4 })
-            );
-            bridge.position.set(0, 4.8, -11.5);
-            ship.add(bridge);
-
-            const funnel = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.85, 1.05, 3.2, 12),
-                new THREE.MeshStandardMaterial({ color: 0xea580c })
-            );
-            funnel.position.set(0, 8.2, -12.5);
-            ship.add(funnel);
-
-            const navLight = new THREE.Mesh(
-                new THREE.SphereGeometry(0.45, 8, 8),
-                new THREE.MeshBasicMaterial({ color: 0xfef08a, fog: false })
-            );
-            navLight.position.set(0, 9.8, -11.0);
-            ship.add(navLight);
-
-            const bowLight = new THREE.Mesh(
-                new THREE.SphereGeometry(0.38, 8, 8),
-                new THREE.MeshBasicMaterial({ color: 0x38bdf8, fog: false })
-            );
-            bowLight.position.set(0, 4.2, 15.5);
-            ship.add(bowLight);
-
-            ship.rotation.y = spec.dir > 0 ? 0 : Math.PI;
+        tankerSpecs.forEach((spec, idx) => {
+            const ship = ModelLoader.instantiate(spec.model || 'models/tanker.glb', () => ModelBuilders.tanker(spec.hullColor));
+            const hullNode = ship.getObjectByName ? ship.getObjectByName('hull') : null;
+            if (hullNode && hullNode.material && spec.hullColor !== undefined) {
+                hullNode.material = hullNode.material.clone();
+                hullNode.material.color.setHex(spec.hullColor);
+            }
+            ship.position.set(spec.x || 0, spec.y !== undefined ? spec.y : -1.35, spec.z || 0);
+            ship.scale.setScalar(spec.scale || 1);
+            ship.rotation.y = spec.rotY !== undefined ? spec.rotY : (spec.dir > 0 ? 0 : Math.PI);
+            ship.userData = {
+                editorCategory: 'tankers',
+                editorId: `tanker_${idx}`,
+                configRef: spec
+            };
             this.scene.add(ship);
 
             this.distantTankers.push({
@@ -884,116 +983,15 @@ export const World = {
                 baseX: spec.x
             });
         });
-
-        // Tokarevsky Lighthouse
-        const lighthouseGroup = new THREE.Group();
-        lighthouseGroup.position.set(-105, -1.2, 125);
-
-        const spit = new THREE.Mesh(
-            new THREE.BoxGeometry(55, 1.2, 6),
-            new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.9 })
-        );
-        spit.position.set(22, 0.2, 0);
-        lighthouseGroup.add(spit);
-
-        const tower = new THREE.Mesh(
-            new THREE.CylinderGeometry(1.4, 2.2, 14, 16),
-            new THREE.MeshStandardMaterial({ color: 0xf8fafc })
-        );
-        tower.position.y = 7;
-        lighthouseGroup.add(tower);
-
-        const redTop = new THREE.Mesh(
-            new THREE.CylinderGeometry(1.6, 1.6, 2.8, 16),
-            new THREE.MeshStandardMaterial({ color: 0xdc2626 })
-        );
-        redTop.position.y = 14.8;
-        lighthouseGroup.add(redTop);
-
-        const beacon = new THREE.Mesh(
-            new THREE.SphereGeometry(1.2, 12, 12),
-            new THREE.MeshBasicMaterial({ color: 0xfef08a })
-        );
-        beacon.position.y = 16.8;
-        lighthouseGroup.add(beacon);
-
-        this.scene.add(lighthouseGroup);
-        this.registerWorldLabel('🚨 Токаревский Маяк', -105, 20, 125);
-
-        // V-shaped Cable-Stayed Bridge Pylons
-        const pylonMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.4, metalness: 0.5 });
-        [-35, 35].forEach(px => {
-            const pylon = new THREE.Group();
-            pylon.position.set(px, 0, 235);
-
-            const legL = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.6, 68), pylonMat);
-            legL.position.set(-6, 32, 0);
-            legL.rotation.z = -0.14;
-            pylon.add(legL);
-
-            const legR = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.6, 68), pylonMat);
-            legR.position.set(6, 32, 0);
-            legR.rotation.z = 0.14;
-            pylon.add(legR);
-
-            const crossBar = new THREE.Mesh(new THREE.BoxGeometry(18, 2.2, 2.5), pylonMat);
-            crossBar.position.set(0, 26, 0);
-            pylon.add(crossBar);
-
-            this.scene.add(pylon);
-        });
-
-        const bridgeDeck = new THREE.Mesh(
-            new THREE.BoxGeometry(160, 1.8, 6),
-            new THREE.MeshStandardMaterial({ color: 0x334155 })
-        );
-        bridgeDeck.position.set(0, 24, 235);
-        this.scene.add(bridgeDeck);
     },
 
     initSeagullsAndDriftParticles() {
-        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
-        const wingMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, side: THREE.DoubleSide, roughness: 0.45 });
-        const wingTipMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, side: THREE.DoubleSide });
-        const beakMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b });
-
         for (let i = 0; i < 26; i++) {
-            const bird = new THREE.Group();
-
-            const torso = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.2, 0.68), bodyMat);
-            bird.add(torso);
-
-            const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 8), bodyMat);
-            head.position.set(0, 0.08, 0.36);
-            bird.add(head);
-
-            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.2, 6), beakMat);
-            beak.rotation.x = Math.PI / 2;
-            beak.position.set(0, 0.06, 0.50);
-            bird.add(beak);
-
-            const tail = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.04, 0.26), wingTipMat);
-            tail.position.set(0, 0.02, -0.42);
-            bird.add(tail);
-
-            const leftWingPivot = new THREE.Group();
-            leftWingPivot.position.set(0.11, 0.05, 0.02);
-            const leftInner = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.04, 0.28), wingMat);
-            leftInner.position.x = 0.34;
-            const leftTip = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.035, 0.22), wingTipMat);
-            leftTip.position.x = 0.80;
-            leftWingPivot.add(leftInner, leftTip);
-
-            const rightWingPivot = new THREE.Group();
-            rightWingPivot.position.set(-0.11, 0.05, 0.02);
-            const rightInner = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.04, 0.28), wingMat);
-            rightInner.position.x = -0.34;
-            const rightTip = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.035, 0.22), wingTipMat);
-            rightTip.position.x = -0.80;
-            rightWingPivot.add(rightInner, rightTip);
-
-            bird.add(leftWingPivot, rightWingPivot);
+            const bird = ModelLoader.instantiate('models/seagull.glb', () => ModelBuilders.seagull());
             bird.scale.setScalar(1.25);
+
+            const leftWingPivot = (bird.getObjectByName && bird.getObjectByName('leftWing')) || new THREE.Group();
+            const rightWingPivot = (bird.getObjectByName && bird.getObjectByName('rightWing')) || new THREE.Group();
 
             const overPromenade = i < 14;
             const centerX = overPromenade ? (-12 + (i % 4) * 6.5) : (-34 - (i % 4) * 14);
@@ -1052,6 +1050,38 @@ export const World = {
         posAttr.needsUpdate = true;
     },
 
+    setStreetLights(enabled) {
+        this.streetLightsActive = Boolean(enabled);
+        if (!Array.isArray(this.propGroups)) return;
+
+        for (const obj of this.propGroups) {
+            if (!obj) continue;
+            const ptLight = obj.getObjectByName('lamp_point_light') || obj.getObjectByName('road_lamp_point_light');
+            if (ptLight) {
+                ptLight.visible = this.streetLightsActive;
+            }
+            const groundPool = obj.getObjectByName('lamp_ground_pool') || obj.getObjectByName('road_lamp_ground_pool');
+            if (groundPool) {
+                groundPool.visible = this.streetLightsActive;
+            }
+
+            obj.traverse((child) => {
+                if (!child.isMesh || !child.material) return;
+                if (child.name === 'globe') {
+                    if (child.material.emissive !== undefined && !child.material.isMeshBasicMaterial) {
+                        child.material.emissiveIntensity = this.streetLightsActive ? 1.0 : 0.0;
+                    } else if (child.material.color) {
+                        child.material.color.setHex(this.streetLightsActive ? 0xfef08a : 0x94a3b8);
+                    }
+                } else if (child.name === 'ledPanel') {
+                    if (child.material.color) {
+                        child.material.color.setHex(this.streetLightsActive ? 0xffffff : 0x475569);
+                    }
+                }
+            });
+        }
+    },
+
     applyTimeOfDay(timeOrPhase, explicitTimeString = null) {
         let phase = 'day';
         let timeString = explicitTimeString;
@@ -1074,7 +1104,7 @@ export const World = {
             this.forcedPhase = null;
         }
 
-        const clockEl = document.getElementById('hud-clock');
+        const clockEl = (typeof document !== 'undefined') ? document.getElementById('hud-clock') : null;
         if (clockEl && timeString) {
             clockEl.textContent = timeString;
         }
@@ -1090,19 +1120,26 @@ export const World = {
 
         if (phase === 'dawn') {
             // Dawn mode: Red sky on the east (+X), blue sky on the west (-X), sun rising in east
-            this.scene.background.setHex(0x1e1b4b);
-            this.scene.fog.color.setHex(0x312e81);
-            this.scene.fog.density = 0.0020;
+            if (this.scene && this.scene.background && this.scene.background.setHex) this.scene.background.setHex(0x1e1b4b);
+            if (this.scene && this.scene.fog && this.scene.fog.color) {
+                this.scene.fog.color.setHex(0x312e81);
+                this.scene.fog.density = 0.0020;
+            }
 
             sunPos.set(240, 32, -20);
-            this.sunLight.position.copy(sunPos);
-            this.sunLight.color.setHex(0xff7043);
-            this.sunLight.intensity = 1.15;
-            this.ambientLight.color.setHex(0xffd1b3);
-            this.ambientLight.intensity = 0.55;
+            if (this.sunLight) {
+                this.sunLight.position.copy(sunPos);
+                this.sunLight.color.setHex(0xff7043);
+                this.sunLight.intensity = 1.0;
+            }
+            if (this.ambientLight) {
+                this.ambientLight.color.setHex(0xffd1b3);
+                this.ambientLight.intensity = 0.45;
+            }
             if (this.hemiLight) {
                 this.hemiLight.color.setHex(0xff8a65);
                 this.hemiLight.groundColor.setHex(0x1e293b);
+                this.hemiLight.intensity = 0.35;
             }
 
             skyTopColor = 0x1e1b4b;
@@ -1116,24 +1153,31 @@ export const World = {
             const westTint = 0x1e293b;
             const westOpacity = 0.30;
             this.westShoreMeshes.forEach((m, idx) => {
-                m.color.setHex(westTint);
-                m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
+                if (m && m.color) m.color.setHex(westTint);
+                if (m) m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
             });
         } else if (phase === 'sunset') {
             // Sunset mode: Sun setting over mountains on the west (-X) across Amur Bay
-            this.scene.background.setHex(0x1e2942);
-            this.scene.fog.color.setHex(0xd97746);
-            this.scene.fog.density = 0.0022;
+            if (this.scene && this.scene.background && this.scene.background.setHex) this.scene.background.setHex(0x1e2942);
+            if (this.scene && this.scene.fog && this.scene.fog.color) {
+                this.scene.fog.color.setHex(0xd97746);
+                this.scene.fog.density = 0.0022;
+            }
 
             sunPos.set(-260, 26, -20);
-            this.sunLight.position.copy(sunPos);
-            this.sunLight.color.setHex(0xff7a33);
-            this.sunLight.intensity = 1.35;
-            this.ambientLight.color.setHex(0xffd5b8);
-            this.ambientLight.intensity = 0.65;
+            if (this.sunLight) {
+                this.sunLight.position.copy(sunPos);
+                this.sunLight.color.setHex(0xff7a33);
+                this.sunLight.intensity = 1.15;
+            }
+            if (this.ambientLight) {
+                this.ambientLight.color.setHex(0xffd5b8);
+                this.ambientLight.intensity = 0.50;
+            }
             if (this.hemiLight) {
                 this.hemiLight.color.setHex(0xfb923c);
                 this.hemiLight.groundColor.setHex(0x1e293b);
+                this.hemiLight.intensity = 0.35;
             }
 
             skyTopColor = 0x1e2942;
@@ -1147,24 +1191,31 @@ export const World = {
             const westTint = 0x581c87;
             const westOpacity = 0.45;
             this.westShoreMeshes.forEach((m, idx) => {
-                m.color.setHex(westTint);
-                m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
+                if (m && m.color) m.color.setHex(westTint);
+                if (m) m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
             });
         } else if (phase === 'day') {
-            // Day mode: Bright maritime sky, sun high overhead
-            this.scene.background.setHex(0x0284c7);
-            this.scene.fog.color.setHex(0xbae6fd);
-            this.scene.fog.density = 0.0014;
+            // Day mode: Balanced maritime coastal daylight, rich natural colors without highlight blowout
+            if (this.scene && this.scene.background && this.scene.background.setHex) this.scene.background.setHex(0x0284c7);
+            if (this.scene && this.scene.fog && this.scene.fog.color) {
+                this.scene.fog.color.setHex(0xbae6fd);
+                this.scene.fog.density = 0.0014;
+            }
 
             sunPos.set(-70, 180, -35);
-            this.sunLight.position.copy(sunPos);
-            this.sunLight.color.setHex(0xffffff);
-            this.sunLight.intensity = 1.5;
-            this.ambientLight.color.setHex(0xffffff);
-            this.ambientLight.intensity = 0.85;
+            if (this.sunLight) {
+                this.sunLight.position.copy(sunPos);
+                this.sunLight.color.setHex(0xfffaed);
+                this.sunLight.intensity = 0.95;
+            }
+            if (this.ambientLight) {
+                this.ambientLight.color.setHex(0xe0f2fe);
+                this.ambientLight.intensity = 0.35;
+            }
             if (this.hemiLight) {
-                this.hemiLight.color.setHex(0x7dd3fc);
-                this.hemiLight.groundColor.setHex(0x1e293b);
+                this.hemiLight.color.setHex(0xbae6fd);
+                this.hemiLight.groundColor.setHex(0x334155);
+                this.hemiLight.intensity = 0.35;
             }
 
             skyTopColor = 0x0284c7;
@@ -1178,24 +1229,31 @@ export const World = {
             const westTint = 0x38bdf8;
             const westOpacity = 0.36;
             this.westShoreMeshes.forEach((m, idx) => {
-                m.color.setHex(westTint);
-                m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
+                if (m && m.color) m.color.setHex(westTint);
+                if (m) m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
             });
         } else if (phase === 'dusk') {
             // Dusk / Twilight mode
-            this.scene.background.setHex(0x0c0a2a);
-            this.scene.fog.color.setHex(0x1e1b4b);
-            this.scene.fog.density = 0.0025;
+            if (this.scene && this.scene.background && this.scene.background.setHex) this.scene.background.setHex(0x0c0a2a);
+            if (this.scene && this.scene.fog && this.scene.fog.color) {
+                this.scene.fog.color.setHex(0x1e1b4b);
+                this.scene.fog.density = 0.0025;
+            }
 
             sunPos.set(-260, -15, -20);
-            this.sunLight.position.copy(sunPos);
-            this.sunLight.color.setHex(0x818cf8);
-            this.sunLight.intensity = 0.35;
-            this.ambientLight.color.setHex(0x4338ca);
-            this.ambientLight.intensity = 0.45;
+            if (this.sunLight) {
+                this.sunLight.position.copy(sunPos);
+                this.sunLight.color.setHex(0x818cf8);
+                this.sunLight.intensity = 0.30;
+            }
+            if (this.ambientLight) {
+                this.ambientLight.color.setHex(0x4338ca);
+                this.ambientLight.intensity = 0.38;
+            }
             if (this.hemiLight) {
                 this.hemiLight.color.setHex(0x6366f1);
                 this.hemiLight.groundColor.setHex(0x0f172a);
+                this.hemiLight.intensity = 0.25;
             }
 
             skyTopColor = 0x0c0a2a;
@@ -1209,24 +1267,31 @@ export const World = {
             const westTint = 0x312e81;
             const westOpacity = 0.30;
             this.westShoreMeshes.forEach((m, idx) => {
-                m.color.setHex(westTint);
-                m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
+                if (m && m.color) m.color.setHex(westTint);
+                if (m) m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
             });
         } else {
             // Night mode
-            this.scene.background.setHex(0x050811);
-            this.scene.fog.color.setHex(0x070b16);
-            this.scene.fog.density = 0.0028;
+            if (this.scene && this.scene.background && this.scene.background.setHex) this.scene.background.setHex(0x050811);
+            if (this.scene && this.scene.fog && this.scene.fog.color) {
+                this.scene.fog.color.setHex(0x070b16);
+                this.scene.fog.density = 0.0028;
+            }
 
             sunPos.set(-140, -40, -40);
-            this.sunLight.position.copy(sunPos);
-            this.sunLight.color.setHex(0x38bdf8);
-            this.sunLight.intensity = 0.22;
-            this.ambientLight.color.setHex(0x1e293b);
-            this.ambientLight.intensity = 0.38;
+            if (this.sunLight) {
+                this.sunLight.position.copy(sunPos);
+                this.sunLight.color.setHex(0x38bdf8);
+                this.sunLight.intensity = 0.18;
+            }
+            if (this.ambientLight) {
+                this.ambientLight.color.setHex(0x1e293b);
+                this.ambientLight.intensity = 0.28;
+            }
             if (this.hemiLight) {
                 this.hemiLight.color.setHex(0x38bdf8);
                 this.hemiLight.groundColor.setHex(0x020617);
+                this.hemiLight.intensity = 0.20;
             }
 
             skyTopColor = 0x050811;
@@ -1240,10 +1305,14 @@ export const World = {
             const westTint = 0x0f172a;
             const westOpacity = 0.35;
             this.westShoreMeshes.forEach((m, idx) => {
-                m.color.setHex(westTint);
-                m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
+                if (m && m.color) m.color.setHex(westTint);
+                if (m) m.opacity = idx === 0 ? westOpacity : westOpacity * 0.72;
             });
         }
+
+        // Only turn on street lights when sun sets (sunset, dusk, night)
+        const lightsOn = (phase === 'sunset' || phase === 'dusk' || phase === 'night');
+        this.setStreetLights(lightsOn);
 
         if (this.sunMesh) {
             this.sunMesh.visible = false;

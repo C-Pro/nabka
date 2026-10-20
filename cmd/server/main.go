@@ -31,6 +31,11 @@ func main() {
 		AllowAllOrigins:     true,
 	}
 
+	if _, err := os.Stat("static/index.html"); err == nil {
+		cfg.StaticFS = os.DirFS("static")
+		slog.Info("Serving static assets from local disk directory (static/)")
+	}
+
 	server := game.NewServer(cfg)
 
 	slog.Info("Starting multiplayer WebSocket game server",

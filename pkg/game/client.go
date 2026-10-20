@@ -2,6 +2,7 @@ package game
 
 import (
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -71,8 +72,21 @@ func (c *Client) CloseSocket() {
 
 // Terminate records the terminal reason atomically and unregisters the client.
 func (c *Client) Terminate(reason string) {
+	c.terminate(reason, "cleanup", nil)
+}
+
+// Keep the first transport failure: closing the socket also wakes the other
+// pump with a secondary error that would otherwise obscure the original cause.
+func (c *Client) terminate(reason, operation string, err error) {
 	c.termOnce.Do(func() {
 		c.termReason = reason
+		slog.Info("WebSocket connection ended",
+			"username", c.Username,
+			"operation", operation,
+			"reason", reason,
+			"error", err,
+			"queued_messages", len(c.send),
+		)
 		c.CloseSocket()
 		c.hub.Unregister(c, reason)
 	})
@@ -84,7 +98,7 @@ func (c *Client) sendDirect(data []byte) {
 }
 
 // ReadPump handles incoming WebSocket frames, validates application messages,
-// refreshes the inactivity deadline on valid messages, and forwards events to the hub.
+// refreshes connection liveness on valid messages/pongs, and forwards events to the hub.
 func (c *Client) ReadPump() {
 	defer func() {
 		c.Terminate(ReasonLeft)
@@ -95,7 +109,12 @@ func (c *Client) ReadPump() {
 	// Set initial read deadline
 	_ = c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
 
-	// Do NOT refresh application read deadline on protocol pings
+	// Browsers answer protocol pings without running JavaScript. Rendering stalls
+	// and background timer throttling must not be mistaken for a dead connection.
+	c.conn.SetPongHandler(func(string) error {
+		return c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
+	})
+
 	c.conn.SetPingHandler(func(appData string) error {
 		return c.conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(c.writeTimeout))
 	})
@@ -108,7 +127,7 @@ func (c *Client) ReadPump() {
 			if errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
 				reason = ReasonInactivity
 			}
-			c.Terminate(reason)
+			c.terminate(reason, "read", err)
 			return
 		}
 
@@ -218,17 +237,33 @@ func (c *Client) WritePump() {
 		c.Terminate(ReasonLeft)
 	}()
 
-	for data := range c.send {
-		_ = c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
-		err := c.conn.WriteMessage(websocket.BinaryMessage, data)
-		if err != nil {
-			c.Terminate(ReasonLeft)
-			return
+	pingInterval := c.inactivityTimeout / 3
+	if pingInterval <= 0 {
+		pingInterval = time.Nanosecond
+	}
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case data, ok := <-c.send:
+			if !ok {
+				// Send channel was closed by the Hub.
+				_ = c.conn.WriteControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+					time.Now().Add(c.writeTimeout))
+				c.CloseSocket()
+				return
+			}
+			_ = c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
+			if err := c.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+				c.terminate(ReasonLeft, "write", err)
+				return
+			}
+		case <-ticker.C:
+			if err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(c.writeTimeout)); err != nil {
+				c.terminate(ReasonLeft, "ping", err)
+				return
+			}
 		}
 	}
-
-	// Send channel was closed by the Hub
-	_ = c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
-	_ = c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-	c.CloseSocket()
 }

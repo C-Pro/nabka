@@ -5,6 +5,7 @@ High-performance WebSocket backend for real-time multiplayer browser games built
 ## 1. Connection & Authentication
 
 - **Endpoint**: `/ws`
+- **Browser default**: The page's origin, using `ws` for HTTP and `wss` for HTTPS. Opening `http://localhost:8080/` connects to `ws://localhost:8080/ws` without needing `?localhost=true`. Pages opened directly via `file:` fall back to the public server.
 - **Protocol**: WebSocket (`ws://` or `wss://`)
 - **Payload Format**: Binary MessagePack (`msgpack`)
 - **CORS**: All origins allowed (`*`)
@@ -44,14 +45,15 @@ Connect to `/ws` without query parameters. The connection upgrades, and the clie
 
 ---
 
-## 2. Inactivity Timeout
+## 2. Connection Liveness
 
-- **Deadline**: 30 seconds of inactivity.
-- **Rule**: A client is kicked if it does not send a valid application message (`move`, `chat`, or `ping`) within 30 seconds.
-- **Heartbeat Ping**: Active browser clients send an application-level `{"type": "ping"}` every 10 seconds while the page tab is open, refreshing the 30-second deadline. The server responds with `{"type": "pong"}`.
-- **Protocol Frames**: WebSocket protocol-level Ping/Pong frames do **not** refresh the 30-second application inactivity deadline to prevent idling clients from staying connected indefinitely.
-- **Broadcast on Kick**: Remaining clients receive a leave broadcast with reason `"kicked for 30s inactivity"`.
+- **Deadline**: 30 seconds without a valid application message or WebSocket protocol pong (configured by `InactivityTimeout`). This checks connection health, not player activity; idle players with healthy connections stay connected.
+- **Server Heartbeat**: The server sends WebSocket protocol pings every one-third of the deadline (10 seconds by default). Browser network stacks automatically return pongs, even when game rendering or JavaScript heartbeat timers are paused or throttled. Each pong refreshes the deadline.
+- **Application Heartbeat**: Browser clients also send MessagePack `{"type": "ping"}` every 8 seconds when their timers run; the server responds with `{"type": "pong"}`. Valid `move`, `chat`, and `ping` messages continue to refresh the deadline for compatibility.
+- **Broadcast on Timeout**: Remaining clients receive a leave broadcast with the legacy reason `"kicked for 30s inactivity"`. This now denotes failed connection liveness, not an AFK policy.
 - **Reconnection**: The username is immediately freed for reconnection upon timeout or disconnect.
+
+For disconnect diagnosis, expand **Детали соединения** in the browser's login error to see the WebSocket close code, reason, and endpoint. Server logs record `WebSocket connection ended` with the first failing read/write operation and its underlying error. Code `1006` means no close frame was received; by itself it does not establish an inactivity timeout.
 
 ---
 
@@ -171,6 +173,37 @@ Sent by clients to synchronize character position, velocity, orientation, and an
 ---
 
 ### 3.5. Driving Movement (15–20 Hz)
+
+Driving messages additionally carry `vx`, `vz` (world-space units/second) and
+`yaw_rate` (radians/second). Heading is measured from +Z toward +X; velocity is
+independent of heading during a drift. All three fields must be finite numbers.
+They are optional inbound during migration: missing velocity components are
+inferred from heading and signed forward `speed`; missing yaw rate is zero.
+Outbound driving messages always include them, including zero values.
+
+The hub assigns accepted driving updates a global increasing `sequence` (uint64)
+and `sample_time_ms` (float64 milliseconds since this server world's creation).
+Client-supplied sequence/timing is ignored. Baselines and occupancy rejection
+responses retain the stored update's metadata; parking retains that metadata but
+sets all velocities and speed to zero and clears the driver. These counters reset
+on server restart; clients clear snapshot history on reconnect or ownership change.
+Parking is a lifecycle transition, applied immediately in WebSocket order, rather
+than an interpolated driving sample. Duplicate/out-of-order driving samples are
+ignored within a driver's stream.
+
+Local physics runs at 60 Hz and renders between its previous/current poses (up to
+one simulation tick of presentation delay). Outgoing snapshots use simulation
+coordinates, not the interpolated mesh. Remote cars render 100 ms behind the
+server sample timeline; extrapolation uses world velocity/yaw rate and stops after
+100 ms. Long gaps and teleports reset history. Remote cars act as kinematic
+obstacles in local collision resolution: local bodies respond, remote poses and
+velocities are never modified. This remains client-driven vehicle simulation;
+server-authoritative collision outcomes are not implemented by this change.
+
+Older clients ignore extra outbound fields. New clients can use arrival timestamps
+and heading-based velocity for older servers. Remove these migration fallbacks
+only with a coordinated protocol-version bump requiring the new motion fields.
+
 
 Sent by clients to synchronize vehicle telemetry, visual state, and world position.
 
@@ -297,11 +330,12 @@ The server embeds all assets in the `static/` directory directly into the compil
 - **Root Endpoint**: `GET /` automatically serves `static/index.html`.
 - **Direct Asset Requests**: Any file under `static/` is served at its relative path (e.g., `GET /index.html`, `GET /css/...`, `GET /js/...`).
 - **Favicons**: Serves `GET /favicon.ico` (`image/x-icon`) and `GET /favicon.svg` (`image/svg+xml`).
+- **Audio Assets**: Serves `GET /audio/*.mp3` (`audio/mpeg`) with `Accept-Ranges: bytes` supporting streaming and Web Audio decoding for Nabka ambience loops, randomized short/long seagull calls, and throttle engine sounds.
 - **Service Worker Neutralizer**: Serves `GET /sw.js` (`application/javascript`) with self-unregistering logic to immediately purge legacy caches in users' browsers.
 - **Version Endpoint**: `GET /api/version` (or `/version`) returns JSON `{"version": "<build-id>", "status": "ok"}` used for client auto-update checks.
 - **Cache-Control & Anti-Staleness**: All static endpoints send aggressive anti-caching headers (`Cache-Control: no-cache, no-store, must-revalidate, max-age=0, s-maxage=0`, `Pragma: no-cache`, `Expires: 0`, `CDN-Cache-Control: no-store`, `Cloudflare-CDN-Cache-Control: no-store`, `X-Nabka-Version: <build-id>`) while stripping `Last-Modified` and `ETag` to prevent heuristic stale caching across reverse proxies, CDNs, and browsers after image deployments.
 - **HTTP Methods**: Supports `GET` and `HEAD`.
 - **Byte Ranges**: Supports `Accept-Ranges: bytes` with `206 Partial Content` responses.
-- **Content Types**: Standard MIME types (e.g., `text/html; charset=utf-8` for HTML, `image/x-icon` for `.ico`) are automatically inferred and populated.
+- **Content Types**: Standard MIME types (e.g., `text/html; charset=utf-8` for HTML, `image/x-icon` for `.ico`, `audio/mpeg` for `.mp3`) are automatically inferred and populated.
 - **Routing**: Requests to `/ws` are routed to the WebSocket upgrader; `/api/version` returns build metadata; all other paths are handled by the embedded static file server. Nonexistent paths return HTTP `404 Not Found`.
 

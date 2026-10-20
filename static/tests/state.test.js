@@ -257,6 +257,7 @@ describe('MultiplayerClient state replication', () => {
         Player.velocity = { x: 0, y: 0, z: 0 };
         GAME_STATE.inVehicle = {
             id: 'car_0',
+            x: 13.0, z: 46.0, vx: 12.5, vz: 0, yawRate: -1.25,
             speed: 15.5,
             yaw: 1.2,
             isDrifting: true,
@@ -271,6 +272,11 @@ describe('MultiplayerClient state replication', () => {
         expect(sentPackets[0].mode).toBe('driving');
         expect(sentPackets[0].car_id).toBe('car_0');
         expect(sentPackets[0].drift).toBe(true);
+        expect(sentPackets[0].x).toBe(13.0);
+        expect(sentPackets[0].z).toBe(46.0);
+        expect(sentPackets[0].vx).toBe(12.5);
+        expect(sentPackets[0].vz).toBe(0);
+        expect(sentPackets[0].yaw_rate).toBe(-1.25);
 
         GAME_STATE.inVehicle = null;
     });

@@ -206,9 +206,10 @@ export function deriveDefaultWsUrl(loc = typeof window !== 'undefined' ? window.
  * Loads world map and NPC dialogue JSON data files from `static/data/`.
  */
 export async function loadGameData(fetchFn = fetch) {
+    const t = Date.now();
     const [worldRes, dialoguesRes] = await Promise.all([
-        fetchFn('data/world_map.json'),
-        fetchFn('data/npc_dialogues.json')
+        fetchFn(`data/world_map.json?t=${t}`),
+        fetchFn(`data/npc_dialogues.json?t=${t}`)
     ]);
     if (!worldRes.ok) {
         throw new Error(`Failed to load world_map.json: ${worldRes.status}`);

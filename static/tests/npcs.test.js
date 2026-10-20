@@ -11,7 +11,7 @@ import worldMap from '../data/world_map.json';
 describe('NPC Collision Detection, Personal Distance, and Navigation', () => {
     beforeEach(() => {
         PhysicsEngine.clear();
-        PhysicsEngine.loadFromConfig(worldMap.staticColliders);
+        PhysicsEngine.loadFromConfig(worldMap);
     });
 
     test('resolveNpcToNpcCollisions pushes overlapping NPCs apart to maintain minimum distance', () => {
@@ -125,13 +125,15 @@ describe('NPC Collision Detection, Personal Distance, and Navigation', () => {
     });
 
     test('updatePromenadeNPCs detects wall collision and changes direction to prevent getting stuck', () => {
-        // Pyan-se stall is a static collider box at x: 9.5, z: 28, width: 4.6, depth: 6.4 (halfW: 2.3, halfD: 3.2)
-        // x spans [7.2, 11.8], z spans [24.8, 31.2]
-        // Place an NPC at x: 6.8, z: 28 walking directly into the stall (+X)
+        const pyanse = PhysicsEngine.colliders.find(c => c.id === 'pyanse');
+        const stallX = pyanse ? pyanse.x : 7.3;
+        const stallZ = pyanse ? pyanse.z : 36.85;
+        const halfW = pyanse ? (pyanse.width / 2) : 2.3;
+        // Place an NPC at western edge walking directly into the stall (+X)
         const stallNpc = {
             id: 'stall_npc',
-            position: { x: 6.8, y: 0, z: 28 },
-            heading: Math.PI / 2, // heading East (+X) directly into Pyan-se stall
+            position: { x: stallX - halfW - 0.5, y: 0, z: stallZ },
+            heading: Math.PI / 2, // heading East (+X) directly into stall
             speed: 2.0,
             state: 'walking',
             stateTimer: 5.0,
@@ -147,8 +149,8 @@ describe('NPC Collision Detection, Personal Distance, and Navigation', () => {
             vehicles: []
         });
 
-        // The stall collider must block penetration into the stall box (x should not penetrate past ~6.65)
-        expect(stallNpc.position.x).toBeLessThan(7.2);
+        // The stall collider must block penetration into the stall box
+        expect(stallNpc.position.x).toBeLessThan(stallX - halfW + 0.05);
 
         // Heading must have changed significantly to steer away from the wall
         expect(Math.abs(stallNpc.heading - initialHeading)).toBeGreaterThan(0.5);

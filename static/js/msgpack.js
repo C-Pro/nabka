@@ -7,7 +7,7 @@ export const MsgPackCodec = {
     utf8Encoder: new TextEncoder(),
     utf8Decoder: new TextDecoder('utf-8'),
 
-    encode(obj, floatKeys = new Set(['x', 'y', 'z', 'vx', 'vz', 'yaw', 'speed'])) {
+    encode(obj, floatKeys = new Set(['x', 'y', 'z', 'vx', 'vz', 'yaw', 'speed', 'yaw_rate', 'sample_time_ms'])) {
         const bytes = [];
         this._encodeValue(obj, bytes, null, floatKeys);
         return new Uint8Array(bytes).buffer;

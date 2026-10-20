@@ -440,7 +440,14 @@ export function bindInputControls(worldMap = {}) {
         }
     }
 
+    const updateAppViewportHeight = () => {
+        if (typeof window === 'undefined' || typeof document === 'undefined') return;
+        const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        document.documentElement.style.setProperty('--app-height', `${vh}px`);
+    };
+
     const handleViewportResize = () => {
+        updateAppViewportHeight();
         const container = document.getElementById('game-canvas-container');
         if (!container || !World.renderer || !World.camera) return;
         World.camera.aspect = container.clientWidth / Math.max(1, container.clientHeight);
@@ -448,7 +455,11 @@ export function bindInputControls(worldMap = {}) {
         World.renderer.setSize(container.clientWidth, container.clientHeight);
         syncQuestCollapse();
     };
+    updateAppViewportHeight();
     window.addEventListener('resize', handleViewportResize);
+    if (typeof window !== 'undefined' && window.visualViewport) {
+        window.visualViewport.addEventListener('resize', handleViewportResize);
+    }
     window.addEventListener('orientationchange', () => {
         setTimeout(handleViewportResize, 150);
     });

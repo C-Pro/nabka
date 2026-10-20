@@ -378,6 +378,9 @@ export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlay
     ctx.fillStyle = '#1e293b';
     ctx.fillRect((15 - px) * scale, (-180 - pz) * scale, 16 * scale, 360 * scale);
 
+    ctx.fillStyle = '#334155';
+    ctx.fillRect((31 - px) * scale, (-180 - pz) * scale, 263 * scale, 360 * scale);
+
     ctx.fillStyle = '#92400e';
     ctx.fillRect((-48 - px) * scale, (44 - pz) * scale, 33 * scale, 8 * scale);
 

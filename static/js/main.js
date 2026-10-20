@@ -1,9 +1,11 @@
+import { smoothingAlpha } from './vehicle-motion.js';
 import { GAME_STATE, DEFAULT_WALK_PITCH, loadGameData } from './state.js';
 import { World } from './world.js';
 import { Player, Dunya, createJDMCar, toggleVehicleDrive, initPromenadeNPCs, selectValidSpawnPoint, updateWorldVehicles } from './entities.js';
 import { MultiplayerClient } from './network.js';
 import { bindInputControls } from './input.js';
 import { checkProximityInteractions, updateScreenProjections, drawGTARadar } from './ui.js';
+import { ModelLoader } from './models.js';
 
 let activeWorldMap = {};
 
@@ -18,15 +20,15 @@ export function updateThirdPersonCamera(dt = 0.016) {
         const car = GAME_STATE.inVehicle.group;
         const targetCarCamYaw = car.rotation.y + Math.PI;
         const yawDiff = Math.atan2(Math.sin(targetCarCamYaw - GAME_STATE.cameraYaw), Math.cos(targetCarCamYaw - GAME_STATE.cameraYaw));
-        GAME_STATE.cameraYaw += yawDiff * Math.min(1, dt * 14);
-        GAME_STATE.cameraPitch += (0.28 - GAME_STATE.cameraPitch) * Math.min(1, dt * 10);
+        GAME_STATE.cameraYaw += yawDiff * smoothingAlpha(14, dt);
+        GAME_STATE.cameraPitch += (0.28 - GAME_STATE.cameraPitch) * smoothingAlpha(10, dt);
     } else {
         const timeSinceMouse = performance.now() - GAME_STATE.lastMouseMoveTime;
         if (timeSinceMouse > 1000) {
             const targetWalkYaw = Player.rotationY + Math.PI;
             const yawDiff = Math.atan2(Math.sin(targetWalkYaw - GAME_STATE.cameraYaw), Math.cos(targetWalkYaw - GAME_STATE.cameraYaw));
-            GAME_STATE.cameraYaw += yawDiff * Math.min(1, dt * 3.2);
-            GAME_STATE.cameraPitch += (DEFAULT_WALK_PITCH - GAME_STATE.cameraPitch) * Math.min(1, dt * 3.5);
+            GAME_STATE.cameraYaw += yawDiff * smoothingAlpha(3.2, dt);
+            GAME_STATE.cameraPitch += (DEFAULT_WALK_PITCH - GAME_STATE.cameraPitch) * smoothingAlpha(3.5, dt);
         }
     }
 
@@ -67,7 +69,7 @@ export function updateThirdPersonCamera(dt = 0.016) {
     const camZ = lookTarget.z + Math.cos(GAME_STATE.cameraYaw) * horizDist;
     const camY = Math.max(0.8, lookTarget.y + vertDist);
 
-    camera.position.lerp(new THREE.Vector3(camX, camY, camZ), GAME_STATE.inVehicle ? 0.35 : 0.22);
+    camera.position.lerp(new THREE.Vector3(camX, camY, camZ), smoothingAlpha(GAME_STATE.inVehicle ? 25.85 : 14.91, dt));
     camera.lookAt(lookTarget);
 }
 
@@ -131,6 +133,8 @@ export async function startApp() {
         GAME_STATE.cameraModes = worldMap.cameraModes;
     }
 
+    await ModelLoader.preloadAll(worldMap);
+
     World.initThreeScene();
     World.buildVladivostokNabka(worldMap);
     World.updateVladivostokClockAndTimeOfDay();
@@ -150,8 +154,22 @@ export async function startApp() {
     for (const v of vehiclesList) {
         const rawColor = v.colorHex !== undefined ? v.colorHex : v.color;
         const colorInt = typeof rawColor === 'string' ? parseInt(rawColor, 16) : rawColor;
-        const rotY = v.rotY !== undefined ? v.rotY : (v.rotationY || 0);
-        createJDMCar(v.name, colorInt, v.x, v.z, rotY, handleToggleDrive, v.id);
+        const rotY = v.rotY ?? v.rotation ?? v.rotationY ?? 0;
+        const carObj = createJDMCar(v.name, colorInt, v.x, v.z, rotY, handleToggleDrive, v.id, v.model || null);
+        if (carObj && carObj.group) {
+            if (v.y !== undefined) {
+                carObj.group.position.y = v.y;
+            }
+            if (v.scale !== undefined && v.scale !== 1) {
+                carObj.group.scale.setScalar(v.scale);
+            }
+            carObj.group.userData = {
+                ...carObj.group.userData,
+                editorCategory: 'vehicles',
+                editorId: v.id,
+                configRef: v
+            };
+        }
     }
 
     initPromenadeNPCs(npcDialogues, worldMap.npcs || {});

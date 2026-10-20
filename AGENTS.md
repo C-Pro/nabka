@@ -17,8 +17,10 @@ The development direction is a consistent shared world managed by a stateful Go 
 - `static/`: browser application and assets; `static/index.html` is the page entry point.
   - `static/css/`: stylesheets (`main.css`, `tailwind.css`).
   - `static/data/`: shared world map (`world_map.json`) and NPC dialogue data (`npc_dialogues.json`).
-  - `static/js/`: ES modules (`main.js`, `msgpack.js`, `physics.js`, `state.js`, `network.js`, `world.js`, `entities.js`, `ui.js`, `input.js`, `audio.js`, `textures.js`).
+  - `static/models/`: binary glTF 2.0 (`.glb`) 3D models editable in Blockbench or Blender.
+  - `static/js/`: ES modules (`main.js`, `msgpack.js`, `physics.js`, `vehicle-motion.js`, `state.js`, `network.js`, `world.js`, `entities.js`, `models.js`, `ui.js`, `input.js`, `audio.js`, `textures.js`).
   - `static/tests/`: Bun unit tests (`*.test.js`).
+- `editor/`: standalone visual 3D map and `.glb` model editor (`index.html`, `editor.js`, `export_glb.js`, `server.js`), excluded from the embedded Go server binary and Docker image.
 - `static.go` and `static_test.go`: embedded browser assets and their tests.
 - `API.md`: wire protocol documentation; update it with protocol changes.
 - `go.mod`, `go.sum`, and `vendor/`: Go toolchain and dependencies.
@@ -80,6 +82,8 @@ go test -mod=vendor ./...
 go test -mod=vendor -race ./...
 go vet -mod=vendor ./...
 bun test
+bun editor/server.js
+bun editor/server.js --export-models
 go build -mod=vendor -o /tmp/nabka-server ./cmd/server
 docker build -t nabka:latest .
 docker save nabka:latest | gzip > nabka.tar.gz

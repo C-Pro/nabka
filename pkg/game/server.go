@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,6 +100,7 @@ func NewServer(cfg ServerConfig) *Server {
 			IndexNames:         []string{"index.html"},
 			GenerateIndexPages: false,
 			AcceptByteRange:    true,
+			SkipCache:          true,
 			CleanStop:          s.fsCleanStop,
 		}
 		s.fsHandler = fastFS.NewRequestHandler()
@@ -215,6 +217,10 @@ func (s *Server) HandleRequest(ctx *fasthttp.RequestCtx) {
 			ctx.Response.Header.Set("Content-Type", "image/svg+xml")
 		} else if path == "/sw.js" {
 			ctx.Response.Header.Set("Content-Type", "application/javascript; charset=utf-8")
+		} else if strings.HasSuffix(path, ".mp3") {
+			ctx.Response.Header.Set("Content-Type", "audio/mpeg")
+		} else if strings.HasSuffix(path, ".glb") {
+			ctx.Response.Header.Set("Content-Type", "model/gltf-binary")
 		}
 		return
 	}

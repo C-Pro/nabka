@@ -405,5 +405,295 @@ export const TextureFactory = {
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.ClampToEdgeWrapping;
         return tex;
+    },
+
+    createPoliceRibbonTexture() {
+        if (typeof document === 'undefined' || typeof THREE === 'undefined') return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        // Base background: bright hazard yellow (#facc15)
+        ctx.fillStyle = '#facc15';
+        ctx.fillRect(0, 0, 512, 64);
+
+        // 45-degree diagonal alternating black hazard chevrons on top (14px) and bottom (14px) margins
+        const stripeW = 16;
+        ctx.fillStyle = '#09090b';
+
+        // Top margin chevrons (0 to 14px)
+        for (let x = -32; x < 512 + 32; x += stripeW * 2) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x + stripeW, 0);
+            ctx.lineTo(x + stripeW - 14, 14);
+            ctx.lineTo(x - 14, 14);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // Bottom margin chevrons (50px to 64px)
+        for (let x = -32; x < 512 + 32; x += stripeW * 2) {
+            ctx.beginPath();
+            ctx.moveTo(x, 50);
+            ctx.lineTo(x + stripeW, 50);
+            ctx.lineTo(x + stripeW - 14, 64);
+            ctx.lineTo(x - 14, 64);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // Sharp dividing horizontal border lines
+        ctx.strokeStyle = '#09090b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, 14);
+        ctx.lineTo(512, 14);
+        ctx.moveTo(0, 50);
+        ctx.lineTo(512, 50);
+        ctx.stroke();
+
+        // Bold black cautionary text in center
+        ctx.fillStyle = '#09090b';
+        ctx.font = '900 17px "Arial Black", "Inter", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('POLICE LINE DO NOT CROSS • ОПАСНАЯ ЗОНА', 256, 32);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        return tex;
+    },
+
+    createHazardPoleTexture() {
+        if (typeof document === 'undefined' || typeof THREE === 'undefined') return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        // Alternating horizontal black and hazard yellow bands
+        const bands = 8;
+        const bandH = 128 / bands;
+        for (let i = 0; i < bands; i++) {
+            ctx.fillStyle = (i % 2 === 0) ? '#facc15' : '#18181b';
+            ctx.fillRect(0, i * bandH, 64, bandH);
+        }
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(1, 4);
+        return tex;
+    },
+
+    createAsphaltRoadTexture(orientation = 'z') {
+        if (typeof document === 'undefined' || typeof THREE === 'undefined') return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        // Base dark asphalt color
+        ctx.fillStyle = '#1e242b';
+        ctx.fillRect(0, 0, 512, 512);
+
+        // Aggregate noise speckles
+        for (let i = 0; i < 1800; i++) {
+            const x = (i * 137.5) % 512;
+            const y = (i * 293.7) % 512;
+            ctx.fillStyle = (i % 2 === 0) ? '#282f38' : '#161a20';
+            ctx.fillRect(x, y, 2, 2);
+        }
+
+        // Road markings
+        const isX = orientation === 'x';
+        ctx.fillStyle = '#f1f5f9';
+
+        if (isX) {
+            // Road along X: width along Y/Z
+            // Solid outer white edge lines
+            ctx.fillRect(0, 18, 512, 5);
+            ctx.fillRect(0, 512 - 23, 512, 5);
+
+            // Center dashed line
+            ctx.strokeStyle = '#f8fafc';
+            ctx.lineWidth = 5;
+            ctx.setLineDash([44, 28]);
+            ctx.beginPath();
+            ctx.moveTo(0, 256);
+            ctx.lineTo(512, 256);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        } else {
+            // Road along Z: width along X
+            // Solid outer white edge lines
+            ctx.fillRect(18, 0, 5, 512);
+            ctx.fillRect(512 - 23, 0, 5, 512);
+
+            // Center dashed line
+            ctx.strokeStyle = '#f8fafc';
+            ctx.lineWidth = 5;
+            ctx.setLineDash([44, 28]);
+            ctx.beginPath();
+            ctx.moveTo(256, 0);
+            ctx.lineTo(256, 512);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    },
+
+    createSidewalkTileTexture() {
+        if (typeof document === 'undefined' || typeof THREE === 'undefined') return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        // Dark grout mortar background
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(0, 0, 256, 256);
+
+        const gridSize = 4;
+        const cellSize = 256 / gridSize;
+        const pad = 3;
+
+        for (let r = 0; r < gridSize; r++) {
+            for (let c = 0; c < gridSize; c++) {
+                const x = c * cellSize + pad;
+                const y = r * cellSize + pad;
+                const w = cellSize - pad * 2;
+                const h = cellSize - pad * 2;
+
+                const tone = ((r * 3 + c * 7) % 5);
+                ctx.fillStyle = tone === 0 ? '#8fa0b5' : (tone === 1 ? '#9db0c6' : (tone === 2 ? '#94a3b8' : '#8a9bb0'));
+                ctx.fillRect(x, y, w, h);
+
+                // Bevel highlights
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+                ctx.fillRect(x, y, w, 2);
+                ctx.fillRect(x, y, 2, h);
+
+                ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+                ctx.fillRect(x, y + h - 2, w, 2);
+                ctx.fillRect(x + w - 2, y, 2, h);
+            }
+        }
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    },
+
+    createGrassTexture() {
+        if (typeof document === 'undefined' || typeof THREE === 'undefined') return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        // Base lush park lawn green
+        ctx.fillStyle = '#285e2b';
+        ctx.fillRect(0, 0, 256, 256);
+
+        // Lawn mower subtle alternating bands
+        const bands = 8;
+        const bandH = 256 / bands;
+        for (let i = 0; i < bands; i++) {
+            ctx.fillStyle = (i % 2 === 0) ? 'rgba(56, 130, 61, 0.25)' : 'rgba(31, 72, 33, 0.25)';
+            ctx.fillRect(0, i * bandH, 256, bandH);
+        }
+
+        // Natural grass blade organic speckles
+        for (let i = 0; i < 2200; i++) {
+            const x = (i * 97.3) % 256;
+            const y = (i * 181.7) % 256;
+            const tone = i % 4;
+            ctx.fillStyle = tone === 0 ? '#38823d' : (tone === 1 ? '#449e4a' : (tone === 2 ? '#1f4821' : '#307134'));
+            ctx.fillRect(x, y, 2, 3);
+        }
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    },
+
+    createPlazaPavingTexture() {
+        if (typeof document === 'undefined' || typeof THREE === 'undefined') return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        // Granite mortar joint color
+        ctx.fillStyle = '#44403c';
+        ctx.fillRect(0, 0, 256, 256);
+
+        // Decorative stone paving pattern
+        const gridSize = 4;
+        const cellSize = 256 / gridSize;
+        const pad = 2;
+
+        for (let r = 0; r < gridSize; r++) {
+            for (let c = 0; c < gridSize; c++) {
+                const x = c * cellSize + pad;
+                const y = r * cellSize + pad;
+                const w = cellSize - pad * 2;
+                const h = cellSize - pad * 2;
+
+                const tone = ((r * 5 + c * 9) % 4);
+                ctx.fillStyle = tone === 0 ? '#a8a29e' : (tone === 1 ? '#78716c' : (tone === 2 ? '#b8b2ad' : '#8c8580'));
+                ctx.fillRect(x, y, w, h);
+
+                // Subtle inner border
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+                ctx.fillRect(x, y, w, 2);
+                ctx.fillRect(x, y, 2, h);
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+                ctx.fillRect(x, y + h - 2, w, 2);
+                ctx.fillRect(x + w - 2, y, 2, h);
+            }
+        }
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    },
+
+    createLightPoolTexture(innerRgba = 'rgba(255, 250, 224, 0.55)', outerRgba = 'rgba(254, 240, 138, 0)') {
+        if (typeof document === 'undefined' || typeof THREE === 'undefined') return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+        grad.addColorStop(0, innerRgba);
+        grad.addColorStop(0.35, 'rgba(254, 243, 199, 0.35)');
+        grad.addColorStop(0.7, 'rgba(253, 224, 71, 0.12)');
+        grad.addColorStop(1, outerRgba);
+
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 128, 128);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        return tex;
     }
 };

@@ -1,3 +1,4 @@
+import { VehicleSnapshotBuffer, resetVehiclePose } from './vehicle-motion.js';
 import { MsgPackCodec } from './msgpack.js';
 import { GAME_STATE, computePedestrianAnim, deriveDefaultWsUrl, generateRandomVladivostokName, getInitialUsername } from './state.js';
 import { SoundManager } from './audio.js';
@@ -5,6 +6,7 @@ import { TextureFactory } from './textures.js';
 import { World } from './world.js';
 import { Player, toggleVehicleDrive, revalidatePlayerSpawn } from './entities.js';
 import { showToast, triggerPlayerSpeech } from './ui.js';
+import { ModelLoader, ModelBuilders } from './models.js';
 
 export function hashUsernameColor(username) {
     const palette = ['#38bdf8', '#fbbf24', '#34d399', '#f472b6', '#a78bfa', '#fb7185', '#2dd4bf'];
@@ -18,7 +20,7 @@ export function hashUsernameColor(username) {
 
 export const MultiplayerClient = {
     ws: null,
-    serverUrl: 'wss://nabka.melekhin.me/ws',
+    serverUrl: deriveDefaultWsUrl(),
     authMode: 'query', // 'query' (Option A) or 'register' (Option B)
     isLocalBridge: false,
     broadcastChannel: null,
@@ -126,15 +128,8 @@ export const MultiplayerClient = {
         const btnCollapseChat = document.getElementById('btn-collapse-chat');
         const btnToggleTopChat = document.getElementById('btn-toggle-mp-chat');
 
-        // Check for ?localhost=true query parameter to determine server URL
-        const urlParams = (typeof window !== 'undefined' && window.location && window.location.search)
-            ? new URLSearchParams(window.location.search)
-            : null;
-        if (urlParams && urlParams.get('localhost') === 'true') {
-            this.serverUrl = deriveDefaultWsUrl(window.location);
-        } else {
-            this.serverUrl = 'wss://nabka.melekhin.me/ws';
-        }
+        // Gameplay and version checks must use the server serving this page.
+        this.serverUrl = deriveDefaultWsUrl();
         this.authMode = 'query';
 
         // Restore last used username if available, or generate random placeholder name
@@ -264,6 +259,8 @@ export const MultiplayerClient = {
         const box = document.getElementById('mp-login-error');
         const txt = document.getElementById('mp-login-error-text');
         const det = document.getElementById('mp-login-error-details');
+        const diagnostics = document.getElementById('mp-login-error-diagnostics');
+        if (diagnostics) diagnostics.classList.toggle('hidden', !detail);
         if (txt) txt.textContent = msg;
         if (det) {
             if (detail) {
@@ -640,7 +637,7 @@ export const MultiplayerClient = {
                 this.onlineUsers.delete(user);
                 this.removeRemotePlayer(user);
                 this.updateOnlineRosterUI();
-                const reasonRu = reason.includes('30s') ? 'кик за 30с АФК' : (reason === 'slow consumer' ? 'медленное соединение' : 'вышел');
+                const reasonRu = reason.includes('30s') ? 'соединение не отвечает' : (reason === 'slow consumer' ? 'медленное соединение' : 'вышел');
                 showToast(`🔴 @${user} покинул Набку (${reasonRu})`, 'amber');
                 this.appendChatSystemMessage(`🔴 @${user} покинул Набку (${reasonRu})`);
                 break;
@@ -670,7 +667,14 @@ export const MultiplayerClient = {
                             }
                             car.group.position.set(Number(msg.x) || 0, Number(msg.y) || 0.02, Number(msg.z) || 0);
                             car.group.rotation.y = Number(msg.yaw) || 0;
-                            car.speed = 0;
+                            car.x = car.group.position.x;
+                            car.y = car.group.position.y;
+                            car.z = car.group.position.z;
+                            car.yaw = car.group.rotation.y;
+                            car.vx = car.vz = car.yawRate = car.speed = 0;
+                            car.isAwake = false;
+                            car.snapshotBuffer = null;
+                            resetVehiclePose(car);
                             if (car.headBeam) {
                                 car.headBeam.intensity = msg.lights ? 1.8 : 0;
                             }
@@ -738,72 +742,32 @@ export const MultiplayerClient = {
         let speechBubble = null;
 
         if (typeof THREE !== 'undefined' && World.scene) {
-            group = new THREE.Group();
+            group = ModelLoader.instantiate('models/player.glb', () => ModelBuilders.player(username, accentHex));
             group.position.set(0, 0, 18);
 
             const shirtTex = TextureFactory.createCustomShirtTexture(username, accentHex);
-            const torsoMat = new THREE.MeshStandardMaterial({ map: shirtTex, roughness: 0.5 });
-            const skinMat = new THREE.MeshStandardMaterial({ color: 0xf1c27d, roughness: 0.6 });
-            const jeansMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7 });
-            const shoeMat = new THREE.MeshStandardMaterial({ color: accentColorInt, roughness: 0.4 });
-
-            const torso = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.15, 0.52), torsoMat);
-            torso.position.y = 1.48;
-            torso.castShadow = true;
-            group.add(torso);
-
-            head = new THREE.Group();
-            head.position.set(0, 2.32, 0);
-            const headMesh = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.56, 0.56), skinMat);
-            headMesh.castShadow = true;
-            head.add(headMesh);
-
-            const capMat = new THREE.MeshStandardMaterial({ color: accentColorInt, roughness: 0.4 });
-            const capCrown = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.22, 0.6), capMat);
-            capCrown.position.y = 0.24;
-            head.add(capCrown);
-
-            const capVisor = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.08, 0.35), capMat);
-            capVisor.position.set(0, 0.16, 0.38);
-            head.add(capVisor);
-
-            const glasses = new THREE.Mesh(
-                new THREE.BoxGeometry(0.58, 0.14, 0.12),
-                new THREE.MeshStandardMaterial({ color: 0x090d16, metalness: 0.9, roughness: 0.1 })
-            );
-            glasses.position.set(0, 0.04, 0.26);
-            head.add(glasses);
-            group.add(head);
-
-            const makeLimb = (w, h, d, mat, shoe = null) => {
-                const pivot = new THREE.Group();
-                const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-                mesh.position.y = -h / 2;
-                mesh.castShadow = true;
-                pivot.add(mesh);
-                if (shoe) {
-                    const sneaker = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.22, d + 0.16), shoe);
-                    sneaker.position.set(0, -h + 0.11, 0.06);
-                    pivot.add(sneaker);
+            const torso = group.getObjectByName ? group.getObjectByName('torso') : null;
+            if (torso && torso.material) {
+                if (torso.material.map && torso.material.map.flipY === false) {
+                    shirtTex.flipY = false;
                 }
-                return pivot;
-            };
+                torso.material = torso.material.clone();
+                torso.material.map = shirtTex;
+                torso.material.needsUpdate = true;
+            }
+            ['capCrown', 'capVisor', 'leftLeg_shoe', 'rightLeg_shoe'].forEach(nodeName => {
+                const n = group.getObjectByName ? group.getObjectByName(nodeName) : null;
+                if (n && n.material) {
+                    n.material = n.material.clone();
+                    n.material.color.setHex(accentColorInt);
+                }
+            });
 
-            leftArm = makeLimb(0.28, 0.95, 0.28, new THREE.MeshStandardMaterial({ color: 0x0f172a }));
-            leftArm.position.set(0.6, 1.95, 0);
-            group.add(leftArm);
-
-            rightArm = makeLimb(0.28, 0.95, 0.28, new THREE.MeshStandardMaterial({ color: 0x0f172a }));
-            rightArm.position.set(-0.6, 1.95, 0);
-            group.add(rightArm);
-
-            leftLeg = makeLimb(0.34, 0.9, 0.34, jeansMat, shoeMat);
-            leftLeg.position.set(0.23, 0.9, 0);
-            group.add(leftLeg);
-
-            rightLeg = makeLimb(0.34, 0.9, 0.34, jeansMat, shoeMat);
-            rightLeg.position.set(-0.23, 0.9, 0);
-            group.add(rightLeg);
+            head = (group.getObjectByName && group.getObjectByName('head')) || new THREE.Group();
+            leftArm = (group.getObjectByName && group.getObjectByName('leftArm')) || new THREE.Group();
+            rightArm = (group.getObjectByName && group.getObjectByName('rightArm')) || new THREE.Group();
+            leftLeg = (group.getObjectByName && group.getObjectByName('leftLeg')) || new THREE.Group();
+            rightLeg = (group.getObjectByName && group.getObjectByName('rightLeg')) || new THREE.Group();
 
             World.scene.add(group);
         } else {
@@ -880,6 +844,10 @@ export const MultiplayerClient = {
                         if (prevCar && prevCar.remoteDriver === this.username) {
                             prevCar.remoteDriver = null;
                             prevCar.netTarget = null;
+                            prevCar.snapshotBuffer = null;
+                            prevCar.vx = prevCar.vz = prevCar.yawRate = prevCar.speed = 0;
+                            prevCar.isAwake = false;
+                            resetVehiclePose(prevCar);
                         }
                     }
                     this.mode = 'driving';
@@ -892,6 +860,10 @@ export const MultiplayerClient = {
                             showToast(`⚠️ Машина занята игроком @${this.username}!`, 'amber');
                             toggleVehicleDrive(car, (force) => MultiplayerClient.sendMoveSnapshot(force));
                         }
+                        if (car.remoteDriver !== this.username || !car.snapshotBuffer) {
+                            car.snapshotBuffer = new VehicleSnapshotBuffer();
+                        }
+                        if (!car.snapshotBuffer.push(msg, now)) return;
                         car.remoteDriver = this.username;
                         car.netTarget = {
                             x: Number(msg.x) || 0,
@@ -903,11 +875,6 @@ export const MultiplayerClient = {
                             lights: msg.lights !== undefined ? Boolean(msg.lights) : true,
                             timestamp: now
                         };
-                        const distSq = (car.group.position.x - car.netTarget.x) ** 2 + (car.group.position.z - car.netTarget.z) ** 2;
-                        if (distSq > 100) {
-                            car.group.position.set(car.netTarget.x, car.netTarget.y, car.netTarget.z);
-                            car.group.rotation.y = car.netTarget.yaw;
-                        }
                         this.target.x = car.netTarget.x;
                         this.target.y = car.netTarget.y;
                         this.target.z = car.netTarget.z;
@@ -918,6 +885,10 @@ export const MultiplayerClient = {
                         if (prevCar && prevCar.remoteDriver === this.username) {
                             prevCar.remoteDriver = null;
                             prevCar.netTarget = null;
+                            prevCar.snapshotBuffer = null;
+                            prevCar.vx = prevCar.vz = prevCar.yawRate = prevCar.speed = 0;
+                            prevCar.isAwake = false;
+                            resetVehiclePose(prevCar);
                         }
                         this.carId = null;
                     }
@@ -1012,6 +983,10 @@ export const MultiplayerClient = {
             if (car && car.remoteDriver === username) {
                 car.remoteDriver = null;
                 car.netTarget = null;
+                car.snapshotBuffer = null;
+                car.vx = car.vz = car.yawRate = car.speed = 0;
+                car.isAwake = false;
+                resetVehiclePose(car);
             }
         }
         if (rp.group) {
@@ -1176,11 +1151,14 @@ export const MultiplayerClient = {
                 type: 'move',
                 mode: 'driving',
                 car_id: car.id,
-                x: Number(car.group.position.x.toFixed(3)),
-                y: Number(car.group.position.y.toFixed(3)),
-                z: Number(car.group.position.z.toFixed(3)),
+                x: Number((car.x ?? car.group.position.x).toFixed(3)),
+                y: Number((car.y ?? car.group.position.y).toFixed(3)),
+                z: Number((car.z ?? car.group.position.z).toFixed(3)),
                 speed: Number(car.speed.toFixed(2)),
-                yaw: Number(car.group.rotation.y.toFixed(3)),
+                vx: car.vx || 0,
+                vz: car.vz || 0,
+                yaw_rate: car.yawRate || 0,
+                yaw: Number((car.yaw ?? car.group.rotation.y).toFixed(3)),
                 drift: Boolean(isDrifting),
                 lights: Boolean(GAME_STATE.headlightsOn)
             };
@@ -1190,6 +1168,9 @@ export const MultiplayerClient = {
                 Math.abs(this.lastSentState.x - state.x) > 0.02 ||
                 Math.abs(this.lastSentState.z - state.z) > 0.02 ||
                 Math.abs(this.lastSentState.yaw - state.yaw) > 0.015 ||
+                Math.abs((this.lastSentState.vx || 0) - state.vx) > 0.05 ||
+                Math.abs((this.lastSentState.vz || 0) - state.vz) > 0.05 ||
+                Math.abs((this.lastSentState.yaw_rate || 0) - state.yaw_rate) > 0.01 ||
                 this.lastSentState.lights !== state.lights ||
                 this.lastSentState.drift !== state.drift;
 

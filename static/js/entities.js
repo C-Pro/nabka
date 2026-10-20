@@ -1,9 +1,11 @@
+import { renderVehiclePose, resetVehiclePose } from './vehicle-motion.js';
 import { GAME_STATE, isGameplayInputSuspended } from './state.js';
-import { PhysicsEngine, stepVehicleDynamics, stepWorldVehiclePhysics, resolveVehicleToVehicleCollisions, resolveVehicleWorldCollision, getVehicleCollisionCircles, CAR_SPECS } from './physics.js';
+import { PhysicsEngine, WorldVehiclePhysics, stepWorldVehiclePhysics, getVehicleCollisionCircles } from './physics.js';
 import { TextureFactory } from './textures.js';
 import { SoundManager } from './audio.js';
 import { World } from './world.js';
 import { completePOI, triggerPlayerSpeech, showToast, closeNpcDialogue } from './ui.js';
+import { ModelLoader, ModelBuilders } from './models.js';
 
 export const Player = {
     group: null,
@@ -26,77 +28,28 @@ export const Player = {
         this.position = new THREE.Vector3(sx, sy, sz);
         this.velocity = new THREE.Vector3(0, 0, 0);
         this.rotationY = (spawnPos && spawnPos.yaw !== undefined) ? spawnPos.yaw : Math.PI;
-        this.group = new THREE.Group();
+
+        const username = GAME_STATE.username || 'Игрок';
+        this.group = ModelLoader.instantiate('models/player.glb', () => ModelBuilders.player(username, '#38bdf8'));
         this.group.position.copy(this.position);
         this.group.rotation.y = this.rotationY;
 
-        const shirtTex = TextureFactory.createPlayerShirtTexture(GAME_STATE.username || 'Игрок', '#38bdf8');
-        const torsoMat = new THREE.MeshStandardMaterial({ map: shirtTex, roughness: 0.5 });
-        const skinMat = new THREE.MeshStandardMaterial({ color: 0xf1c27d, roughness: 0.6 });
-        const jeansMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7 });
-        const shoeMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.4 });
-
-        const torso = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.15, 0.52), torsoMat);
-        torso.position.y = 1.48;
-        torso.castShadow = true;
-        this.group.add(torso);
-
-        this.head = new THREE.Group();
-        this.head.position.set(0, 2.32, 0);
-
-        const headMesh = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.56, 0.56), skinMat);
-        headMesh.castShadow = true;
-        this.head.add(headMesh);
-
-        const capMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.4 });
-        const capCrown = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.22, 0.6), capMat);
-        capCrown.position.y = 0.24;
-        this.head.add(capCrown);
-
-        const capVisor = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.08, 0.35), capMat);
-        capVisor.position.set(0, 0.16, 0.38);
-        this.head.add(capVisor);
-
-        const glasses = new THREE.Mesh(
-            new THREE.BoxGeometry(0.58, 0.14, 0.12),
-            new THREE.MeshStandardMaterial({ color: 0x090d16, metalness: 0.9, roughness: 0.1 })
-        );
-        glasses.position.set(0, 0.04, 0.26);
-        this.head.add(glasses);
-
-        this.group.add(this.head);
-
-        const makeLimb = (w, h, d, mat, shoe = null) => {
-            const pivot = new THREE.Group();
-            const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-            mesh.position.y = -h / 2;
-            mesh.castShadow = true;
-            pivot.add(mesh);
-
-            if (shoe) {
-                const sneaker = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.22, d + 0.16), shoe);
-                sneaker.position.set(0, -h + 0.11, 0.06);
-                sneaker.castShadow = true;
-                pivot.add(sneaker);
+        const torso = this.group.getObjectByName ? this.group.getObjectByName('torso') : null;
+        if (torso && torso.material) {
+            const shirtTex = TextureFactory.createPlayerShirtTexture(username, '#38bdf8');
+            if (torso.material.map && torso.material.map.flipY === false) {
+                shirtTex.flipY = false;
             }
-            return pivot;
-        };
+            torso.material = torso.material.clone();
+            torso.material.map = shirtTex;
+            torso.material.needsUpdate = true;
+        }
 
-        this.leftArm = makeLimb(0.28, 0.95, 0.28, new THREE.MeshStandardMaterial({ color: 0x0f172a }));
-        this.leftArm.position.set(0.6, 1.95, 0);
-        this.group.add(this.leftArm);
-
-        this.rightArm = makeLimb(0.28, 0.95, 0.28, new THREE.MeshStandardMaterial({ color: 0x0f172a }));
-        this.rightArm.position.set(-0.6, 1.95, 0);
-        this.group.add(this.rightArm);
-
-        this.leftLeg = makeLimb(0.34, 0.9, 0.34, jeansMat, shoeMat);
-        this.leftLeg.position.set(0.23, 0.9, 0);
-        this.group.add(this.leftLeg);
-
-        this.rightLeg = makeLimb(0.34, 0.9, 0.34, jeansMat, shoeMat);
-        this.rightLeg.position.set(-0.23, 0.9, 0);
-        this.group.add(this.rightLeg);
+        this.head = (this.group.getObjectByName && this.group.getObjectByName('head')) || new THREE.Group();
+        this.leftArm = (this.group.getObjectByName && this.group.getObjectByName('leftArm')) || new THREE.Group();
+        this.rightArm = (this.group.getObjectByName && this.group.getObjectByName('rightArm')) || new THREE.Group();
+        this.leftLeg = (this.group.getObjectByName && this.group.getObjectByName('leftLeg')) || new THREE.Group();
+        this.rightLeg = (this.group.getObjectByName && this.group.getObjectByName('rightLeg')) || new THREE.Group();
 
         scene.add(this.group);
     },
@@ -161,10 +114,14 @@ export const Player = {
             this.velocity.y -= 26 * dt;
         }
 
+        const pBounds = (World.worldMap && World.worldMap.bounds && World.worldMap.bounds.player)
+            ? World.worldMap.bounds.player
+            : { minX: -46, maxX: 294, minZ: -170, maxZ: 170 };
+
         const candidatePos = new THREE.Vector3(
-            Math.max(-46, Math.min(48, this.position.x + this.velocity.x * dt)),
+            Math.max(pBounds.minX, Math.min(pBounds.maxX, this.position.x + this.velocity.x * dt)),
             this.position.y,
-            Math.max(-155, Math.min(155, this.position.z + this.velocity.z * dt))
+            Math.max(pBounds.minZ, Math.min(pBounds.maxZ, this.position.z + this.velocity.z * dt))
         );
 
         PhysicsEngine.resolveWorldCollision(candidatePos, 0.52, this.position.y);
@@ -296,108 +253,13 @@ export const Dunya = {
         this.position = new THREE.Vector3(dx, 0, dz);
         this.velocity = new THREE.Vector3(0, 0, 0);
         this.rotationY = startYaw !== null ? startYaw : Math.PI;
-        this.group = new THREE.Group();
+        this.group = ModelLoader.instantiate('models/dunya.glb', () => ModelBuilders.dunya());
         this.group.position.copy(this.position);
         this.group.rotation.y = this.rotationY;
 
-        const whiteFurMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 });
-        const snowFluffMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.9 });
-        const darkEyeMat = new THREE.MeshStandardMaterial({ color: 0x090d16, roughness: 0.15 });
-        const pinkBowMat = new THREE.MeshStandardMaterial({ color: 0xf43f5e, roughness: 0.4 });
-        const pinkTongueMat = new THREE.MeshStandardMaterial({ color: 0xfb7185, roughness: 0.5 });
-        const goldMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.85, roughness: 0.2 });
-
-        const torso = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.32, 0.64), whiteFurMat);
-        torso.position.set(0, 0.34, 0);
-        torso.castShadow = true;
-        this.group.add(torso);
-
-        const chestFluff = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 10), snowFluffMat);
-        chestFluff.scale.set(1.0, 0.95, 0.9);
-        chestFluff.position.set(0, 0.36, 0.25);
-        this.group.add(chestFluff);
-
-        const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.18, 0.06, 12), pinkBowMat);
-        collar.rotation.x = 0.35;
-        collar.position.set(0, 0.45, 0.24);
-        this.group.add(collar);
-
-        const medal = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), goldMat);
-        medal.position.set(0, 0.39, 0.38);
-        this.group.add(medal);
-
-        this.headGroup = new THREE.Group();
-        this.headGroup.position.set(0, 0.58, 0.30);
-
-        const skull = new THREE.Mesh(new THREE.SphereGeometry(0.21, 12, 12), whiteFurMat);
-        skull.scale.set(1.05, 0.98, 1.0);
-        skull.castShadow = true;
-        this.headGroup.add(skull);
-
-        const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, 0.16), snowFluffMat);
-        muzzle.position.set(0, -0.03, 0.17);
-        this.headGroup.add(muzzle);
-
-        const nose = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), darkEyeMat);
-        nose.position.set(0, 0.01, 0.25);
-        this.headGroup.add(nose);
-
-        const tongue = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.03), pinkTongueMat);
-        tongue.rotation.x = 0.35;
-        tongue.position.set(0, -0.08, 0.23);
-        this.headGroup.add(tongue);
-
-        [-0.085, 0.085].forEach(ex => {
-            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.032, 8, 8), darkEyeMat);
-            eye.position.set(ex, 0.05, 0.18);
-            this.headGroup.add(eye);
-        });
-
-        [-0.19, 0.19].forEach(earX => {
-            const ear = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.22, 0.14), snowFluffMat);
-            ear.position.set(earX, -0.02, 0.02);
-            ear.rotation.z = earX > 0 ? -0.22 : 0.22;
-            this.headGroup.add(ear);
-        });
-
-        const topknot = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), whiteFurMat);
-        topknot.position.set(0, 0.22, 0.02);
-        this.headGroup.add(topknot);
-
-        const bowLeft = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.055, 0.04), pinkBowMat);
-        bowLeft.position.set(-0.045, 0.18, 0.08);
-        bowLeft.rotation.z = 0.25;
-        const bowRight = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.055, 0.04), pinkBowMat);
-        bowRight.position.set(0.045, 0.18, 0.08);
-        bowRight.rotation.z = -0.25;
-        this.headGroup.add(bowLeft, bowRight);
-
-        this.group.add(this.headGroup);
-
-        this.tailPivot = new THREE.Group();
-        this.tailPivot.position.set(0, 0.44, -0.30);
-        const tailPlume = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 8), whiteFurMat);
-        tailPlume.scale.set(0.85, 1.35, 1.1);
-        tailPlume.position.set(0, 0.10, -0.04);
-        this.tailPivot.add(tailPlume);
-        this.group.add(this.tailPivot);
-
-        const legPositions = [
-            [-0.12, 0.22, 0.20],
-            [0.12, 0.22, 0.20],
-            [-0.12, 0.22, -0.20],
-            [0.12, 0.22, -0.20]
-        ];
-        this.legs = legPositions.map(([lx, ly, lz]) => {
-            const pivot = new THREE.Group();
-            pivot.position.set(lx, ly, lz);
-            const legMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.075, 0.22, 8), whiteFurMat);
-            legMesh.position.y = -0.11;
-            legMesh.castShadow = true;
-            pivot.add(legMesh);
-            this.group.add(pivot);
-            return pivot;
-        });
+        this.headGroup = (this.group.getObjectByName && this.group.getObjectByName('headGroup')) || new THREE.Group();
+        this.tailPivot = (this.group.getObjectByName && this.group.getObjectByName('tailPivot')) || new THREE.Group();
+        this.legs = [0, 1, 2, 3].map(idx => (this.group.getObjectByName && this.group.getObjectByName(`leg_${idx}`)) || new THREE.Group());
 
         scene.add(this.group);
     },
@@ -532,54 +394,19 @@ export const Dunya = {
     }
 };
 
-export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = null, customId = null) {
-    const group = new THREE.Group();
+export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = null, customId = null, modelUrl = null) {
+    const carId = customId || ('car_' + World.vehicles.length);
+    const resolvedModelUrl = modelUrl || `models/${carId}.glb`;
+    const group = ModelLoader.instantiate(resolvedModelUrl, () => ModelBuilders.car(colorHex, carId));
     group.position.set(x, 0.02, z);
     group.rotation.y = rotY;
 
-    const bodyMat = new THREE.MeshStandardMaterial({ color: colorHex, metalness: 0.7, roughness: 0.25 });
-    const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.75, 4.9), bodyMat);
-    chassis.position.y = 0.65;
-    chassis.castShadow = true;
-    group.add(chassis);
-
-    const cabin = new THREE.Mesh(
-        new THREE.BoxGeometry(1.95, 0.65, 2.4),
-        new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.8, roughness: 0.15 })
-    );
-    cabin.position.set(0, 1.3, -0.2);
-    group.add(cabin);
-
-    const spoiler = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.12, 0.45), bodyMat);
-    spoiler.position.set(0, 1.18, -2.25);
-    group.add(spoiler);
-
-    const headMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
-    const tailMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
-    [-0.75, 0.75].forEach(lx => {
-        const hl = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.2, 0.1), headMat);
-        hl.position.set(lx, 0.7, 2.46);
-        group.add(hl);
-
-        const tl = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.2, 0.1), tailMat);
-        tl.position.set(lx, 0.75, -2.46);
-        group.add(tl);
-    });
-
     const headBeam = new THREE.SpotLight(0xfef08a, 1.8, 36, Math.PI / 5, 0.45, 1.2);
+    headBeam.name = 'headBeam';
     headBeam.position.set(0, 0.85, 2.4);
     headBeam.target.position.set(0, 0.2, 16);
     group.add(headBeam);
     group.add(headBeam.target);
-
-    const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.32, 16);
-    wheelGeo.rotateZ(Math.PI / 2);
-    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.7 });
-    [[-1.15, 1.5], [1.15, 1.5], [-1.15, -1.5], [1.15, -1.5]].forEach(([wx, wz]) => {
-        const w = new THREE.Mesh(wheelGeo, wheelMat);
-        w.position.set(wx, 0.42, wz);
-        group.add(w);
-    });
 
     World.scene.add(group);
 
@@ -591,7 +418,7 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
     else if (name.includes('RX-7') || name.includes('FD3S')) mass = 1280;
 
     const carObj = {
-        id: customId || ('car_' + World.vehicles.length),
+        id: carId,
         name,
         group,
         headBeam,
@@ -634,149 +461,14 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
             this.steering = 0;
             this.remoteDriver = null;
             this.netTarget = null;
+            this.snapshotBuffer = null;
+            resetVehiclePose(this);
             if (this.group && this.group.position) {
                 this.group.position.set(this.spawnX, this.spawnY || 0.02, this.spawnZ);
                 this.group.rotation.y = this.spawnRotY || 0;
             }
             if (this.headBeam) {
                 this.headBeam.intensity = 0;
-            }
-        },
-        update(dt) {
-            if (GAME_STATE.inVehicle === this) {
-                this.remoteDriver = null;
-
-                let throttle = 0;
-                let turn = 0;
-                let isSpace = false;
-                let isBoostActive = false;
-
-                if (!isGameplayInputSuspended()) {
-                    if (GAME_STATE.keys.w || GAME_STATE.joystickVector.y < -0.2) throttle += 1;
-                    if (GAME_STATE.keys.s || GAME_STATE.joystickVector.y > 0.2) throttle -= 1;
-
-                    if (GAME_STATE.keys.a || GAME_STATE.joystickVector.x < -0.2) turn += 1;
-                    if (GAME_STATE.keys.d || GAME_STATE.joystickVector.x > 0.2) turn -= 1;
-
-                    isBoostActive = GAME_STATE.keys.shift || GAME_STATE.joystickSprint;
-                    isSpace = GAME_STATE.keys.space;
-                }
-
-                const input = {
-                    throttle,
-                    steer: turn,
-                    handbrake: isSpace,
-                    boost: isBoostActive
-                };
-
-                // Advance realistic vehicle dynamics
-                stepVehicleDynamics(this, input, dt);
-
-                // Spawn drift & braking smoke at rear tires
-                if (this.isDrifting || this.isBraking) {
-                    const rearX = this.x - Math.sin(this.yaw) * 2.1;
-                    const rearZ = this.z - Math.cos(this.yaw) * 2.1;
-                    World.spawnDriftSmoke(rearX, rearZ);
-                }
-
-                SoundManager.updateVehicleAudio(this, throttle !== 0, this.isBraking, this.isDrifting, isBoostActive);
-
-                // Multi-vehicle impulse collisions (with linear and angular impulse transfer)
-                const collEvents = resolveVehicleToVehicleCollisions(World.vehicles, dt);
-                for (const ev of collEvents) {
-                    if (ev.carA === this || ev.carB === this) {
-                        const intensity = Math.min(35, Math.abs(ev.impulse) / 750);
-                        if (intensity > 2.0) {
-                            SoundManager.playCrashSound(intensity);
-                            World.spawnDriftSmoke(ev.contactX, ev.contactZ);
-                        }
-                    }
-                }
-
-                // World collisions & boundaries
-                const bounds = { minX: -13, maxX: 44, minZ: -150, maxZ: 150 };
-                const hitWorld = resolveVehicleWorldCollision(this, PhysicsEngine, bounds);
-                if (hitWorld && Math.abs(this.speed) > 2.5) {
-                    SoundManager.playCrashSound(Math.abs(this.speed));
-                    const frontX = this.x + Math.sin(this.yaw) * 2.0;
-                    const frontZ = this.z + Math.cos(this.yaw) * 2.0;
-                    World.spawnDriftSmoke(frontX, frontZ);
-                }
-
-                // Push NPCs away from car circles
-                const circles = getVehicleCollisionCircles(this);
-                if (Array.isArray(World.npcs)) {
-                    for (const npc of World.npcs) {
-                        const npcX = npc.group ? npc.group.position.x : (npc.position ? npc.position.x : 0);
-                        const npcZ = npc.group ? npc.group.position.z : (npc.position ? npc.position.z : 0);
-                        for (const c of circles) {
-                            const dx = npcX - c.x;
-                            const dz = npcZ - c.z;
-                            const dist = Math.hypot(dx, dz);
-                            const minDist = c.radius + 0.55;
-                            if (dist < minDist && dist > 0.0001) {
-                                const push = minDist - dist;
-                                const nx = dx / dist;
-                                const nz = dz / dist;
-                                if (npc.group && npc.group.position) {
-                                    npc.group.position.x += nx * push;
-                                    npc.group.position.z += nz * push;
-                                }
-                                if (npc.position) {
-                                    npc.position.x += nx * push;
-                                    npc.position.z += nz * push;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Synchronize 3D visuals
-                if (this.group && this.group.position) {
-                    this.group.position.x = this.x;
-                    this.group.position.z = this.z;
-                    this.group.rotation.y = this.yaw;
-                }
-            } else if (this.remoteDriver && this.netTarget) {
-                const ageSec = Math.min(0.25, (performance.now() - this.netTarget.timestamp) / 1000);
-                const predictedX = this.netTarget.x + Math.sin(this.netTarget.yaw) * this.netTarget.speed * ageSec * 0.35;
-                const predictedZ = this.netTarget.z + Math.cos(this.netTarget.yaw) * this.netTarget.speed * ageSec * 0.35;
-
-                this.group.position.x += (predictedX - this.group.position.x) * Math.min(1, dt * 14);
-                this.group.position.y += (this.netTarget.y - this.group.position.y) * Math.min(1, dt * 14);
-                this.group.position.z += (predictedZ - this.group.position.z) * Math.min(1, dt * 14);
-
-                let yawDiff = this.netTarget.yaw - this.group.rotation.y;
-                yawDiff = Math.atan2(Math.sin(yawDiff), Math.cos(yawDiff));
-                this.group.rotation.y += yawDiff * Math.min(1, dt * 14);
-
-                this.x = this.group.position.x;
-                this.z = this.group.position.z;
-                this.yaw = this.group.rotation.y;
-                this.speed = this.netTarget.speed;
-
-                if (this.headBeam) {
-                    this.headBeam.intensity = this.netTarget.lights ? 1.8 : 0;
-                }
-                if (this.netTarget.drift && Math.abs(this.speed) > 3) {
-                    const rearX = this.group.position.x - Math.sin(this.group.rotation.y) * 2.1;
-                    const rearZ = this.group.position.z - Math.cos(this.group.rotation.y) * 2.1;
-                    World.spawnDriftSmoke(rearX, rearZ);
-                }
-            } else {
-                // Unoccupied car: if awake (e.g. struck by another vehicle), it rolls and rotates
-                if (this.isAwake) {
-                    stepVehicleDynamics(this, null, dt);
-                    const bounds = { minX: -13, maxX: 44, minZ: -150, maxZ: 150 };
-                    resolveVehicleWorldCollision(this, PhysicsEngine, bounds);
-                    if (this.group && this.group.position) {
-                        this.group.position.x = this.x;
-                        this.group.position.z = this.z;
-                        this.group.rotation.y = this.yaw;
-                    }
-                } else {
-                    this.speed = 0;
-                }
             }
         }
     };
@@ -827,11 +519,8 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         leavingVehicle.isAwake = false;
         leavingVehicle.isDrifting = false;
         leavingVehicle.isBraking = false;
-        if (leavingVehicle.group && leavingVehicle.group.position) {
-            leavingVehicle.x = leavingVehicle.group.position.x;
-            leavingVehicle.z = leavingVehicle.group.position.z;
-            leavingVehicle.yaw = leavingVehicle.group.rotation.y;
-        }
+        resetVehiclePose(leavingVehicle);
+
         if (onSendSnapshot) onSendSnapshot(true);
 
         const exitX = leavingVehicle.group.position.x - 2.6;
@@ -858,6 +547,9 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         }
         if (GAME_STATE.activeNpcChat) closeNpcDialogue();
         GAME_STATE.inVehicle = carObj;
+        carObj.snapshotBuffer = null;
+        carObj.remoteDriver = null;
+        resetVehiclePose(carObj);
         if (badge) {
             badge.textContent = 'ПРАВЫЙ РУЛЬ';
             badge.className = 'bg-amber-500/20 text-amber-300 border border-amber-400/30 px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold truncate max-w-[85px] sm:max-w-none';
@@ -903,6 +595,15 @@ export function updateWorldVehicles(dt, worldMap = null) {
     }
 
     const bounds = (worldMap && worldMap.bounds && worldMap.bounds.vehicle) ? worldMap.bounds.vehicle : { minX: -13, maxX: 44, minZ: -150, maxZ: 150 };
+
+    // Sample network-controlled bodies before collision queries, never deriving
+    // their velocities from smoothed mesh positions.
+    for (const car of World.vehicles) {
+        if (!car.remoteDriver || !car.snapshotBuffer) continue;
+        const pose = car.snapshotBuffer.sample(performance.now());
+        if (pose) Object.assign(car, { x: pose.x, y: pose.y, z: pose.z, yaw: pose.yaw,
+            vx: pose.vx, vz: pose.vz, yawRate: pose.yawRate, speed: pose.speed });
+    }
 
     // Advance fixed-step world physics for all vehicles, resolving car-to-car and obstacle collisions iteratively
     const events = stepWorldVehiclePhysics(World.vehicles, dt, PhysicsEngine, bounds, GAME_STATE.inVehicle, input);
@@ -955,38 +656,14 @@ export function updateWorldVehicles(dt, worldMap = null) {
             }
 
             if (car.group && car.group.position) {
-                car.group.position.x = car.x;
-                car.group.position.z = car.z;
-                car.group.rotation.y = car.yaw;
+                const pose = renderVehiclePose(car, WorldVehiclePhysics.alpha);
+                car.group.position.x = pose.x;
+                car.group.position.z = pose.z;
+                car.group.rotation.y = pose.yaw;
             }
         } else if (car.remoteDriver && car.netTarget) {
-            const ageSec = Math.min(0.25, (performance.now() - car.netTarget.timestamp) / 1000);
-            const predictedX = car.netTarget.x + Math.sin(car.netTarget.yaw) * car.netTarget.speed * ageSec * 0.35;
-            const predictedZ = car.netTarget.z + Math.cos(car.netTarget.yaw) * car.netTarget.speed * ageSec * 0.35;
-
-            const prevX = (car.x !== undefined) ? car.x : car.group.position.x;
-            const prevZ = (car.z !== undefined) ? car.z : car.group.position.z;
-            const prevYaw = (car.yaw !== undefined) ? car.yaw : car.group.rotation.y;
-
-            car.group.position.x += (predictedX - car.group.position.x) * Math.min(1, dt * 14);
-            car.group.position.y += (car.netTarget.y - car.group.position.y) * Math.min(1, dt * 14);
-            car.group.position.z += (predictedZ - car.group.position.z) * Math.min(1, dt * 14);
-
-            let yawDiff = car.netTarget.yaw - car.group.rotation.y;
-            yawDiff = Math.atan2(Math.sin(yawDiff), Math.cos(yawDiff));
-            car.group.rotation.y += yawDiff * Math.min(1, dt * 14);
-
-            car.x = car.group.position.x;
-            car.z = car.group.position.z;
-            car.yaw = car.group.rotation.y;
-            car.speed = car.netTarget.speed;
-
-            const safeDt = Math.max(0.001, dt);
-            car.vx = (car.x - prevX) / safeDt;
-            car.vz = (car.z - prevZ) / safeDt;
-            let actualYawDiff = car.yaw - prevYaw;
-            actualYawDiff = Math.atan2(Math.sin(actualYawDiff), Math.cos(actualYawDiff));
-            car.yawRate = actualYawDiff / safeDt;
+            car.group.position.set(car.x, car.y, car.z);
+            car.group.rotation.y = car.yaw;
 
             if (car.headBeam) {
                 car.headBeam.intensity = car.netTarget.lights ? 1.8 : 0;
@@ -999,9 +676,10 @@ export function updateWorldVehicles(dt, worldMap = null) {
         } else {
             // Unoccupied car: sync visuals
             if (car.group && car.group.position) {
-                car.group.position.x = car.x;
-                car.group.position.z = car.z;
-                car.group.rotation.y = car.yaw;
+                const pose = renderVehiclePose(car, WorldVehiclePhysics.alpha);
+                car.group.position.x = pose.x;
+                car.group.position.z = pose.z;
+                car.group.rotation.y = pose.yaw;
             }
         }
     }
@@ -1026,7 +704,10 @@ export function initPromenadeNPCs(dialoguePool = [], npcConfig = {}) {
     for (let i = 0; i < count; i++) {
         const persona = dialoguePool[i % dialoguePool.length];
         if (!persona) continue;
-        const g = (typeof THREE !== 'undefined') ? new THREE.Group() : { position: { x: 0, y: 0, z: 0 }, rotation: { y: 0 }, add() {} };
+        const npcColor = colors[i % colors.length];
+        const g = (typeof THREE !== 'undefined')
+            ? ModelLoader.instantiate('models/npc.glb', () => ModelBuilders.npc(npcColor))
+            : { position: { x: 0, y: 0, z: 0 }, rotation: { y: 0 }, add() {} };
         const startZ = -110 + i * 16;
         const laneX = -7.5 + (i % 3) * 4.5;
         g.position.x = laneX;
@@ -1037,29 +718,11 @@ export function initPromenadeNPCs(dialoguePool = [], npcConfig = {}) {
         g.rotation.y = initialHeading;
 
         if (typeof THREE !== 'undefined') {
-            const body = new THREE.Mesh(
-                new THREE.BoxGeometry(0.65, 1.35, 0.4),
-                new THREE.MeshStandardMaterial({ color: colors[i % colors.length], roughness: 0.45 })
-            );
-            body.position.y = 0.85;
-            body.castShadow = true;
-            g.add(body);
-
-            const head = new THREE.Mesh(
-                new THREE.BoxGeometry(0.44, 0.44, 0.44),
-                new THREE.MeshStandardMaterial({ color: 0xf1c27d })
-            );
-            head.position.y = 1.78;
-            g.add(head);
-
-            const ring = new THREE.Mesh(
-                new THREE.RingGeometry(0.55, 0.68, 20),
-                new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.55 })
-            );
-            ring.rotation.x = -Math.PI / 2;
-            ring.position.y = 0.04;
-            g.add(ring);
-
+            const bodyNode = g.getObjectByName ? g.getObjectByName('body') : null;
+            if (bodyNode && bodyNode.material) {
+                bodyNode.material = bodyNode.material.clone();
+                bodyNode.material.color.setHex(npcColor);
+            }
             if (World && World.scene) World.scene.add(g);
         }
 
