@@ -139,6 +139,12 @@
                 <span class="text-[11px] sm:text-xs">Чат (<span id="online-count-mobile">1</span>)</span>
             </button>
 
+            <!-- Pet Toggle Button: Dog (Dunya) / Cat (Berik) -->
+            <button id="btn-pet-toggle" class="btn-game bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs px-2.5 sm:px-3 py-1.5 rounded-lg flex items-center gap-1.5 border border-slate-600 shrink-0" title="Сменить питомца: Собака / Кот">
+                <span id="pet-toggle-icon">🐶</span>
+                <span id="pet-toggle-label" class="hidden sm:inline">Дуня</span>
+            </button>
+
             <button id="btn-pointer-lock" class="hidden md:flex btn-game bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs px-3 py-1.5 rounded-lg items-center gap-1.5 shadow border border-slate-600 shrink-0">
                 <i class="fa-solid fa-crosshairs text-sky-400"></i>
                 <span id="pointer-lock-text">Захват мыши</span>
@@ -173,12 +179,12 @@
             </div>
         </div>
 
-        <!-- 3D Floating Nameplate for Maltese Dog Dunya (Дуня) -->
+        <!-- 3D Floating Nameplate for Pet (Maltese Dog Dunya / Cat Berik) -->
         <div id="dunya-nametag" class="pointer-events-none absolute top-0 left-0 -translate-x-1/2 -translate-y-full z-10 transition-opacity duration-150" style="display: none;">
             <div class="flex flex-col items-center">
-                <div class="bg-slate-950/80 border border-pink-400/60 px-2 py-0.5 rounded-full shadow-md flex items-center gap-1">
-                    <span class="text-[10px]">🐾</span>
-                    <span class="font-bold text-[11px] text-pink-200 tracking-tight">Дуня</span>
+                <div id="pet-nametag-pill" class="bg-slate-950/80 border border-pink-400/60 px-2 py-0.5 rounded-full shadow-md flex items-center gap-1">
+                    <span id="pet-nametag-icon" class="text-[10px]">🐾</span>
+                    <span id="pet-nametag-name" class="font-bold text-[11px] text-pink-200 tracking-tight">Дуня</span>
                 </div>
                 <div id="dunya-speech-bubble" class="hidden mt-0.5 bg-pink-50 text-slate-900 font-bold text-[11px] px-2 py-0.5 rounded-lg shadow-md whitespace-nowrap">
                     Тяф-тяф! 🤍🐾

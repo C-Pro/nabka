@@ -185,7 +185,7 @@ export async function startApp() {
 
     const dunyaOffsetX = 1.3 * Math.cos(chosenSpawn.yaw + Math.PI / 2);
     const dunyaOffsetZ = 1.3 * Math.sin(chosenSpawn.yaw + Math.PI / 2);
-    Dunya.init(World.scene, chosenSpawn.x + dunyaOffsetX, chosenSpawn.z + dunyaOffsetZ, chosenSpawn.yaw);
+    Dunya.init(World.scene, chosenSpawn.x + dunyaOffsetX, chosenSpawn.z + dunyaOffsetZ, chosenSpawn.yaw, GAME_STATE.petType);
 
     MultiplayerClient.initUI(worldMap);
     bindInputControls(worldMap);

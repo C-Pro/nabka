@@ -23,6 +23,7 @@ export const DEFAULT_MODEL_BOUNDS = {
 'models/arbat_paving.glb': { minX: -14, maxX: 14, minY: -0.06, maxY: 0.06, minZ: -7, maxZ: 7 },
     'models/azimut_hotel.glb': { minX: -7.5, maxX: 7, minY: 0, maxY: 28, minZ: -15, maxZ: 15 },
     'models/bench.glb': { minX: -0.45, maxX: 0.45, minY: -0.325, maxY: 0.325, minZ: -1.3, maxZ: 1.3 },
+    'models/berik.glb': { minX: -0.303, maxX: 0.303, minY: 0, maxY: 0.925, minZ: -0.578, maxZ: 0.559 },
     'models/bridge_deck.glb': { minX: -80, maxX: 80, minY: -0.9, maxY: 0.9, minZ: -3, maxZ: 3 },
     'models/bridge_pylon.glb': { minX: -12.329, maxX: 12.329, minY: -1.891, maxY: 65.821, minZ: -1.6, maxZ: 1.6 },
     'models/car_0.glb': { minX: -1.31, maxX: 1.31, minY: 0, maxY: 1.625, minZ: -2.51, maxZ: 2.51 },

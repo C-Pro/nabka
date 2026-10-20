@@ -33,6 +33,7 @@ func TestStaticFS(t *testing.T) {
 		"models/car_0.glb",
 		"models/player.glb",
 		"models/dunya.glb",
+		"models/berik.glb",
 		"audio/ch1.mp3",
 		"audio/ch2.mp3",
 		"audio/ch3.mp3",

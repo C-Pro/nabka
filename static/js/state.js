@@ -69,10 +69,21 @@ export function getInitialUsername() {
     return generateRandomVladivostokName();
 }
 
+export function getInitialPetType() {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const saved = localStorage.getItem('nabka_pet_type');
+            if (saved === 'cat' || saved === 'dog') return saved;
+        }
+    } catch (e) {}
+    return 'dog';
+}
+
 export function createGameState(overrides = {}) {
     const isNarrowViewport = typeof window !== 'undefined' ? window.innerWidth < 640 : false;
     return {
         username: overrides.username || getInitialUsername(),
+        petType: overrides.petType || getInitialPetType(),
         isConnected: false,
         lastPacketSentAt: 0,
         lastActiveEventAt: 0,

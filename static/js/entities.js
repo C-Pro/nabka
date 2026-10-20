@@ -222,7 +222,9 @@ export const Player = {
             this.velocity.y = 9.8;
             this.isGrounded = false;
             SoundManager.playActionSound('jump');
-            Dunya.hopAndBark('Прыг! 🐾🤍');
+            if (Dunya.petType !== 'cat') {
+                Dunya.hopAndBark('Прыг! 🐾🤍');
+            }
         }
     },
 
@@ -231,14 +233,17 @@ export const Player = {
         this.emoteTimer = 3.2;
         triggerPlayerSpeech(`Владивосток, салют от @${GAME_STATE.username || 'Игрок'}! 🔥🌊`);
         SoundManager.playActionSound('cash');
-        Dunya.hopAndBark('Тяф-тяф! Мы на Набке! 🐾🎀');
+        Dunya.hopAndBark(Dunya.petType === 'cat' ? 'Мяу-мяу! Мы на Набке! 🐾' : 'Тяф-тяф! Мы на Набке! 🐾🎀');
     }
 };
 
 export const Dunya = {
     group: null,
+    scene: null,
     headGroup: null,
     tailPivot: null,
+    tailTip: null,
+    bodyGroup: null,
     legs: [],
     position: null,
     velocity: null,
@@ -246,36 +251,133 @@ export const Dunya = {
     isGrounded: true,
     walkCycle: 0,
     spinTimer: 0,
+    petType: 'dog',
+    idleTimer: 0,
+    lieDownProgress: 0,
 
-    init(scene, startX = null, startZ = null, startYaw = null) {
+    init(scene, startX = null, startZ = null, startYaw = null, petType = null) {
+        this.scene = scene;
+        this.petType = petType || (typeof GAME_STATE !== 'undefined' && GAME_STATE.petType) || 'dog';
+        this.idleTimer = 0;
+        this.lieDownProgress = 0;
         const dx = startX !== null ? startX : 1.6;
         const dz = startZ !== null ? startZ : 22.8;
         this.position = new THREE.Vector3(dx, 0, dz);
         this.velocity = new THREE.Vector3(0, 0, 0);
         this.rotationY = startYaw !== null ? startYaw : Math.PI;
-        this.group = ModelLoader.instantiate('models/dunya.glb', () => ModelBuilders.dunya());
-        this.group.position.copy(this.position);
-        this.group.rotation.y = this.rotationY;
 
-        this.headGroup = (this.group.getObjectByName && this.group.getObjectByName('headGroup')) || new THREE.Group();
-        this.tailPivot = (this.group.getObjectByName && this.group.getObjectByName('tailPivot')) || new THREE.Group();
-        this.legs = [0, 1, 2, 3].map(idx => (this.group.getObjectByName && this.group.getObjectByName(`leg_${idx}`)) || new THREE.Group());
-
-        scene.add(this.group);
+        this._spawnModel();
+        this.updateNametagUI();
     },
 
-    hopAndBark(text = 'Тяф-тяф! 🐾🤍') {
-        SoundManager.playActionSound('bark');
-        if (this.velocity && this.isGrounded && !GAME_STATE.inVehicle) {
-            this.velocity.y = 6.8;
-            this.isGrounded = false;
+    setPetType(type) {
+        if (type !== 'cat' && type !== 'dog') return;
+        if (this.petType === type && this.group) return;
+        this.petType = type;
+        this.idleTimer = 0;
+        this.lieDownProgress = 0;
+        if (typeof GAME_STATE !== 'undefined') {
+            GAME_STATE.petType = type;
         }
-        this.spinTimer = 1.1;
+        if (this.scene) {
+            this._spawnModel();
+            this.updateNametagUI();
+        }
+    },
+
+    _spawnModel() {
+        if (!this.scene) return;
+        if (this.group) {
+            this.scene.remove(this.group);
+            if (typeof this.group.traverse === 'function') {
+                this.group.traverse(obj => {
+                    if (obj.geometry) obj.geometry.dispose();
+                    if (obj.material) {
+                        if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+                        else obj.material.dispose();
+                    }
+                });
+            }
+        }
+
+        const isCat = this.petType === 'cat';
+        const modelUrl = isCat ? 'models/berik.glb' : 'models/dunya.glb';
+        const fallbackFn = isCat ? () => ModelBuilders.berik() : () => ModelBuilders.dunya();
+
+        this.group = ModelLoader.instantiate(modelUrl, fallbackFn);
+        if (this.position) this.group.position.copy(this.position);
+        this.group.rotation.y = this.rotationY;
+
+        this.bodyGroup = (this.group.getObjectByName && this.group.getObjectByName('body')) || null;
+        this.headGroup = (this.group.getObjectByName && this.group.getObjectByName('headGroup')) || new THREE.Group();
+        this.tailPivot = (this.group.getObjectByName && (
+            this.group.getObjectByName('tailPivot') ||
+            this.group.getObjectByName('tailGroup') ||
+            this.group.getObjectByName('tail_base')
+        )) || new THREE.Group();
+        this.tailTip = (this.group.getObjectByName && (
+            this.group.getObjectByName('tail_tip') ||
+            this.group.getObjectByName('tail_plume')
+        )) || null;
+        this.legs = [0, 1, 2, 3].map(idx => (
+            (this.group.getObjectByName && (
+                this.group.getObjectByName(`leg_${idx}`) ||
+                this.group.getObjectByName(['leg_FL', 'leg_FR', 'leg_BL', 'leg_BR'][idx])
+            )) || new THREE.Group()
+        ));
+
+        this.scene.add(this.group);
+    },
+
+    updateNametagUI() {
+        if (typeof document === 'undefined') return;
+        const nameEl = document.getElementById('pet-nametag-name');
+        const iconEl = document.getElementById('pet-nametag-icon');
+        const pillEl = document.getElementById('pet-nametag-pill');
+        const bubbleEl = document.getElementById('dunya-speech-bubble');
+
+        const isCat = this.petType === 'cat';
+        if (nameEl) nameEl.textContent = isCat ? 'Берик' : 'Дуня';
+        if (iconEl) iconEl.textContent = isCat ? '🐱' : '🐾';
+        if (pillEl) {
+            if (isCat) {
+                pillEl.className = 'bg-slate-950/80 border border-sky-400/60 px-2 py-0.5 rounded-full shadow-md flex items-center gap-1';
+                if (nameEl) nameEl.className = 'font-bold text-[11px] text-sky-200 tracking-tight';
+            } else {
+                pillEl.className = 'bg-slate-950/80 border border-pink-400/60 px-2 py-0.5 rounded-full shadow-md flex items-center gap-1';
+                if (nameEl) nameEl.className = 'font-bold text-[11px] text-pink-200 tracking-tight';
+            }
+        }
+        if (bubbleEl) {
+            if (isCat) {
+                bubbleEl.className = 'hidden mt-0.5 bg-sky-50 text-slate-900 font-bold text-[11px] px-2 py-0.5 rounded-lg shadow-md whitespace-nowrap';
+            } else {
+                bubbleEl.className = 'hidden mt-0.5 bg-pink-50 text-slate-900 font-bold text-[11px] px-2 py-0.5 rounded-lg shadow-md whitespace-nowrap';
+            }
+        }
+    },
+
+    hopAndBark(text = null) {
+        const isCat = this.petType === 'cat';
+        const soundType = isCat ? 'meow' : 'bark';
+        const defaultText = isCat ? 'Мяу-мяу! 🐾' : 'Тяф-тяф! 🐾🤍';
+        SoundManager.playActionSound(soundType);
+
+        // Dog jumps up eagerly and spins around; cat remains calm and does not jump or spin
+        if (!isCat) {
+            if (this.velocity && this.isGrounded && !GAME_STATE.inVehicle) {
+                this.velocity.y = 6.8;
+                this.isGrounded = false;
+            }
+            this.spinTimer = 1.1;
+        } else {
+            this.spinTimer = 0;
+        }
 
         if (typeof document !== 'undefined') {
             const bubble = document.getElementById('dunya-speech-bubble');
             if (bubble) {
-                bubble.textContent = text;
+                bubble.textContent = text || defaultText;
                 bubble.classList.remove('hidden');
                 clearTimeout(bubble._timer);
                 bubble._timer = setTimeout(() => bubble.classList.add('hidden'), 3200);
@@ -286,24 +388,44 @@ export const Dunya = {
     update(dt, time) {
         if (!this.group) return;
 
-        if (this.tailPivot) {
-            this.tailPivot.rotation.z = Math.sin(time * 16) * 0.45;
-        }
+        const isCat = this.petType === 'cat';
 
         if (GAME_STATE.inVehicle) {
             const car = GAME_STATE.inVehicle.group;
-            const passengerOffset = new THREE.Vector3(0.58, 1.05, 0.15).applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+            const passengerOffset = new THREE.Vector3(0.58, isCat ? 0.95 : 1.05, 0.15).applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
             this.position.copy(car.position).add(passengerOffset);
             this.rotationY = car.rotation.y;
             this.group.position.copy(this.position);
             this.group.rotation.y = this.rotationY;
-            this.headGroup.rotation.y = Math.sin(time * 3.5) * 0.25;
-            this.legs.forEach(l => { l.rotation.x = 0; });
+
+            if (isCat) {
+                this.headGroup.rotation.y = Math.sin(time * 1.5) * 0.18;
+                this.headGroup.rotation.x = 0;
+                this.legs[0].rotation.x = -1.25;
+                this.legs[1].rotation.x = -1.25;
+                this.legs[2].rotation.x = 1.25;
+                this.legs[3].rotation.x = 1.25;
+                this.legs[0].rotation.z = 0.1;
+                this.legs[1].rotation.z = -0.1;
+                this.legs[2].rotation.z = -0.15;
+                this.legs[3].rotation.z = 0.15;
+                if (this.tailPivot) {
+                    this.tailPivot.rotation.x = -0.2;
+                    this.tailPivot.rotation.z = Math.sin(time * 1.5) * 0.20;
+                }
+            } else {
+                this.headGroup.rotation.y = Math.sin(time * 3.5) * 0.25;
+                this.legs.forEach(l => { l.rotation.x = 0; l.rotation.z = 0; });
+                if (this.tailPivot) {
+                    this.tailPivot.rotation.x = 0;
+                    this.tailPivot.rotation.z = Math.sin(time * 16) * 0.45;
+                }
+            }
             return;
         }
 
         const followAngle = Player.rotationY - 0.65;
-        const orbitShift = Math.sin(time * 1.4) * 0.35;
+        const orbitShift = isCat ? 0 : Math.sin(time * 1.4) * 0.35;
         const targetX = Player.position.x + Math.sin(followAngle + orbitShift) * 1.65;
         const targetZ = Player.position.z + Math.cos(followAngle + orbitShift) * 1.65;
 
@@ -315,12 +437,29 @@ export const Dunya = {
         if (distToPlayer > 26) {
             this.position.set(Player.position.x + 1.4, Player.position.y + 0.2, Player.position.z + 1.2);
             this.velocity.set(0, 0, 0);
+            this.idleTimer = 0;
+            this.lieDownProgress = 0;
         }
 
+        // Cat resting tolerance: when lying down, cat stays resting unless player walks away
+        const trotThreshold = isCat
+            ? (this.lieDownProgress > 0.5 ? 2.2 : 0.55)
+            : 0.35;
+
         let isTrotting = false;
-        if (distToTarget > 0.32) {
+        if (distToTarget > trotThreshold) {
             isTrotting = true;
-            const moveSpeed = distToTarget > 3.2 ? 15.5 : (distToTarget > 1.4 ? 10.2 : 6.2);
+            this.idleTimer = 0;
+            if (isCat) {
+                // Cat rises up from lying down before running
+                this.lieDownProgress = Math.max(0, this.lieDownProgress - dt * 3.5);
+            } else {
+                this.lieDownProgress = 0;
+            }
+
+            // Gated acceleration while standing up from loaf
+            const getUpFactor = isCat ? (1 - this.lieDownProgress * 0.65) : 1;
+            const moveSpeed = (distToTarget > 3.2 ? 15.5 : (distToTarget > 1.4 ? 10.2 : 6.2)) * getUpFactor;
             const dirX = dx / distToTarget;
             const dirZ = dz / distToTarget;
 
@@ -334,17 +473,66 @@ export const Dunya = {
         } else {
             this.velocity.x *= 0.75;
             this.velocity.z *= 0.75;
+            this.idleTimer += dt;
+
+            if (isCat) {
+                // Cat lies down when idle after a brief pause
+                if (this.idleTimer > 0.5) {
+                    this.lieDownProgress = Math.min(1, this.lieDownProgress + dt * 2.2);
+                }
+            } else {
+                this.lieDownProgress = 0;
+            }
+
             const toPlayerX = Player.position.x - this.position.x;
             const toPlayerZ = Player.position.z - this.position.z;
             const lookYaw = Math.atan2(toPlayerX, toPlayerZ);
             let diff = lookYaw - this.rotationY;
             diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-            this.rotationY += diff * Math.min(1, dt * 5);
+            const turnRate = (isCat && this.lieDownProgress > 0.5) ? 2.5 : 5;
+            this.rotationY += diff * Math.min(1, dt * turnRate);
         }
 
-        if (this.isGrounded && Player.position.y > this.position.y + 0.35 && distToPlayer < 5.5) {
+        // Tail animation: Cat does not wag tail rapidly, but slowly waves it
+        if (this.tailPivot) {
+            if (isCat) {
+                if (this.lieDownProgress > 0.4) {
+                    // Resting in loaf pose: tail lays along floor and lazily sways
+                    this.tailPivot.rotation.x = -0.22 * this.lieDownProgress;
+                    this.tailPivot.rotation.z = Math.sin(time * 1.5) * 0.22;
+                } else if (isTrotting) {
+                    // Trotting: graceful fluid wave
+                    this.tailPivot.rotation.x = 0.12;
+                    this.tailPivot.rotation.z = Math.sin(time * 2.2) * 0.30;
+                } else {
+                    // Standing: relaxed slow wave
+                    this.tailPivot.rotation.x = 0;
+                    this.tailPivot.rotation.z = Math.sin(time * 1.8) * 0.25;
+                }
+                if (this.tailTip) {
+                    this.tailTip.rotation.z = Math.sin(time * 1.8 - 0.7) * 0.22;
+                }
+            } else {
+                // Dog: rapid energetic tail wag
+                this.tailPivot.rotation.x = 0;
+                this.tailPivot.rotation.z = Math.sin(time * 16) * 0.45;
+                if (this.tailTip) {
+                    this.tailTip.rotation.z = 0;
+                }
+            }
+        }
+
+        // Dog jumps excitedly whenever player jumps; cat does NOT jump around eagerly
+        if (!isCat && this.isGrounded && Player.position.y > this.position.y + 0.35 && distToPlayer < 5.5) {
             this.velocity.y = 8.4;
             this.isGrounded = false;
+        }
+
+        // Cat only hops if navigating up onto an elevated platform/bench to reach player
+        if (isCat && this.isGrounded && distToTarget > 0.5 && Player.position.y > this.position.y + 0.55) {
+            this.velocity.y = 6.2;
+            this.isGrounded = false;
+            this.lieDownProgress = 0;
         }
 
         if (!this.isGrounded) {
@@ -376,20 +564,53 @@ export const Dunya = {
             this.rotationY += dt * 11.5;
         }
 
-        if (isTrotting) {
-            this.walkCycle += dt * 22;
-            const swing = Math.sin(this.walkCycle) * 0.65;
+        if (isTrotting && this.lieDownProgress < 0.2) {
+            const walkSpeed = isCat ? 16 : 22;
+            this.walkCycle += dt * walkSpeed;
+            const swing = Math.sin(this.walkCycle) * (isCat ? 0.5 : 0.65);
             this.legs[0].rotation.x = swing;
             this.legs[1].rotation.x = -swing;
             this.legs[2].rotation.x = -swing;
             this.legs[3].rotation.x = swing;
+            this.legs[0].rotation.z = 0;
+            this.legs[1].rotation.z = 0;
+            this.legs[2].rotation.z = 0;
+            this.legs[3].rotation.z = 0;
             this.headGroup.position.y = 0.58 + Math.abs(Math.sin(this.walkCycle)) * 0.035;
+            this.headGroup.rotation.x = 0;
         } else {
-            this.legs.forEach(l => { l.rotation.x *= 0.8; });
-            this.headGroup.position.y = 0.58 + Math.sin(time * 4) * 0.012;
+            if (isCat && this.lieDownProgress > 0) {
+                const p = this.lieDownProgress;
+                // Front paws folded forward / tucked in cat loaf pose
+                this.legs[0].rotation.x = -1.35 * p;
+                this.legs[1].rotation.x = -1.35 * p;
+                this.legs[0].rotation.z = 0.12 * p;
+                this.legs[1].rotation.z = -0.12 * p;
+                // Hind legs tucked forward under flanks
+                this.legs[2].rotation.x = 1.35 * p;
+                this.legs[3].rotation.x = 1.35 * p;
+                this.legs[2].rotation.z = -0.15 * p;
+                this.legs[3].rotation.z = 0.15 * p;
+
+                // Gentle relaxed breathing in loaf pose
+                const breathe = Math.sin(time * 2.0) * 0.008 * p;
+                this.headGroup.position.y = 0.58 - 0.02 * p + breathe;
+                this.headGroup.rotation.x = 0.06 * p;
+            } else {
+                this.legs.forEach(l => {
+                    l.rotation.x *= 0.8;
+                    l.rotation.z *= 0.8;
+                });
+                this.headGroup.position.y = 0.58 + Math.sin(time * 4) * 0.012;
+                this.headGroup.rotation.x = 0;
+            }
         }
 
         this.group.position.copy(this.position);
+        if (isCat && this.lieDownProgress > 0) {
+            // Lower body down to floor in cat loaf pose
+            this.group.position.y -= 0.15 * this.lieDownProgress;
+        }
         this.group.rotation.y = this.rotationY;
     }
 };

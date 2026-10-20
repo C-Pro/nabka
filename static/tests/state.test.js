@@ -12,12 +12,13 @@ import {
     RUSSIAN_NAMES,
     VLADIVOSTOK_LOCATION_SUFFIXES,
     generateRandomVladivostokName,
-    getInitialUsername
+    getInitialUsername,
+    getInitialPetType
 } from '../js/state.js';
 import { World, getVladivostokTime, getTimeOfDayPhase } from '../js/world.js';
 import { MultiplayerClient, showChatBox, hideChatBox, scheduleChatAutoHide } from '../js/network.js';
-import { getLabelDistanceMetrics, substitutePlayerMentions } from '../js/ui.js';
-import { selectValidSpawnPoint, Player, revalidatePlayerSpawn } from '../js/entities.js';
+import { getLabelDistanceMetrics, substitutePlayerMentions, checkProximityInteractions } from '../js/ui.js';
+import { selectValidSpawnPoint, Player, revalidatePlayerSpawn, Dunya } from '../js/entities.js';
 import { clearMovementInput } from '../js/input.js';
 import worldMap from '../data/world_map.json';
 import npcDialogues from '../data/npc_dialogues.json';
@@ -818,6 +819,244 @@ describe('Client Auto-Update and Version Check', () => {
 
         const result = await MultiplayerClient.checkServerVersion(true);
         expect(result).toBeNull();
+    });
+});
+
+describe('Pet Selection (Dog Dunya / Cat Berik) and Persistence', () => {
+    let originalStorage;
+
+    beforeEach(() => {
+        originalStorage = globalThis.localStorage;
+    });
+
+    afterEach(() => {
+        globalThis.localStorage = originalStorage;
+    });
+
+    test('getInitialPetType defaults to dog when localStorage is empty or unavailable', () => {
+        globalThis.localStorage = { getItem: () => null };
+        expect(getInitialPetType()).toBe('dog');
+
+        delete globalThis.localStorage;
+        expect(getInitialPetType()).toBe('dog');
+    });
+
+    test('getInitialPetType loads cat or dog from localStorage and rejects invalid values', () => {
+        const store = new Map();
+        globalThis.localStorage = {
+            getItem: (k) => store.get(k) || null,
+            setItem: (k, v) => store.set(k, String(v))
+        };
+
+        store.set('nabka_pet_type', 'cat');
+        expect(getInitialPetType()).toBe('cat');
+
+        store.set('nabka_pet_type', 'dog');
+        expect(getInitialPetType()).toBe('dog');
+
+        store.set('nabka_pet_type', 'hamster');
+        expect(getInitialPetType()).toBe('dog');
+    });
+
+    test('createGameState initializes petType from overrides or getInitialPetType', () => {
+        const store = new Map([['nabka_pet_type', 'cat']]);
+        globalThis.localStorage = {
+            getItem: (k) => store.get(k) || null,
+            setItem: (k, v) => store.set(k, String(v))
+        };
+
+        const stateCat = createGameState();
+        expect(stateCat.petType).toBe('cat');
+
+        const stateOverride = createGameState({ petType: 'dog' });
+        expect(stateOverride.petType).toBe('dog');
+    });
+
+    test('Dunya.setPetType switches petType and synchronizes GAME_STATE', () => {
+        Dunya.petType = 'dog';
+        GAME_STATE.petType = 'dog';
+
+        Dunya.setPetType('cat');
+        expect(Dunya.petType).toBe('cat');
+        expect(GAME_STATE.petType).toBe('cat');
+
+        Dunya.setPetType('dog');
+        expect(Dunya.petType).toBe('dog');
+        expect(GAME_STATE.petType).toBe('dog');
+
+        // Invalid types are ignored
+        Dunya.setPetType('bear');
+        expect(Dunya.petType).toBe('dog');
+        expect(GAME_STATE.petType).toBe('dog');
+    });
+
+    test('checkProximityInteractions produces appropriate copy for dog Dunya', () => {
+        const mockDunya = {
+            group: {},
+            petType: 'dog',
+            position: { x: 10, y: 0, z: 20 },
+            hopAndBarkCalls: [],
+            hopAndBark(msg) { this.hopAndBarkCalls.push(msg); }
+        };
+
+        GAME_STATE.inVehicle = null;
+        GAME_STATE.username = 'Слава-с-Чуркина';
+
+        checkProximityInteractions({
+            playerPos: { x: 10.5, y: 0, z: 20 },
+            npcs: [],
+            interactables: [],
+            dunya: mockDunya,
+            worldMap: { zones: [] }
+        });
+
+        expect(GAME_STATE.nearestInteractable).not.toBeNull();
+        expect(GAME_STATE.nearestInteractable.id).toBe('dunya_pet');
+        expect(GAME_STATE.nearestInteractable.name).toBe('Мальтийская болонка Дуня');
+        expect(GAME_STATE.nearestInteractable.prompt).toBe('Погладить болонку Дуню 🐾🤍 (+Вайб)');
+
+        GAME_STATE.nearestInteractable.onInteract();
+        expect(mockDunya.hopAndBarkCalls.length).toBe(1);
+        expect(mockDunya.hopAndBarkCalls[0]).toContain('Тяф!');
+        expect(mockDunya.hopAndBarkCalls[0]).toContain('@Слава-с-Чуркина');
+    });
+
+    test('checkProximityInteractions produces appropriate copy for cat Berik', () => {
+        const mockDunya = {
+            group: {},
+            petType: 'cat',
+            position: { x: 10, y: 0, z: 20 },
+            hopAndBarkCalls: [],
+            hopAndBark(msg) { this.hopAndBarkCalls.push(msg); }
+        };
+
+        GAME_STATE.inVehicle = null;
+        GAME_STATE.username = 'Лена-с-Эгершельда';
+
+        checkProximityInteractions({
+            playerPos: { x: 10.5, y: 0, z: 20 },
+            npcs: [],
+            interactables: [],
+            dunya: mockDunya,
+            worldMap: { zones: [] }
+        });
+
+        expect(GAME_STATE.nearestInteractable).not.toBeNull();
+        expect(GAME_STATE.nearestInteractable.id).toBe('dunya_pet');
+        expect(GAME_STATE.nearestInteractable.name).toBe('Кот Берик');
+        expect(GAME_STATE.nearestInteractable.prompt).toBe('Погладить кота Берика 🐾🤍 (+Вайб)');
+
+        GAME_STATE.nearestInteractable.onInteract();
+        expect(mockDunya.hopAndBarkCalls.length).toBe(1);
+        expect(mockDunya.hopAndBarkCalls[0]).toContain('Мур-р-р!');
+        expect(mockDunya.hopAndBarkCalls[0]).toContain('@Лена-с-Эгершельда');
+    });
+
+    test('cat Berik does not jump or spin eagerly on hopAndBark', () => {
+        Dunya.petType = 'cat';
+        Dunya.velocity = { x: 0, y: 0, z: 0 };
+        Dunya.isGrounded = true;
+        Dunya.spinTimer = 0;
+
+        Dunya.hopAndBark('Мяу!');
+        expect(Dunya.velocity.y).toBe(0);
+        expect(Dunya.isGrounded).toBe(true);
+        expect(Dunya.spinTimer).toBe(0);
+
+        Dunya.petType = 'dog';
+        Dunya.hopAndBark('Тяф!');
+        expect(Dunya.velocity.y).toBe(6.8);
+        expect(Dunya.isGrounded).toBe(false);
+        expect(Dunya.spinTimer).toBe(1.1);
+    });
+
+    test('Player.jump does not trigger pet jumping when pet is cat', () => {
+        Dunya.petType = 'cat';
+        let hopCalls = 0;
+        const origHop = Dunya.hopAndBark;
+        Dunya.hopAndBark = () => { hopCalls++; };
+
+        Player.isGrounded = true;
+        Player.velocity = { x: 0, y: 0, z: 0 };
+        Player.jump();
+
+        expect(hopCalls).toBe(0);
+
+        Dunya.petType = 'dog';
+        Player.isGrounded = true;
+        Player.jump();
+        expect(hopCalls).toBe(1);
+
+        Dunya.hopAndBark = origHop;
+    });
+
+    test('cat Berik lies down when idle and slowly waves tail', () => {
+        const createMockGroup = () => ({
+            position: { x: 0, y: 0, z: 0, copy(p) { this.x = p.x; this.y = p.y; this.z = p.z; } },
+            rotation: { y: 0 }
+        });
+
+        const origTHREE = globalThis.THREE;
+        globalThis.THREE = {
+            Vector3: class {
+                constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+                set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+                copy(p) { this.x = p.x; this.y = p.y; this.z = p.z; return this; }
+                add(p) { this.x += p.x; this.y += p.y; this.z += p.z; return this; }
+            }
+        };
+
+        try {
+            Dunya.petType = 'cat';
+            Dunya.group = createMockGroup();
+            Dunya.headGroup = { position: { y: 0.58 }, rotation: { x: 0, y: 0, z: 0 } };
+            Dunya.tailPivot = { rotation: { x: 0, y: 0, z: 0 } };
+            Dunya.tailTip = null;
+            Dunya.legs = [0, 1, 2, 3].map(() => ({ rotation: { x: 0, y: 0, z: 0 } }));
+            // Position near player's follow target so distToTarget < 0.35
+            // followAngle = -0.65; targetX = sin(-0.65)*1.65 ≈ -1.0; targetZ = cos(-0.65)*1.65 ≈ 1.31
+            const followAngle = -0.65;
+            const initX = Math.sin(followAngle) * 1.65;
+            const initZ = Math.cos(followAngle) * 1.65;
+            Dunya.position = { x: initX, y: 0, z: initZ, set(x, y, z) { this.x = x; this.y = y; this.z = z; } };
+            Dunya.velocity = { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } };
+            Dunya.rotationY = 0;
+            Dunya.isGrounded = true;
+            Dunya.idleTimer = 0;
+            Dunya.lieDownProgress = 0;
+
+            Player.position = { x: 0, y: 0, z: 0 };
+            Player.rotationY = 0;
+            GAME_STATE.inVehicle = null;
+
+            // Advance by 1.5 seconds while stationary
+            for (let i = 0; i < 30; i++) {
+                Dunya.update(0.05, i * 0.05);
+            }
+
+            expect(Dunya.idleTimer).toBeGreaterThan(0.6);
+            expect(Dunya.lieDownProgress).toBeGreaterThan(0.5);
+            // Lowered group position in loaf pose
+            expect(Dunya.group.position.y).toBeLessThan(0);
+            // Front paws folded forward
+            expect(Dunya.legs[0].rotation.x).toBeLessThan(-0.5);
+            // Hind legs folded
+            expect(Dunya.legs[2].rotation.x).toBeGreaterThan(0.5);
+            // Tail rests low along floor
+            expect(Dunya.tailPivot.rotation.x).toBeLessThan(0);
+
+            // Now test dog: dog does not lie down
+            Dunya.petType = 'dog';
+            Dunya.idleTimer = 0;
+            Dunya.lieDownProgress = 0;
+            for (let i = 0; i < 20; i++) {
+                Dunya.update(0.05, i * 0.05);
+            }
+            expect(Dunya.lieDownProgress).toBe(0);
+            expect(Dunya.group.position.y).toBe(0);
+        } finally {
+            globalThis.THREE = origTHREE;
+        }
     });
 });
 

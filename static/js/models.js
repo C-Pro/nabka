@@ -1688,6 +1688,173 @@ export const ModelBuilders = {
         return group;
     },
 
+    berik() {
+        const group = new THREE.Group();
+        group.name = 'berik';
+
+        const greyFurMat = new THREE.MeshStandardMaterial({ color: 0x5b6574, roughness: 0.85 });
+        const whiteFurMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 });
+        const eyeGreenMat = new THREE.MeshStandardMaterial({ color: 0xa8e62c, roughness: 0.2 });
+        const darkPupilMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.15 });
+        const pinkNoseMat = new THREE.MeshStandardMaterial({ color: 0xf472b6, roughness: 0.4 });
+        const innerEarMat = new THREE.MeshStandardMaterial({ color: 0xfda4af, roughness: 0.6 });
+        const darkSlateMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
+
+        // Body & Coat
+        const bodyGroup = new THREE.Group();
+        bodyGroup.name = 'body';
+        bodyGroup.position.set(0, 0.34, 0);
+
+        const torso = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.325, 0.65), greyFurMat);
+        torso.name = 'torso';
+        torso.castShadow = true;
+        bodyGroup.add(torso);
+
+        const flankL = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.21, 0.425), greyFurMat);
+        flankL.name = 'flank_L';
+        flankL.position.set(-0.21, -0.01, -0.01);
+        bodyGroup.add(flankL);
+
+        const flankR = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.21, 0.425), greyFurMat);
+        flankR.name = 'flank_R';
+        flankR.position.set(0.21, -0.01, -0.01);
+        bodyGroup.add(flankR);
+
+        const chestFluff = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 10), whiteFurMat);
+        chestFluff.name = 'chestFluff';
+        chestFluff.scale.set(0.95, 0.98, 0.95);
+        chestFluff.position.set(0, 0.02, 0.25);
+        bodyGroup.add(chestFluff);
+
+        group.add(bodyGroup);
+
+        // Head Group
+        const headGroup = new THREE.Group();
+        headGroup.name = 'headGroup';
+        headGroup.position.set(0, 0.58, 0.30);
+
+        const skull = new THREE.Mesh(new THREE.SphereGeometry(0.21, 12, 12), greyFurMat);
+        skull.name = 'skull';
+        skull.scale.set(1.06, 0.96, 1.0);
+        skull.castShadow = true;
+        headGroup.add(skull);
+
+        // Triangular white blaze
+        const blaze = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.16, 4), whiteFurMat);
+        blaze.name = 'blaze';
+        blaze.rotation.x = -0.28;
+        blaze.position.set(0, 0.05, 0.21);
+        headGroup.add(blaze);
+
+        // White Muzzle
+        [-0.053, 0.053].forEach((mx, idx) => {
+            const pad = new THREE.Mesh(new THREE.SphereGeometry(0.053, 8, 8), whiteFurMat);
+            pad.name = `muzzlePad_${idx}`;
+            pad.position.set(mx, -0.05, 0.19);
+            headGroup.add(pad);
+        });
+
+        const nose = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.035, 3), pinkNoseMat);
+        nose.name = 'nose';
+        nose.rotation.z = Math.PI;
+        nose.position.set(0, -0.005, 0.245);
+        headGroup.add(nose);
+
+        // Grumpy Mouth
+        const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.015, 0.01), darkSlateMat);
+        mouth.name = 'mouth';
+        mouth.position.set(0, -0.07, 0.24);
+        headGroup.add(mouth);
+
+        // Yellow-Green Eyes & Slit Pupils
+        [-0.088, 0.088].forEach((ex, idx) => {
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.036, 8, 8), eyeGreenMat);
+            eye.name = `eye_${idx}`;
+            eye.position.set(ex, 0.055, 0.18);
+
+            const pupil = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.03, 0.005), darkPupilMat);
+            pupil.name = `pupil_${idx}`;
+            pupil.position.set(ex, 0.055, 0.215);
+
+            // Grumpy furrowed brow
+            const brow = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.015, 0.03), greyFurMat);
+            brow.name = `brow_${idx}`;
+            brow.position.set(ex, 0.085, 0.19);
+            brow.rotation.z = ex > 0 ? 0.42 : -0.42;
+
+            headGroup.add(eye, pupil, brow);
+        });
+
+        // Upright Cat Ears
+        [-0.145, 0.145].forEach((earX, idx) => {
+            const ear = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.11, 4), greyFurMat);
+            ear.name = `ear_${idx}`;
+            ear.position.set(earX, 0.195, -0.035);
+            ear.rotation.z = earX > 0 ? -0.32 : 0.32;
+            ear.rotation.x = 0.2;
+
+            const earInner = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.08, 4), innerEarMat);
+            earInner.name = `earInner_${idx}`;
+            earInner.position.set(earX, 0.19, -0.02);
+            earInner.rotation.z = earX > 0 ? -0.32 : 0.32;
+            earInner.rotation.x = 0.2;
+
+            headGroup.add(ear, earInner);
+        });
+
+        group.add(headGroup);
+
+        // Legs with White Paws
+        const legOffsets = [
+            [-0.12, 0.20],
+            [0.12, 0.20],
+            [-0.12, -0.20],
+            [0.12, -0.20]
+        ];
+        legOffsets.forEach(([lx, lz], idx) => {
+            const pivot = new THREE.Group();
+            pivot.name = `leg_${idx}`;
+            pivot.position.set(lx, 0.22, lz);
+
+            const upperLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.07, 0.14, 8), greyFurMat);
+            upperLeg.name = `upperLeg_${idx}`;
+            upperLeg.position.y = -0.07;
+            upperLeg.castShadow = true;
+
+            const paw = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.075, 0.075, 8), whiteFurMat);
+            paw.name = `paw_${idx}`;
+            paw.position.y = -0.18;
+
+            pivot.add(upperLeg, paw);
+            group.add(pivot);
+        });
+
+        // Bushy Longhair Tail
+        const tailGroup = new THREE.Group();
+        tailGroup.name = 'tailGroup';
+        tailGroup.position.set(0, 0.36, -0.32);
+
+        const tailBase = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.18, 8), greyFurMat);
+        tailBase.name = 'tail_base';
+        tailBase.rotation.x = -0.6;
+        tailBase.position.set(0, 0.08, -0.06);
+
+        const tailMid = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.09, 0.22, 8), greyFurMat);
+        tailMid.name = 'tail_mid';
+        tailMid.rotation.x = -1.1;
+        tailMid.position.set(0, 0.21, -0.12);
+
+        const tailPlume = new THREE.Mesh(new THREE.SphereGeometry(0.115, 10, 10), greyFurMat);
+        tailPlume.name = 'tail_plume';
+        tailPlume.scale.set(1.0, 1.25, 1.0);
+        tailPlume.position.set(0, 0.44, -0.10);
+
+        tailGroup.add(tailBase, tailMid, tailPlume);
+        group.add(tailGroup);
+
+        return group;
+    },
+
     npc(colorHex = 0xe11d48) {
         const g = new THREE.Group();
         g.name = 'npc';

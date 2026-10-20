@@ -1,7 +1,7 @@
 import { GAME_STATE, isGameplayInputSuspended } from './state.js';
 import { SoundManager } from './audio.js';
 import { World } from './world.js';
-import { Player, toggleVehicleDrive } from './entities.js';
+import { Player, Dunya, toggleVehicleDrive } from './entities.js';
 import { MultiplayerClient, showChatBox, hideChatBox } from './network.js';
 import { showToast, closeNpcDialogue } from './ui.js';
 
@@ -377,6 +377,37 @@ export function bindInputControls(worldMap = {}) {
         btnCam.addEventListener('click', () => {
             if (isGameplayInputSuspended()) return;
             handleCycleCamera();
+        });
+    }
+
+    const btnPet = document.getElementById('btn-pet-toggle');
+    const syncPetButton = (petType) => {
+        const iconEl = document.getElementById('pet-toggle-icon');
+        const labelEl = document.getElementById('pet-toggle-label');
+        if (btnPet) {
+            const isCat = petType === 'cat';
+            if (iconEl) iconEl.textContent = isCat ? '🐱' : '🐶';
+            if (labelEl) labelEl.textContent = isCat ? 'Берик' : 'Дуня';
+            btnPet.title = isCat
+                ? 'Питомец: кот Берик (нажми, чтобы выбрать болонку Дуню)'
+                : 'Питомец: болонка Дуня (нажми, чтобы выбрать кота Берика)';
+        }
+    };
+    syncPetButton(GAME_STATE.petType);
+
+    if (btnPet) {
+        btnPet.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const nextType = GAME_STATE.petType === 'cat' ? 'dog' : 'cat';
+            GAME_STATE.petType = nextType;
+            if (typeof localStorage !== 'undefined') {
+                try {
+                    localStorage.setItem('nabka_pet_type', nextType);
+                } catch (err) {}
+            }
+            Dunya.setPetType(nextType);
+            syncPetButton(nextType);
+            showToast(nextType === 'cat' ? '🐾 Твой спутник: кот Берик!' : '🐾 Твой спутник: болонка Дуня!');
         });
     }
 

@@ -263,7 +263,8 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
         } else {
             const dunyaDist = camera.position.distanceTo(dunya.position);
             const dMetrics = getLabelDistanceMetrics(dunyaDist);
-            const dunyaHeadPos = dunya.position.clone().add(new THREE.Vector3(0, 1.05, 0));
+            const headYOffset = 1.05 - (dunya.lieDownProgress || 0) * 0.22;
+            const dunyaHeadPos = dunya.position.clone().add(new THREE.Vector3(0, headYOffset, 0));
             dunyaHeadPos.project(camera);
             if (dMetrics.visible && dunyaHeadPos.z < 1 && GAME_STATE.cameraMode !== 3) {
                 const dxScreen = (dunyaHeadPos.x * 0.5 + 0.5) * width;
@@ -413,7 +414,7 @@ export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlay
     if (dunya && dunya.group) {
         const dxRadar = (dunya.position.x - px) * scale;
         const dzRadar = (dunya.position.z - pz) * scale;
-        ctx.fillStyle = '#f43f5e';
+        ctx.fillStyle = dunya.petType === 'cat' ? '#38bdf8' : '#f43f5e';
         ctx.beginPath();
         ctx.arc(dxRadar, dzRadar, 3.5, 0, Math.PI * 2);
         ctx.fill();
@@ -469,40 +470,52 @@ export function checkProximityInteractions({ playerPos, npcs, interactables, dun
     if (!closest && !GAME_STATE.inVehicle && dunya && dunya.group) {
         const dDunya = Math.hypot(playerPos.x - dunya.position.x, playerPos.z - dunya.position.z);
         if (dDunya < 2.5) {
+            const isCat = dunya.petType === 'cat';
+            const petName = isCat ? 'Кот Берик' : 'Мальтийская болонка Дуня';
+            const petPrompt = isCat ? 'Погладить кота Берика 🐾🤍 (+Вайб)' : 'Погладить болонку Дуню 🐾🤍 (+Вайб)';
             closest = {
                 id: 'dunya_pet',
-                name: 'Мальтийская болонка Дуня',
-                prompt: 'Погладить болонку Дуню 🐾🤍 (+Вайб)',
+                name: petName,
+                prompt: petPrompt,
                 onInteract: () => {
-                    dunya.hopAndBark(`Тяф! Люблю @${GAME_STATE.username || 'Игрок'}! 🐾💖`);
-                    triggerPlayerSpeech('Хорошая девочка, Дуня! 🐾🤍');
-                    completePOI('dunya_pet', '🐾 Ты погладил мальтийскую болонку Дуню на Набке!', 250);
+                    const currentUsername = GAME_STATE.username || 'Игрок';
+                    if (isCat) {
+                        dunya.hopAndBark(`Мур-р-р! Люблю @${currentUsername}! 🐾💖`);
+                        triggerPlayerSpeech('Хороший мальчик, Берик! 🐾🤍');
+                        completePOI('dunya_pet', '🐾 Ты погладил кота Берика на Набке!', 250);
+                    } else {
+                        dunya.hopAndBark(`Тяф! Люблю @${currentUsername}! 🐾💖`);
+                        triggerPlayerSpeech('Хорошая девочка, Дуня! 🐾🤍');
+                        completePOI('dunya_pet', '🐾 Ты погладил мальтийскую болонку Дуню на Набке!', 250);
+                    }
                 }
             };
         }
     }
 
     GAME_STATE.nearestInteractable = closest;
-    const promptEl = document.getElementById('interaction-prompt');
-    const promptText = document.getElementById('interaction-text');
+    if (typeof document !== 'undefined') {
+        const promptEl = document.getElementById('interaction-prompt');
+        const promptText = document.getElementById('interaction-text');
 
-    if (promptEl && promptText) {
-        if (GAME_STATE.inVehicle) {
-            promptEl.classList.remove('hidden');
-            promptText.textContent = `Выйти из ${GAME_STATE.inVehicle.name} на Набку`;
-        } else if (closest) {
-            promptEl.classList.remove('hidden');
-            promptText.textContent = substitutePlayerMentions(closest.prompt);
-        } else {
-            promptEl.classList.add('hidden');
+        if (promptEl && promptText) {
+            if (GAME_STATE.inVehicle) {
+                promptEl.classList.remove('hidden');
+                promptText.textContent = `Выйти из ${GAME_STATE.inVehicle.name} на Набку`;
+            } else if (closest) {
+                promptEl.classList.remove('hidden');
+                promptText.textContent = substitutePlayerMentions(closest.prompt);
+            } else {
+                promptEl.classList.add('hidden');
+            }
         }
-    }
 
-    const x = playerPos.x;
-    const z = playerPos.z;
-    const zone = resolveZoneName(x, z, worldMap);
-    const zoneEl = document.getElementById('location-zone-label');
-    if (zoneEl) zoneEl.textContent = zone;
-    const coordsEl = document.getElementById('coords-display');
-    if (coordsEl) coordsEl.textContent = `X: ${Math.round(x)} | Z: ${Math.round(z)}`;
+        const x = playerPos.x;
+        const z = playerPos.z;
+        const zone = resolveZoneName(x, z, worldMap);
+        const zoneEl = document.getElementById('location-zone-label');
+        if (zoneEl) zoneEl.textContent = zone;
+        const coordsEl = document.getElementById('coords-display');
+        if (coordsEl) coordsEl.textContent = `X: ${Math.round(x)} | Z: ${Math.round(z)}`;
+    }
 }

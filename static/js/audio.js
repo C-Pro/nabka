@@ -1304,6 +1304,24 @@ export const SoundManager = {
                     osc.start(t);
                     osc.stop(t + 0.14);
                 });
+            } else if (type === 'meow') {
+                const osc = this.ctx.createOscillator();
+                const g = this.ctx.createGain();
+                osc.type = 'sine';
+                // Classic cat meow: rises softly then descends with expressive inflection
+                osc.frequency.setValueAtTime(540, now);
+                osc.frequency.exponentialRampToValueAtTime(780, now + 0.10);
+                osc.frequency.exponentialRampToValueAtTime(520, now + 0.32);
+
+                g.gain.setValueAtTime(0.001, now);
+                g.gain.linearRampToValueAtTime(0.12, now + 0.04);
+                g.gain.setValueAtTime(0.12, now + 0.16);
+                g.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+                osc.connect(g);
+                g.connect(this.masterGain);
+                osc.start(now);
+                osc.stop(now + 0.36);
             }
         } catch (e) {}
     }
