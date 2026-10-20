@@ -146,6 +146,7 @@ export function bindInputControls(worldMap = {}) {
         if (code === 'KeyD' || code === 'ArrowRight') GAME_STATE.keys.d = true;
         if (code === 'ShiftLeft' || code === 'ShiftRight') GAME_STATE.keys.shift = true;
         if (code === 'Space') {
+            e.preventDefault();
             GAME_STATE.keys.space = true;
             Player.jump(MultiplayerClient);
         }

@@ -47,7 +47,9 @@ export const MultiplayerClient = {
                     if (autoReloadOnNewVersion && typeof window !== 'undefined' && window.location) {
                         this.showLoginError('Вышло обновление Набки! Перезагрузка страницы...');
                         setTimeout(() => {
-                            window.location.reload(true);
+                            if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
+                                window.location.reload(true);
+                            }
                         }, 700);
                     }
                 } else if (!this.currentBuildVersion) {

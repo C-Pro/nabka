@@ -80,6 +80,27 @@ describe('Vehicle Dynamics & Inertia', () => {
         expect(car.vz).toBeGreaterThan(0); // Still moving after 1s!
     });
 
+    test('handbrake stops vehicle to 0 without entering reverse, unlike foot brake (throttle: -1)', () => {
+        const carHandbrake = createTestCar({ yaw: 0, vz: 10.0, speed: 10.0 });
+        const carFootBrake = createTestCar({ yaw: 0, vz: 10.0, speed: 10.0 });
+
+        const handbrakeInput = { throttle: 0, steer: 0, handbrake: true, boost: false };
+        const footBrakeInput = { throttle: -1, steer: 0, handbrake: false, boost: false };
+
+        // Step both for 2 seconds (20 frames of 0.1s)
+        for (let i = 0; i < 20; i++) {
+            stepVehicleDynamics(carHandbrake, handbrakeInput, 0.1);
+            stepVehicleDynamics(carFootBrake, footBrakeInput, 0.1);
+        }
+
+        // Handbrake must come to a complete stop and remain at 0 (never reverse)
+        expect(carHandbrake.vz).toBe(0);
+        expect(carHandbrake.vx).toBe(0);
+
+        // Foot brake must transition through 0 and accelerate into reverse
+        expect(carFootBrake.vz).toBeLessThan(0);
+    });
+
     test('boost release does not delete existing velocity; car coasts down naturally', () => {
         const car = createTestCar({ yaw: 0, vz: 33.0, speed: 33.0 });
         // Throttle held, but boost released

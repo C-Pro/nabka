@@ -516,7 +516,7 @@ export const CAR_SPECS = {
     accelBoost: 26.0,
     accelBrake: 12.0,
     accelReverse: 8.0,
-    accelHandbrake: 9.0,
+    accelHandbrake: 15.0,
     dragRoll: 1.4,
     dragAero: 0.003,
     muGrip: 1.15,
@@ -647,12 +647,16 @@ export function stepSingleVehicleDynamics(car, input, dt) {
         }
 
         if (handbrake) {
+            const hBrakeDecel = CAR_SPECS.accelHandbrake;
             if (vLong > 0) {
-                vLong = Math.max(0, vLong - CAR_SPECS.accelHandbrake * dt);
+                vLong = Math.max(0, vLong - hBrakeDecel * dt);
             } else if (vLong < 0) {
-                vLong = Math.min(0, vLong + CAR_SPECS.accelHandbrake * dt);
+                vLong = Math.min(0, vLong + hBrakeDecel * dt);
             }
-            if (Math.abs(vLong) > 1.5) {
+            if (!boost && Math.abs(vLong) < 0.2) {
+                vLong = 0;
+            }
+            if (Math.abs(vLong) > 0.5) {
                 car.isBraking = true;
             }
         }
@@ -668,38 +672,30 @@ export function stepSingleVehicleDynamics(car, input, dt) {
         const demandedLatAcc = Math.abs(vLong * targetYawRate);
         const maxGripAcc = CAR_SPECS.muGrip * 9.81;
 
-        const isSharpTurn = Math.abs(steer) > 0.35 && totalSpeed > 5.0;
+        const isSharpTurn = Math.abs(steer) > 0.35 && totalSpeed > 4.0;
         const canDriftAtSpeed = totalSpeed > 2.0;
         const enterDrift = canDriftAtSpeed && (
-            (handbrake && (Math.abs(steer) > 0.1 || Math.abs(vLat) > 0.4)) ||
             (car.isBraking && isSharpTurn) ||
-            (demandedLatAcc > maxGripAcc)
+            (handbrake && (Math.abs(steer) > 0.1 || Math.abs(vLat) > 0.4)) ||
+            (demandedLatAcc > maxGripAcc) ||
+            (Math.abs(vLat) > 0.6)
         );
 
         const keepDrift = car.isDrifting && canDriftAtSpeed && (
-            handbrake || Math.abs(vLat) > 0.6 || demandedLatAcc > maxGripAcc * 0.65
+            Math.abs(vLat) > 0.4 || (car.isBraking && isSharpTurn) || handbrake || demandedLatAcc > maxGripAcc * 0.65
         );
         car.isDrifting = enterDrift || keepDrift;
 
-        // Lateral tire friction bounded by traction budget
-        const mu = car.isDrifting ? CAR_SPECS.muDrift : CAR_SPECS.muGrip;
-        const maxLatDeltaV = mu * 9.81 * dt;
-        const dampingRate = car.isDrifting ? CAR_SPECS.lateralDampingDrift : CAR_SPECS.lateralDampingGrip;
-        let deltaVLat = -vLat * (1 - Math.exp(-dampingRate * dt));
+        // Unified lateral tire friction bounded by traction budget (no artificial sideways friction drop)
+        const maxLatDeltaV = CAR_SPECS.muGrip * 9.81 * dt;
+        let deltaVLat = -vLat * (1 - Math.exp(-CAR_SPECS.lateralDampingGrip * dt));
         if (Math.abs(deltaVLat) > maxLatDeltaV) {
             deltaVLat = Math.sign(deltaVLat) * maxLatDeltaV;
         }
         vLat += deltaVLat;
 
-        // Yaw rate integration
-        if (!car.isDrifting) {
-            // Steering rate integration that allows collision-induced spin to persist naturally
-            car.yawRate = car.yawRate + (targetYawRate - car.yawRate) * Math.min(1, 8.5 * dt);
-        } else {
-            // Oversteer response to counter-steering scaled by speed
-            car.yawRate = car.yawRate + (steer * steerSign * 8.5 * steerSpeedFactor) * dt;
-            car.yawRate *= Math.exp(-2.8 * dt);
-        }
+        // Steering rate integration that allows collision-induced spin to persist naturally
+        car.yawRate = car.yawRate + (targetYawRate - car.yawRate) * Math.min(1, 8.5 * dt);
 
         // PRE-TURN yaw reconstruction preserves momentum and creates realistic outward centrifugal skidding
         car.vx = vLong * sinY + vLat * cosY;

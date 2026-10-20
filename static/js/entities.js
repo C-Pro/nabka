@@ -718,8 +718,7 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
 export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
     const speedBox = document.getElementById('speedometer-box');
     const mobilePedals = document.getElementById('mobile-car-pedals');
-    const jumpBtnLabel = document.getElementById('jump-btn-label');
-    const jumpBtnIcon = document.getElementById('jump-btn-icon');
+    const jumpBtn = document.getElementById('btn-action-jump');
     const actionBtnLabel = document.getElementById('action-btn-label');
     SoundManager.playActionSound('car');
 
@@ -747,8 +746,7 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         SoundManager.updateVehicleAudio(null, false, false, false, false);
         if (speedBox) speedBox.classList.add('hidden');
         if (mobilePedals) mobilePedals.classList.add('hidden');
-        if (jumpBtnLabel) jumpBtnLabel.textContent = 'Прыжок';
-        if (jumpBtnIcon) jumpBtnIcon.className = 'fa-solid fa-arrow-up text-sky-400';
+        if (jumpBtn) jumpBtn.classList.remove('hidden');
         if (actionBtnLabel) actionBtnLabel.textContent = 'Действие (E)';
         showToast(`🚶 @${GAME_STATE.username} вышел на променад Набки`, 'sky');
         if (onSendSnapshot) onSendSnapshot(true);
@@ -764,8 +762,7 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         resetVehiclePose(carObj);
         if (speedBox) speedBox.classList.remove('hidden');
         if (mobilePedals) mobilePedals.classList.remove('hidden');
-        if (jumpBtnLabel) jumpBtnLabel.textContent = 'Дрифт';
-        if (jumpBtnIcon) jumpBtnIcon.className = 'fa-solid fa-compact-disc fa-spin text-amber-400';
+        if (jumpBtn) jumpBtn.classList.add('hidden');
         if (actionBtnLabel) actionBtnLabel.textContent = 'Выйти (E)';
         completePOI('jdm_drive', `🏎️ @${GAME_STATE.username} за рулём праворульного ${carObj.name}!`, 1200);
         triggerPlayerSpeech('Турер Ви на Набке! 🏎️💨');
@@ -778,9 +775,9 @@ export function updateWorldVehicles(dt, worldMap = null) {
 
     let input = null;
     let isBoostActive = false;
-    let isSpace = false;
     let throttle = 0;
     let turn = 0;
+    let isHandbrakeActive = false;
 
     if (GAME_STATE.inVehicle) {
         if (!isGameplayInputSuspended()) {
@@ -791,13 +788,13 @@ export function updateWorldVehicles(dt, worldMap = null) {
             if (GAME_STATE.keys.d || GAME_STATE.joystickVector.x > 0.2) turn -= 1;
 
             isBoostActive = Boolean(GAME_STATE.keys.shift || GAME_STATE.joystickSprint);
-            isSpace = Boolean(GAME_STATE.keys.space);
+            isHandbrakeActive = Boolean(GAME_STATE.keys.space);
         }
 
         input = {
             throttle,
             steer: turn,
-            handbrake: isSpace,
+            handbrake: isHandbrakeActive,
             boost: isBoostActive
         };
     }
