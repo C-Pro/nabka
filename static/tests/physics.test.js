@@ -7,8 +7,12 @@ describe('PhysicsEngine & model-computed world_map.json colliders', () => {
         expect(worldMap.staticColliders).toBeUndefined();
         const physics = createColliderStore();
         physics.loadFromConfig(worldMap);
+        const expectedLandmarks = (worldMap.landmarks || []).reduce((acc, lm) => {
+            const count = Array.isArray(lm.colliderBoxes) ? lm.colliderBoxes.length : 1;
+            return acc + count;
+        }, 0);
         const expectedCount =
-            (worldMap.landmarks?.length || 0) +
+            expectedLandmarks +
             (worldMap.stalls?.length || 0) +
             (worldMap.props?.length || 0) +
             (worldMap.hills?.east?.length || 0) +
@@ -108,6 +112,92 @@ describe('PhysicsEngine & model-computed world_map.json colliders', () => {
         expect(hit2).toBe(false);
         expect(pos2.x).toBe(0);
         expect(pos2.z).toBe(15);
+    });
+
+    test('supports independent rx and rz axes for mountain colliders', () => {
+        // Uniform circular hill
+        const circularHill = { x: 100, y: -0.5, z: 50, r: 40, h: 60 };
+        const circleCol = computeWorldColliderFromEntity(circularHill, 'hills');
+        expect(circleCol.type).toBe('circle');
+        expect(circleCol.radius).toBeCloseTo(40 * 0.78, 2);
+
+        // Independent X and Z hill (elongated ridge)
+        const stretchedHill = { x: 100, y: -0.5, z: 50, rx: 60, rz: 20, h: 48, rotY: 0 };
+        const boxCol = computeWorldColliderFromEntity(stretchedHill, 'hills');
+        expect(boxCol.type).toBe('box');
+        expect(boxCol.width).toBeCloseTo(60 * 2 * 0.78, 2);
+        expect(boxCol.depth).toBeCloseTo(20 * 2 * 0.78, 2);
+
+        const physics = createColliderStore();
+        physics.addModelCollider(stretchedHill, 'hills');
+        expect(physics.colliders.length).toBe(1);
+        expect(physics.colliders[0].type).toBe('box');
+
+        // Test collision against the elongated mountain along its wide X axis
+        const halfW = boxCol.width / 2;
+        const posBlockedX = { x: 100 - halfW - 0.2, z: 50 };
+        expect(physics.resolveWorldCollision(posBlockedX, 0.55, 0)).toBe(true);
+
+        // Test position clear along its narrow Z axis
+        const halfD = boxCol.depth / 2;
+        const posClearZ = { x: 100, z: 50 + halfD + 2.0 };
+        expect(physics.resolveWorldCollision(posClearZ, 0.55, 0)).toBe(false);
+    });
+
+    test('dynamo_stadium uses a set of collision boxes allowing entry via West or East gate while blocking walls', () => {
+        const dynamo = worldMap.landmarks.find(l => l.id === 'dynamo_stadium');
+        expect(dynamo).toBeTruthy();
+        expect(Array.isArray(dynamo.colliderBoxes)).toBe(true);
+        expect(dynamo.colliderBoxes.length).toBe(6);
+
+        // computeWorldColliderFromEntity returns the array of transformed boxes
+        const colliders = computeWorldColliderFromEntity(dynamo, 'landmarks');
+        expect(Array.isArray(colliders)).toBe(true);
+        expect(colliders.length).toBe(6);
+
+        const physics = createColliderStore();
+        physics.loadFromConfig(worldMap);
+
+        // 1. Enter via West gate (world coordinates ~ x: 218.57, z: 2.2)
+        const posWestGate = { x: 218.57, z: 2.2 };
+        const hitWest = physics.resolveWorldCollision(posWestGate, 0.55, 0);
+        expect(hitWest).toBe(false);
+        expect(posWestGate.x).toBeCloseTo(218.57, 1);
+        expect(posWestGate.z).toBeCloseTo(2.2, 1);
+
+        // 2. Enter via East gate (world coordinates ~ x: 119.23, z: 4.27)
+        const posEastGate = { x: 119.23, z: 4.27 };
+        const hitEast = physics.resolveWorldCollision(posEastGate, 0.55, 0);
+        expect(hitEast).toBe(false);
+        expect(posEastGate.x).toBeCloseTo(119.23, 1);
+        expect(posEastGate.z).toBeCloseTo(4.27, 1);
+
+        // 3. Move freely on the football pitch inside the stadium (world center ~ x: 168.67, z: 3.24)
+        const posPitch = { x: 168.67, z: 3.24 };
+        const hitPitch = physics.resolveWorldCollision(posPitch, 0.55, 0);
+        expect(hitPitch).toBe(false);
+        expect(posPitch.x).toBeCloseTo(168.67, 1);
+        expect(posPitch.z).toBeCloseTo(3.24, 1);
+
+        // 4. Block walking through the South Stand wall (z: -22.62, x: 168.13)
+        const posSouthWall = { x: 168.13, z: -22.62 };
+        const hitSouth = physics.resolveWorldCollision(posSouthWall, 0.55, 0);
+        expect(hitSouth).toBe(true);
+
+        // 5. Block walking through the North Stand wall (z: 28.53, x: 169.2)
+        const posNorthWall = { x: 169.2, z: 28.53 };
+        const hitNorth = physics.resolveWorldCollision(posNorthWall, 0.55, 0);
+        expect(hitNorth).toBe(true);
+
+        // 6. Block walking through the West Wall flanks (outside the central gate)
+        const posWestFlank = { x: 218.09, z: -20.9 };
+        const hitWestFlank = physics.resolveWorldCollision(posWestFlank, 0.55, 0);
+        expect(hitWestFlank).toBe(true);
+
+        // 7. Block walking through the East Wall flanks (outside the central gate)
+        const posEastFlank = { x: 118.81, z: -16.08 };
+        const hitEastFlank = physics.resolveWorldCollision(posEastFlank, 0.55, 0);
+        expect(hitEastFlank).toBe(true);
     });
 });
 

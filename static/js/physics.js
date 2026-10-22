@@ -32,7 +32,7 @@ export const DEFAULT_MODEL_BOUNDS = {
     'models/car_3.glb': { minX: -1.31, maxX: 1.31, minY: 0, maxY: 1.625, minZ: -2.51, maxZ: 2.51 },
     'models/car_4.glb': { minX: -1.31, maxX: 1.31, minY: 0, maxY: 1.625, minZ: -2.51, maxZ: 2.51 },
     'models/dunya.glb': { minX: -0.253, maxX: 0.253, minY: 0, maxY: 0.89, minZ: -0.461, maxZ: 0.585 },
-    'models/dynamo_stadium.glb': { minX: -8.45, maxX: 8, minY: 0, maxY: 13.1, minZ: -28, maxZ: 28 },
+    'models/dynamo_stadium.glb': { minX: -18.625, maxX: 18, minY: 0, maxY: 19, minZ: -28, maxZ: 28 },
     'models/ferris_wheel.glb': { minX: -14.4, maxX: 14.4, minY: -0.844, maxY: 33.9, minZ: -2.7, maxZ: 2.7 },
     'models/forrester.glb': { minX: -1.31, maxX: 1.31, minY: 0, maxY: 1.867, minZ: -2.51, maxZ: 2.51 },
     'models/fortress_museum.glb': { minX: -5.502, maxX: 11, minY: 0, maxY: 7.3, minZ: -11, maxZ: 11 },
@@ -41,7 +41,7 @@ export const DEFAULT_MODEL_BOUNDS = {
     'models/jimny.glb': { minX: -1.322, maxX: 1.31, minY: -0.187, maxY: 2.375, minZ: -2.347, maxZ: 2.25 },
     'models/lighthouse.glb': { minX: -5.5, maxX: 49.5, minY: -0.4, maxY: 18, minZ: -3, maxZ: 3 },
     'models/npc.glb': { minX: -0.68, maxX: 0.68, minY: 0.04, maxY: 2, minZ: -0.68, maxZ: 0.68 },
-    'models/ocean_cinema.glb': { minX: -11.5, maxX: 11, minY: 0, maxY: 17.3, minZ: -14, maxZ: 14 },
+    'models/ocean_cinema.glb': { minX: -12.5, maxX: 11, minY: 0, maxY: 16.5, minZ: -14, maxZ: 14 },
     'models/oceanarium.glb': { minX: -12, maxX: 12, minY: 0, maxY: 16.8, minZ: -12, maxZ: 12.05 },
     'models/olympiets_complex.glb': { minX: -9.45, maxX: 9, minY: 0, maxY: 11.2, minZ: -14, maxZ: 14 },
     'models/pier.glb': { minX: -18, maxX: 18, minY: -0.3, maxY: 0.3, minZ: -3.5, maxZ: 3.5 },
@@ -61,6 +61,20 @@ export const DEFAULT_MODEL_BOUNDS = {
     'models/tiger_statue.glb': { minX: -1.8, maxX: 1.886, minY: 0, maxY: 2.35, minZ: -1.2, maxZ: 1.2 },
     'models/yacht_club_boathouse.glb': { minX: -3.5, maxX: 3.5, minY: -2.25, maxY: 2.25, minZ: -4.5, maxZ: 4.5 },
     'models/yacht_club_pier.glb': { minX: -15, maxX: 15, minY: -0.35, maxY: 0.35, minZ: -4, maxZ: 4 }
+};
+
+/**
+ * Compound multi-box collider presets for models with complex boundaries (e.g. stadiums with gates).
+ */
+export const DEFAULT_COMPOUND_COLLIDERS = {
+    'models/dynamo_stadium.glb': [
+        { name: 'Стены и Южная трибуна', minX: -18.625, maxX: -9.5, minY: 0, maxY: 9.5, minZ: -27.75, maxZ: 27.75 },
+        { name: 'Стены и Северная трибуна / Манеж', minX: 9.5, maxX: 18, minY: 0, maxY: 9.5, minZ: -27.75, maxZ: 27.75 },
+        { name: 'Западная стена (южное крыло)', minX: -18.625, maxX: -6.5, minY: 0, maxY: 5.5, minZ: -27.75, maxZ: -26.5 },
+        { name: 'Западная стена (северное крыло)', minX: 6.5, maxX: 18, minY: 0, maxY: 5.5, minZ: -27.75, maxZ: -26.5 },
+        { name: 'Восточная стена (южное крыло)', minX: -18.625, maxX: -3.5, minY: 0, maxY: 8.75, minZ: 26, maxZ: 27.75 },
+        { name: 'Восточная стена (северное крыло)', minX: 3.5, maxX: 18, minY: 0, maxY: 8.75, minZ: 26, maxZ: 27.75 }
+    ]
 };
 
 function enrichBounds(raw) {
@@ -135,30 +149,59 @@ export function computeWorldColliderFromEntity(item, category = 'landmarks', loc
         const y = round3(item.y !== undefined ? item.y : -0.5);
         const z = round3(item.z || 0);
         const r = Number(item.r || 32);
+        const rx = Number(item.rx !== undefined ? item.rx : r);
+        const rz = Number(item.rz !== undefined ? item.rz : r);
         const h = Number(item.h || 48);
-        const radius = round3(r * 0.78);
         const minY = y;
         const maxY = round3(y + h);
+
+        if (Math.abs(rx - rz) < 0.001) {
+            const radius = round3(rx * 0.78);
+            return {
+                type: 'circle',
+                id: item.id || '',
+                category: 'hills',
+                model: 'models/sopka.glb',
+                x,
+                y: round3(y + h / 2),
+                z,
+                radius,
+                minY,
+                height: maxY,
+                boxHeight: round3(h),
+                climbable: false,
+                name: item.label || item.name || 'Сопка Владивостока'
+            };
+        }
+
+        const rotY = Number(item.rotY ?? item.rotation ?? 0) || 0;
+        const width = round3(rx * 2 * 0.78);
+        const depth = round3(rz * 2 * 0.78);
         return {
-            type: 'circle',
+            type: 'box',
             id: item.id || '',
             category: 'hills',
             model: 'models/sopka.glb',
             x,
             y: round3(y + h / 2),
             z,
-            radius,
+            width,
+            depth,
+            halfW: width / 2,
+            halfD: depth / 2,
             minY,
             height: maxY,
             boxHeight: round3(h),
+            rotY,
             climbable: false,
             name: item.label || item.name || 'Сопка Владивостока'
         };
     }
 
     const modelUrl = resolveEntityModelUrl(item, category);
-    const box = localBox ? enrichBounds(localBox) : getModelBoundingBox(modelUrl);
-    if (!box || box.width <= 0 || box.depth <= 0) return null;
+    const compoundBoxes = (Array.isArray(item.colliderBoxes) && item.colliderBoxes.length > 0)
+        ? item.colliderBoxes
+        : (DEFAULT_COMPOUND_COLLIDERS[modelUrl] || DEFAULT_COMPOUND_COLLIDERS[`models/${modelUrl}`] || null);
 
     const isBench = category === 'props' && (item.type === 'bench' || modelUrl.includes('bench'));
     const px = Number(item.x) || 0;
@@ -167,6 +210,53 @@ export function computeWorldColliderFromEntity(item, category = 'landmarks', loc
     const rotY = Number(item.rotY ?? item.rotation ?? 0) || 0;
     const rawScale = Number(item.scale);
     const scale = (Number.isFinite(rawScale) && rawScale > 0) ? rawScale : 1;
+    const name = item.name || item.title || (item.label && item.label.text) || item.id || modelUrl;
+
+    if (Array.isArray(compoundBoxes) && compoundBoxes.length > 0) {
+        const cos = Math.cos(rotY);
+        const sin = Math.sin(rotY);
+        return compoundBoxes.map((rawBox, idx) => {
+            const b = enrichBounds(rawBox);
+            const ox = b.centerX * scale;
+            const oy = b.centerY * scale;
+            const oz = b.centerZ * scale;
+
+            const cx = round3(px + ox * cos + oz * sin);
+            const cy = round3(py + oy);
+            const cz = round3(pz - ox * sin + oz * cos);
+            const minY = round3(py + b.minY * scale);
+            const maxY = round3(py + b.maxY * scale);
+            const width = round3(b.width * scale);
+            const depth = round3(b.depth * scale);
+            const boxHeight = round3(b.height * scale);
+            const climbable = rawBox.climbable !== undefined ? Boolean(rawBox.climbable) : (maxY <= 2.5);
+            const boxName = rawBox.name ? `${name} - ${rawBox.name}` : `${name} [box ${idx + 1}]`;
+
+            return {
+                type: 'box',
+                id: item.id ? `${item.id}_${idx}` : '',
+                parentId: item.id || '',
+                category,
+                model: modelUrl,
+                x: cx,
+                y: cy,
+                z: cz,
+                width,
+                depth,
+                halfW: width / 2,
+                halfD: depth / 2,
+                minY,
+                height: maxY,
+                boxHeight,
+                rotY,
+                climbable,
+                name: boxName
+            };
+        });
+    }
+
+    const box = localBox ? enrichBounds(localBox) : getModelBoundingBox(modelUrl);
+    if (!box || box.width <= 0 || box.depth <= 0) return null;
 
     const width = round3(box.width * scale);
     const boxHeight = round3(box.height * scale);
@@ -184,7 +274,6 @@ export function computeWorldColliderFromEntity(item, category = 'landmarks', loc
     const minY = round3(py + box.minY * scale);
     const maxY = round3(py + box.maxY * scale);
     const climbable = item.climbable !== undefined ? Boolean(item.climbable) : (maxY <= 2.5);
-    const name = item.name || item.title || (item.label && item.label.text) || item.id || modelUrl;
 
     return {
         type: 'box',
@@ -259,6 +348,9 @@ export function createColliderStore(initialColliders = []) {
 
         addCollider(col) {
             if (!col) return null;
+            if (Array.isArray(col)) {
+                return col.map(c => this.addCollider(c));
+            }
             if (col.type === 'circle') {
                 const minY = col.minY ?? 0;
                 const height = col.height ?? 10;
@@ -299,6 +391,9 @@ export function createColliderStore(initialColliders = []) {
         addModelCollider(item, category = 'landmarks', localBox = null) {
             const col = computeWorldColliderFromEntity(item, category, localBox);
             if (!col) return null;
+            if (Array.isArray(col)) {
+                return col.map(c => this.addCollider(c));
+            }
             return this.addCollider(col);
         },
 

@@ -478,8 +478,6 @@ export function buildAllExportableModels(worldMap = {}) {
     models.set('tiger_statue.glb', ModelBuilders.tiger_statue());
     models.set('pier.glb', ModelBuilders.pier());
     models.set('ferris_wheel.glb', ModelBuilders.ferris_wheel());
-    models.set('dynamo_stadium.glb', ModelBuilders.dynamo_stadium());
-    models.set('ocean_cinema.glb', ModelBuilders.ocean_cinema());
     models.set('oceanarium.glb', ModelBuilders.oceanarium());
     models.set('arbat_paving.glb', ModelBuilders.arbat_paving());
     models.set('supra_restaurant.glb', ModelBuilders.supra_restaurant());

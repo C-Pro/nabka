@@ -31,6 +31,8 @@ const TELEPORT_KEY_BY_PARENT_ID = {
     yacht_club_boathouse: 'yachtclub'
 };
 
+const round2 = (v) => Math.round(Number(v) * 100) / 100;
+
 class NabkaWorldEditor {
     constructor() {
         this.worldMap = null;
@@ -442,6 +444,13 @@ class NabkaWorldEditor {
         if (!this.worldMap.hills || typeof this.worldMap.hills !== 'object') {
             this.worldMap.hills = { east: [], north: [], south: [] };
         }
+        for (const dir of ['east', 'north', 'south']) {
+            const list = this.worldMap.hills[dir] || [];
+            for (const h of list) {
+                if (h.rx === undefined && h.r !== undefined) h.rx = h.r;
+                if (h.rz === undefined && h.r !== undefined) h.rz = h.r;
+            }
+        }
 
         await this.rebuildSceneFromMap();
         this.updateUndoRedoUI();
@@ -649,8 +658,62 @@ class NabkaWorldEditor {
             return;
         }
 
+        if (Array.isArray(col)) {
+            const isGroup = entry.colliderMesh instanceof THREE.Group;
+            if (entry.colliderMesh && !isGroup) {
+                this.colliderGroup.remove(entry.colliderMesh);
+                if (entry.colliderMesh.geometry) entry.colliderMesh.geometry.dispose();
+                if (entry.colliderMesh.material) entry.colliderMesh.material.dispose();
+                entry.colliderMesh = null;
+            }
+            if (!entry.colliderMesh) {
+                entry.colliderMesh = new THREE.Group();
+                this.colliderGroup.add(entry.colliderMesh);
+            }
+            const group = entry.colliderMesh;
+            group.visible = true;
+
+            while (group.children.length > 0) {
+                const child = group.children[0];
+                group.remove(child);
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) child.material.dispose();
+            }
+
+            for (const subCol of col) {
+                const geo = new THREE.BoxGeometry(1, 1, 1);
+                const mat = new THREE.MeshBasicMaterial({
+                    color: subCol.climbable ? 0x34d399 : 0xfbbf24,
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.72
+                });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.set(subCol.x || 0, subCol.y ?? ((subCol.height || 2) / 2), subCol.z || 0);
+                mesh.rotation.set(0, subCol.rotY || 0, 0);
+                mesh.scale.set(
+                    Math.max(0.05, subCol.width || 1),
+                    Math.max(0.05, subCol.boxHeight || subCol.height || 1),
+                    Math.max(0.05, subCol.depth || 1)
+                );
+                group.add(mesh);
+            }
+            return;
+        }
+
+        const isCircle = col.type === 'circle';
+        if (entry.colliderMesh) {
+            const currentIsGroup = entry.colliderMesh instanceof THREE.Group;
+            const currentIsCircle = !currentIsGroup && entry.colliderMesh.geometry instanceof THREE.CylinderGeometry;
+            if (currentIsGroup || isCircle !== currentIsCircle) {
+                this.colliderGroup.remove(entry.colliderMesh);
+                if (entry.colliderMesh.geometry) entry.colliderMesh.geometry.dispose();
+                if (entry.colliderMesh.material) entry.colliderMesh.material.dispose();
+                entry.colliderMesh = null;
+            }
+        }
+
         if (!entry.colliderMesh) {
-            const isCircle = col.type === 'circle';
             const geo = isCircle
                 ? new THREE.CylinderGeometry(1, 1, 1, 20, 1, false)
                 : new THREE.BoxGeometry(1, 1, 1);
@@ -911,6 +974,8 @@ class NabkaWorldEditor {
             scaleY: entry.object3d.scale.y || 1,
             scaleZ: entry.object3d.scale.z || 1,
             r: data.r ?? data.radius ?? 32,
+            rx: data.rx ?? data.r ?? 32,
+            rz: data.rz ?? data.r ?? 32,
             h: data.h ?? data.height ?? 48,
             minX: data.minX ?? -46,
             maxX: data.maxX ?? 48,
@@ -1127,21 +1192,30 @@ class NabkaWorldEditor {
                 data.height = Math.max(0.1, round2(origH * (object3d.scale.y / startScaleY)));
                 data.depth = Math.max(2, round2(origD * (object3d.scale.z / startScaleZ)));
             } else if (category === 'hills') {
-                const origR = start ? (start.r || 32) : (data.r || 32);
-                const origH = start ? (start.h || 48) : (data.h || 48);
+                const origRx = start ? (start.rx ?? start.r ?? 32) : (data.rx ?? data.r ?? 32);
+                const origRz = start ? (start.rz ?? start.r ?? 32) : (data.rz ?? data.r ?? 32);
+                const origH = start ? (start.h ?? 48) : (data.h ?? 48);
 
-                const dX = Math.abs(object3d.scale.x - startScaleX);
-                const dZ = Math.abs(object3d.scale.z - startScaleZ);
+                const ratioX = startScaleX > 0 ? (object3d.scale.x / startScaleX) : 1;
+                const ratioY = startScaleY > 0 ? (object3d.scale.y / startScaleY) : 1;
+                const ratioZ = startScaleZ > 0 ? (object3d.scale.z / startScaleZ) : 1;
 
-                const activeHorizScale = dZ > dX ? object3d.scale.z : object3d.scale.x;
-                const horizRatio = startScaleX > 0 ? (activeHorizScale / startScaleX) : 1;
-                const vertRatio = startScaleY > 0 ? (object3d.scale.y / startScaleY) : 1;
+                const newRx = Math.max(4, round2(origRx * ratioX));
+                const newRz = Math.max(4, round2(origRz * ratioZ));
+                const newH = Math.max(4, round2(origH * ratioY));
 
-                object3d.scale.x = activeHorizScale;
-                object3d.scale.z = activeHorizScale;
+                data.rx = newRx;
+                data.rz = newRz;
+                data.h = newH;
+                if (newRx === newRz) {
+                    data.r = newRx;
+                } else {
+                    data.r = round2((newRx + newRz) / 2);
+                }
 
-                data.r = Math.max(4, round2(origR * horizRatio));
-                data.h = Math.max(4, round2(origH * vertRatio));
+                object3d.scale.x = newRx / 32;
+                object3d.scale.y = newH / 48;
+                object3d.scale.z = newRz / 32;
             } else if (category === 'pois') {
                 const origR = start ? start.radius : (data.radius || data.r || 6);
                 const dX = Math.abs(object3d.scale.x - startScaleX);
@@ -1188,6 +1262,8 @@ class NabkaWorldEditor {
         if (data.radius !== undefined) updateInput('radius', data.radius);
         if (data.height !== undefined) updateInput('height', data.height);
         if (data.r !== undefined) updateInput('r', data.r);
+        if (data.rx !== undefined) updateInput('rx', data.rx);
+        if (data.rz !== undefined) updateInput('rz', data.rz);
         if (data.h !== undefined) updateInput('h', data.h);
         if (data.rotY !== undefined) updateInput('rotY', data.rotY);
         if (data.rotation !== undefined) updateInput('rotation', data.rotation);
@@ -1428,6 +1504,10 @@ class NabkaWorldEditor {
                 form.appendChild(row);
             });
         } else {
+            if (category === 'hills' && data && !Array.isArray(data)) {
+                if (data.rx === undefined) data.rx = data.r ?? 32;
+                if (data.rz === undefined) data.rz = data.r ?? 32;
+            }
             const keys = Object.keys(data);
             for (const key of keys) {
                 if (key.startsWith('_')) continue;
@@ -1439,7 +1519,14 @@ class NabkaWorldEditor {
 
                 const label = document.createElement('label');
                 label.className = 'field-label';
-                label.textContent = key;
+                let labelText = key;
+                if (category === 'hills') {
+                    if (key === 'r') labelText = 'r (radius all)';
+                    else if (key === 'rx') labelText = 'rx (radius X)';
+                    else if (key === 'rz') labelText = 'rz (radius Z)';
+                    else if (key === 'h') labelText = 'h (height)';
+                }
+                label.textContent = labelText;
                 row.appendChild(label);
 
                 const input = document.createElement('input');
@@ -1583,10 +1670,25 @@ class NabkaWorldEditor {
             this.selectionBox.update();
             return;
         }
-        if (category === 'hills' && (changedKey === 'r' || changedKey === 'h')) {
-            const r = data.r || 32;
+        if (category === 'hills' && (changedKey === 'r' || changedKey === 'rx' || changedKey === 'rz' || changedKey === 'h')) {
+            if (changedKey === 'r') {
+                data.rx = data.r;
+                data.rz = data.r;
+                const rxInput = document.querySelector('[data-field="rx"]');
+                const rzInput = document.querySelector('[data-field="rz"]');
+                if (rxInput && document.activeElement !== rxInput) rxInput.value = data.r;
+                if (rzInput && document.activeElement !== rzInput) rzInput.value = data.r;
+            } else if (changedKey === 'rx' || changedKey === 'rz') {
+                if (data.rx === undefined) data.rx = data.r || 32;
+                if (data.rz === undefined) data.rz = data.r || 32;
+                data.r = round2((data.rx + data.rz) / 2);
+                const rInput = document.querySelector('[data-field="r"]');
+                if (rInput && document.activeElement !== rInput) rInput.value = data.r;
+            }
+            const rx = data.rx ?? data.r ?? 32;
+            const rz = data.rz ?? data.r ?? 32;
             const h = data.h || 48;
-            object3d.scale.set(r / 32, h / 48, r / 32);
+            object3d.scale.set(rx / 32, h / 48, rz / 32);
             this.updateColliderOverlayForEntry(entry);
             this.selectionBox.update();
             return;
@@ -1682,7 +1784,7 @@ class NabkaWorldEditor {
                 color: 3046706
             },
             hills: {
-                x, y: -0.5, z, r: 45, h: 32, seed: 10
+                x, y: -0.5, z, rx: 45, rz: 45, r: 45, h: 32, seed: 10
             },
             landmarks: {
                 id: `landmark_${idSuffix}`,

@@ -859,6 +859,30 @@ export const ModelBuilders = {
         sign.position.set(-8.2, 11.5, 0);
         group.add(sign);
 
+        // 4 Floodlight Masts and Banks matching Blockbench model
+        const mastGeo = new THREE.BoxGeometry(1.5, 18, 1.5);
+        const mastMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.8, roughness: 0.3 });
+        const bankGeo = new THREE.BoxGeometry(3, 2, 2);
+        const bankMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+
+        const towers = [
+            { key: 'nw', x: 14.5, y: 18.06, z: -23.5 },
+            { key: 'ne', x: 14.5, y: 18.06, z: 23.5 },
+            { key: 'sw', x: -14.5, y: 18.06, z: -23.5 },
+            { key: 'se', x: -14.5, y: 18.06, z: 23.5 }
+        ];
+        towers.forEach(t => {
+            const mast = new THREE.Mesh(mastGeo, mastMat);
+            mast.name = `mast_${t.key}_base`;
+            mast.position.set(t.x, 9, t.z);
+            group.add(mast);
+
+            const bank = new THREE.Mesh(bankGeo, bankMat.clone());
+            bank.name = `floodlight_bank_${t.key}`;
+            bank.position.set(t.x, t.y, t.z);
+            group.add(bank);
+        });
+
         return group;
     },
 

@@ -424,6 +424,7 @@ function installMockThree() {
         MeshStandardMaterial,
         MeshBasicMaterial,
         Texture,
+        CanvasTexture: Texture,
         FrontSide: 0,
         DoubleSide: 2,
         RepeatWrapping: 1000,
@@ -927,6 +928,148 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
         car.resetToSpawn();
         expect(car.y).toBe(0.27);
         expect(car.group.position.y).toBe(0.27);
+    });
+
+    test('buildVladivostokSopkiAndBayHorizon scales mountains with independent rx and rz axes', async () => {
+        const { World } = await import('../js/world.js');
+        const scene = new globalThis.THREE.Scene();
+        World.scene = scene;
+        World.hillGroups = [];
+        World.westShoreMeshes = [];
+
+        const testMap = {
+            hills: {
+                east: [
+                    { x: 10, y: -0.5, z: 20, rx: 64, rz: 16, h: 96, rotY: 0.5 }
+                ]
+            }
+        };
+
+        World.buildVladivostokSopkiAndBayHorizon(testMap);
+        expect(World.hillGroups.length).toBe(1);
+
+        const mountain = World.hillGroups[0];
+        // Base sopka model has radius 32, height 48
+        // scale.x = rx / 32 = 64 / 32 = 2.0
+        // scale.y = h / 48 = 96 / 48 = 2.0
+        // scale.z = rz / 32 = 16 / 32 = 0.5
+        expect(mountain.scale.x).toBeCloseTo(2.0, 3);
+        expect(mountain.scale.y).toBeCloseTo(2.0, 3);
+        expect(mountain.scale.z).toBeCloseTo(0.5, 3);
+        expect(mountain.rotation.y).toBeCloseTo(0.5, 3);
+    });
+
+    test('dynamo_stadium floodlights activate at night, illuminating pitch and stands', async () => {
+        const { World } = await import('../js/world.js');
+        const { ModelBuilders } = await import('../js/models.js');
+
+        const originalDoc = globalThis.document;
+        globalThis.document = {
+            getElementById: () => null,
+            createElement: () => ({
+                width: 0,
+                height: 0,
+                getContext: () => ({
+                    createRadialGradient: () => ({ addColorStop: () => {} }),
+                    fillRect: () => {},
+                    strokeRect: () => {},
+                    fillText: () => {},
+                    fillStyle: '',
+                    strokeStyle: '',
+                    lineWidth: 1
+                })
+            })
+        };
+
+        try {
+            const scene = new globalThis.THREE.Scene();
+            World.scene = scene;
+            World.landmarkGroups = [];
+            World.propGroups = [];
+            World.currentTimePhase = 'day';
+
+            // Instantiate stadium group using fallback builder (which includes floodlight masts & banks)
+            const stadium = ModelBuilders.dynamo_stadium();
+            stadium.name = 'dynamo_stadium';
+            stadium.userData = { editorId: 'dynamo_stadium' };
+            scene.add(stadium);
+            World.landmarkGroups.push(stadium);
+
+            // Attach stadium floodlights
+            World.attachStadiumFloodlights(stadium);
+
+            const nwSpot = stadium.getObjectByName('stadium_floodlight_nw');
+            const neSpot = stadium.getObjectByName('stadium_floodlight_ne');
+            const swSpot = stadium.getObjectByName('stadium_floodlight_sw');
+            const seSpot = stadium.getObjectByName('stadium_floodlight_se');
+
+            const nwPt = stadium.getObjectByName('stadium_pointlight_nw');
+            const nePt = stadium.getObjectByName('stadium_pointlight_ne');
+            const swPt = stadium.getObjectByName('stadium_pointlight_sw');
+            const sePt = stadium.getObjectByName('stadium_pointlight_se');
+
+            const pitchPool = stadium.getObjectByName('stadium_pitch_pool');
+            const nwBank = stadium.getObjectByName('floodlight_bank_nw');
+
+            expect(nwSpot).toBeTruthy();
+            expect(neSpot).toBeTruthy();
+            expect(swSpot).toBeTruthy();
+            expect(seSpot).toBeTruthy();
+            expect(nwPt).toBeTruthy();
+            expect(nePt).toBeTruthy();
+            expect(swPt).toBeTruthy();
+            expect(sePt).toBeTruthy();
+            expect(pitchPool).toBeTruthy();
+            expect(nwBank).toBeTruthy();
+
+            // 1. Day / Dawn: floodlights must be OFF
+            World.applyTimeOfDay('day');
+            expect(World.stadiumLightsActive).toBe(false);
+            expect(nwSpot.visible).toBe(false);
+            expect(seSpot.visible).toBe(false);
+            expect(nwPt.visible).toBe(false);
+            expect(pitchPool.visible).toBe(false);
+            expect(nwBank.material.emissiveIntensity).toBe(0.0);
+
+            World.applyTimeOfDay('dawn');
+            expect(World.stadiumLightsActive).toBe(false);
+            expect(nwSpot.visible).toBe(false);
+
+            // 2. Sunset: sun sets -> stadium floodlights turn ON!
+            World.applyTimeOfDay('sunset');
+            expect(World.stadiumLightsActive).toBe(true);
+            expect(nwSpot.visible).toBe(true);
+            expect(neSpot.visible).toBe(true);
+            expect(swSpot.visible).toBe(true);
+            expect(seSpot.visible).toBe(true);
+            expect(nwPt.visible).toBe(true);
+            expect(pitchPool.visible).toBe(true);
+            expect(nwBank.material.emissiveIntensity).toBe(2.5);
+
+            // 3. Dusk: floodlights remain ON
+            World.applyTimeOfDay('dusk');
+            expect(World.stadiumLightsActive).toBe(true);
+            expect(nwSpot.visible).toBe(true);
+            expect(pitchPool.visible).toBe(true);
+
+            // 4. Night: floodlights illuminate stadium brightly
+            World.applyTimeOfDay('night');
+            expect(World.stadiumLightsActive).toBe(true);
+            expect(nwSpot.visible).toBe(true);
+            expect(seSpot.visible).toBe(true);
+            expect(pitchPool.visible).toBe(true);
+            expect(nwBank.material.emissiveIntensity).toBe(2.5);
+
+            // 5. Back to day: floodlights turn OFF
+            World.applyTimeOfDay('day');
+            expect(World.stadiumLightsActive).toBe(false);
+            expect(nwSpot.visible).toBe(false);
+            expect(seSpot.visible).toBe(false);
+            expect(pitchPool.visible).toBe(false);
+            expect(nwBank.material.emissiveIntensity).toBe(0.0);
+        } finally {
+            globalThis.document = originalDoc;
+        }
     });
 });
 

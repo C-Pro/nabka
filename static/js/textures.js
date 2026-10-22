@@ -37,6 +37,7 @@ export const TextureFactory = {
     },
 
     createSignTexture(title, subtitle, bgHex = '#0f172a', accentHex = '#f59e0b', textHex = '#ffffff') {
+        if (typeof document === 'undefined' || typeof THREE === 'undefined') return null;
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 192;
@@ -64,6 +65,7 @@ export const TextureFactory = {
     },
 
     createBuildingFacadeTexture(baseHex, windowHex, cols = 6, rows = 8) {
+        if (typeof document === 'undefined' || typeof THREE === 'undefined') return null;
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 512;

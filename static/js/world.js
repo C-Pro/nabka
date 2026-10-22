@@ -30,6 +30,7 @@ export const World = {
     stallGroups: [],
     propGroups: [],
     streetLightsActive: false,
+    stadiumLightsActive: false,
     worldMap: null,
     sunMesh: null,
     currentTimePhase: null,
@@ -100,6 +101,7 @@ export const World = {
     },
 
     registerWorldLabel(text, x, y, z) {
+        if (typeof document === 'undefined') return;
         const container = document.getElementById('world-labels-container');
         if (!container) return;
         const el = document.createElement('div');
@@ -602,6 +604,83 @@ export const World = {
         return fence;
     },
 
+    attachStadiumFloodlights(group) {
+        if (!group || typeof THREE === 'undefined') return null;
+
+        const towers = [
+            { key: 'nw', x: 14.5, y: 18.06, z: -23.5 },
+            { key: 'ne', x: 14.5, y: 18.06, z: 23.5 },
+            { key: 'sw', x: -14.5, y: 18.06, z: -23.5 },
+            { key: 'se', x: -14.5, y: 18.06, z: 23.5 }
+        ];
+
+        towers.forEach(t => {
+            const bankNode = group.getObjectByName(`floodlight_bank_${t.key}`);
+            const posX = bankNode ? bankNode.position.x : t.x;
+            const posY = bankNode ? bankNode.position.y : t.y;
+            const posZ = bankNode ? bankNode.position.z : t.z;
+
+            // SpotLight aimed downwards onto the stadium pitch
+            if (!group.getObjectByName(`stadium_floodlight_${t.key}`)) {
+                const spot = new THREE.SpotLight(0xfffaed, 2.5, 85, Math.PI / 4, 0.5, 1.2);
+                spot.name = `stadium_floodlight_${t.key}`;
+                spot.position.set(posX, posY, posZ);
+                spot.castShadow = false;
+
+                const target = new THREE.Object3D();
+                target.name = `stadium_floodlight_target_${t.key}`;
+                target.position.set(0, 0.5, posZ * 0.35);
+                spot.target = target;
+
+                group.add(spot);
+                group.add(target);
+            }
+
+            // Omnidirectional radiant glow at mast top
+            if (!group.getObjectByName(`stadium_pointlight_${t.key}`)) {
+                const pt = new THREE.PointLight(0xfffaed, 1.8, 40, 1.4);
+                pt.name = `stadium_pointlight_${t.key}`;
+                pt.position.set(posX, posY, posZ);
+                pt.castShadow = false;
+                group.add(pt);
+            }
+
+            if (bankNode && bankNode.material) {
+                if (!bankNode.userData._hasClonedMat) {
+                    bankNode.material = bankNode.material.clone();
+                    bankNode.userData._hasClonedMat = true;
+                }
+                if (bankNode.material.emissive !== undefined) {
+                    bankNode.material.emissive = new THREE.Color(0xfffbeb);
+                }
+            }
+        });
+
+        // Add illuminated field pool decal across the pitch and running track
+        if (!group.getObjectByName('stadium_pitch_pool') && TextureFactory && TextureFactory.createLightPoolTexture) {
+            const poolTex = TextureFactory.createLightPoolTexture('rgba(255, 252, 235, 0.45)', 'rgba(254, 240, 138, 0)');
+            if (poolTex) {
+                const poolGeo = new THREE.PlaneGeometry(32, 54);
+                poolGeo.rotateX(-Math.PI / 2);
+                const poolMat = new THREE.MeshBasicMaterial({
+                    map: poolTex,
+                    transparent: true,
+                    depthWrite: false,
+                    blending: THREE.AdditiveBlending
+                });
+                const poolMesh = new THREE.Mesh(poolGeo, poolMat);
+                poolMesh.name = 'stadium_pitch_pool';
+                poolMesh.position.set(0, 0.52, 0);
+                poolMesh.userData = { noCollide: true };
+                group.add(poolMesh);
+            }
+        }
+
+        const lightsOn = (this.currentTimePhase === 'sunset' || this.currentTimePhase === 'dusk' || this.currentTimePhase === 'night');
+        this.setStadiumFloodlights(lightsOn);
+        return group;
+    },
+
     resolveLandmarkFallbackBuilder(lm) {
         const id = lm.id || '';
         const model = lm.model || '';
@@ -646,6 +725,9 @@ export const World = {
             }
             if (lm.id === 'oceanarium' || lm.hasFence || lm.hasBoundingBoxFence) {
                 this.attachBoundingBoxFence(group, localBox, lm.scale || 1);
+            }
+            if (lm.id === 'dynamo_stadium') {
+                this.attachStadiumFloodlights(group);
             }
             if (lm.label && lm.label.text) {
                 this.registerWorldLabel(lm.label.text, lm.label.x, lm.label.y, lm.label.z);
@@ -896,6 +978,8 @@ export const World = {
             const y = h.y !== undefined ? h.y : -0.5;
             const z = h.z || 0;
             const radius = h.r || 32;
+            const rx = h.rx !== undefined ? h.rx : radius;
+            const rz = h.rz !== undefined ? h.rz : radius;
             const height = h.h || 48;
             const label = h.label || '';
 
@@ -905,7 +989,7 @@ export const World = {
             if (h.rotY !== undefined) {
                 hillGroup.rotation.y = h.rotY;
             }
-            hillGroup.scale.set(radius / 32, height / 48, radius / 32);
+            hillGroup.scale.set(rx / 32, height / 48, rz / 32);
             const computedCollider = PhysicsEngine.addModelCollider(h, 'hills', localBox);
             hillGroup.userData = {
                 ...hillGroup.userData,
@@ -1080,6 +1164,29 @@ export const World = {
                 }
             });
         }
+
+        this.setStadiumFloodlights(this.streetLightsActive);
+    },
+
+    setStadiumFloodlights(enabled) {
+        this.stadiumLightsActive = Boolean(enabled);
+        const stadiumGroup = this.landmarkGroups?.find(g => g.userData?.editorId === 'dynamo_stadium' || g.name === 'dynamo_stadium')
+            || (this.scene && this.scene.getObjectByName && (this.scene.getObjectByName('dynamo_stadium') || (Array.isArray(this.scene.children) && this.scene.children.find(c => c.name === 'dynamo_stadium'))));
+        if (!stadiumGroup) return;
+
+        stadiumGroup.traverse((child) => {
+            if (child.name?.startsWith('stadium_floodlight_') || child.name?.startsWith('stadium_pointlight_') || child.name === 'stadium_pitch_pool') {
+                child.visible = this.stadiumLightsActive;
+            }
+            if (child.name?.startsWith('floodlight_bank_')) {
+                if (child.material && child.material.emissive !== undefined) {
+                    if (!child.material.emissive.isColor || child.material.emissive.getHex() === 0) {
+                        child.material.emissive = new THREE.Color(0xfffbeb);
+                    }
+                    child.material.emissiveIntensity = this.stadiumLightsActive ? 2.5 : 0.0;
+                }
+            }
+        });
     },
 
     applyTimeOfDay(timeOrPhase, explicitTimeString = null) {
