@@ -674,6 +674,8 @@ export const MultiplayerClient = {
                             car.yaw = car.group.rotation.y;
                             car.vx = car.vz = car.yawRate = car.speed = 0;
                             car.isAwake = false;
+                            car.isDrifting = false;
+                            car.tractionLoss = 0;
                             car.snapshotBuffer = null;
                             resetVehiclePose(car);
                             if (car.headBeam) {
@@ -989,6 +991,8 @@ export const MultiplayerClient = {
                 car.snapshotBuffer = null;
                 car.vx = car.vz = car.yawRate = car.speed = 0;
                 car.isAwake = false;
+                car.isDrifting = false;
+                car.tractionLoss = 0;
                 resetVehiclePose(car);
             }
         }

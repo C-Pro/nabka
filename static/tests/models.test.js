@@ -1068,6 +1068,15 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
             expect(pitchPool.visible).toBe(false);
             expect(nwBank.material.emissiveIntensity).toBe(0.0);
         } finally {
+            World.scene = null;
+            World.sunLight = null;
+            World.ambientLight = null;
+            World.hemiLight = null;
+            World.westShoreMeshes = [];
+            World.stadiumSpotlights = [];
+            World.stadiumLightPools = [];
+            World.stadiumEmissiveMeshes = [];
+            World.stadiumLightsActive = false;
             globalThis.document = originalDoc;
         }
     });

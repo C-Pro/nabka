@@ -94,6 +94,9 @@ export const TextureFactory = {
     },
 
     createCustomShirtTexture(username = 'Игрок', accentHex = '#38bdf8') {
+        if (typeof document === 'undefined') {
+            return new THREE.Texture();
+        }
         const canvas = document.createElement('canvas');
         canvas.width = 256;
         canvas.height = 256;

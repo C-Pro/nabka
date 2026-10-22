@@ -36,6 +36,7 @@ function createTestCar(overrides = {}) {
         isAwake: overrides.isAwake !== undefined ? overrides.isAwake : true,
         isDrifting: overrides.isDrifting || false,
         isBraking: overrides.isBraking || false,
+        tractionLoss: overrides.tractionLoss !== undefined ? overrides.tractionLoss : 0,
         ...overrides
     };
 }
@@ -54,9 +55,9 @@ describe('Vehicle Dynamics & Inertia', () => {
         for (let i = 0; i < 50; i++) {
             stepVehicleDynamics(car, input, 0.1);
         }
-        // Should cap near maxSpeedForward (25 m/s)
-        expect(car.vz).toBeLessThanOrEqual(25.5);
-        expect(car.vz).toBeGreaterThanOrEqual(24.5);
+        // Should cap near maxSpeedForward (44.44 m/s = 160 km/h)
+        expect(car.vz).toBeLessThanOrEqual(CAR_SPECS.maxSpeedForward + 0.5);
+        expect(car.vz).toBeGreaterThanOrEqual(CAR_SPECS.maxSpeedForward - 0.5);
     });
 
     test('car cannot stop on a dime: decelerates with negative acceleration when braking', () => {
@@ -137,13 +138,115 @@ describe('Vehicle Dynamics & Inertia', () => {
         expect(totalSpeed).toBeGreaterThan(8.0);
     });
 
+    test('drift speed is less effective than straight-line speed due to tire scrub and propulsion loss', () => {
+        // Straight line car reaches top speed of ~44.44 m/s (160 km/h) with 0 traction loss
+        const straightCar = createTestCar({ yaw: 0, vz: 20.0, speed: 20.0 });
+        const straightInput = { throttle: 1, steer: 0, handbrake: false, boost: false };
+        for (let i = 0; i < 40; i++) {
+            stepVehicleDynamics(straightCar, straightInput, 0.1);
+        }
+        const straightSpeed = Math.hypot(straightCar.vx, straightCar.vz);
+        expect(straightSpeed).toBeGreaterThan(43.5);
+        expect(straightCar.tractionLoss).toBeLessThan(0.01);
+
+        // Drifting car with sustained steering and handbrake stabilizes at lower speed (~19-20 m/s)
+        const driftCar = createTestCar({ yaw: 0, vz: 20.0, speed: 20.0 });
+        const driftInput = { throttle: 1, steer: 0.5, handbrake: true, boost: false };
+        for (let i = 0; i < 40; i++) {
+            stepVehicleDynamics(driftCar, driftInput, 0.1);
+        }
+        const driftSpeed = Math.hypot(driftCar.vx, driftCar.vz);
+
+        expect(driftCar.isDrifting).toBe(true);
+        expect(driftCar.tractionLoss).toBeGreaterThan(0.5);
+        expect(driftSpeed).toBeLessThan(straightSpeed - 10.0); // Distinctly slower than straight line
+        expect(driftSpeed).toBeGreaterThan(10.0); // Still moving fast under engine power
+    });
+
+    test('exiting drift accelerates forward as car regains traction and restores propulsion efficiency', () => {
+        const car = createTestCar({ yaw: 0, vz: 20.0, speed: 20.0 });
+        const driftInput = { throttle: 1, steer: 0.5, handbrake: true, boost: false };
+
+        // Establish steady drift
+        for (let i = 0; i < 40; i++) {
+            stepVehicleDynamics(car, driftInput, 0.1);
+        }
+        const speedAtDriftEnd = Math.hypot(car.vx, car.vz);
+        const lossAtDriftEnd = car.tractionLoss;
+        expect(lossAtDriftEnd).toBeGreaterThan(0.5);
+
+        // Exit drift: release handbrake and straighten wheels while holding throttle
+        const exitInput = { throttle: 1, steer: 0, handbrake: false, boost: false };
+        for (let i = 0; i < 20; i++) {
+            stepVehicleDynamics(car, exitInput, 0.1);
+        }
+
+        const speedAfterExit = Math.hypot(car.vx, car.vz);
+        // Traction recovers smoothly towards 0
+        expect(car.tractionLoss).toBeLessThan(0.05);
+        // Vehicle surges forward, accelerating from drift speed up to top speed
+        expect(speedAfterExit).toBeGreaterThan(speedAtDriftEnd + 10.0);
+        expect(speedAfterExit).toBeCloseTo(CAR_SPECS.maxSpeedForward, 0);
+    });
+
+    test('releasing handbrake while maintaining lateral slip retains positive traction penalty', () => {
+        const car = createTestCar({ yaw: 0, vz: 20.0, speed: 20.0 });
+        // Drift initiated with handbrake and sharp steering
+        for (let i = 0; i < 20; i++) {
+            stepVehicleDynamics(car, { throttle: 1, steer: 0.6, handbrake: true, boost: false }, 0.1);
+        }
+        // Release handbrake while keeping sharp steering active
+        for (let i = 0; i < 15; i++) {
+            stepVehicleDynamics(car, { throttle: 1, steer: 0.6, handbrake: false, boost: false }, 0.1);
+        }
+        // Lateral slip is still substantial, so traction loss must remain active
+        expect(car.tractionLoss).toBeGreaterThan(0.2);
+        const speed = Math.hypot(car.vx, car.vz);
+        expect(speed).toBeLessThan(CAR_SPECS.maxSpeedForward - 3.0);
+    });
+
+    test('recovering traction with zero throttle never gains kinetic energy in collision-free motion', () => {
+        const car = createTestCar({ yaw: 0, vz: 20.0, speed: 20.0 });
+        for (let i = 0; i < 40; i++) {
+            stepVehicleDynamics(car, { throttle: 1, steer: 0.5, handbrake: true, boost: false }, 0.1);
+        }
+        expect(car.tractionLoss).toBeGreaterThan(0.5);
+
+        // Coast out of drift: throttle 0, handbrake false, straight steer
+        let previousSpeed = Math.hypot(car.vx, car.vz);
+        for (let i = 0; i < 20; i++) {
+            stepVehicleDynamics(car, { throttle: 0, steer: 0, handbrake: false, boost: false }, 0.05);
+            const currentSpeed = Math.hypot(car.vx, car.vz);
+            expect(currentSpeed).toBeLessThanOrEqual(previousSpeed + 1e-6);
+            previousSpeed = currentSpeed;
+        }
+        expect(car.tractionLoss).toBeLessThan(0.05);
+    });
+
+    test('repeated handbrake toggles do not accumulate speed bonus or boost glitch', () => {
+        const carStraight = createTestCar({ yaw: 0, vz: 10.0, speed: 10.0 });
+        const carToggle = createTestCar({ yaw: 0, vz: 10.0, speed: 10.0 });
+
+        for (let i = 0; i < 30; i++) {
+            stepVehicleDynamics(carStraight, { throttle: 1, steer: 0, handbrake: false, boost: false }, 0.1);
+            stepVehicleDynamics(carToggle, { throttle: 1, steer: 0, handbrake: (i % 2 === 0), boost: false }, 0.1);
+
+            const currentStraightSpeed = Math.hypot(carStraight.vx, carStraight.vz);
+            const currentToggleSpeed = Math.hypot(carToggle.vx, carToggle.vz);
+            expect(currentToggleSpeed).toBeLessThanOrEqual(currentStraightSpeed + 1e-4);
+        }
+
+        const finalStraightSpeed = Math.hypot(carStraight.vx, carStraight.vz);
+        expect(finalStraightSpeed).toBeCloseTo(CAR_SPECS.maxSpeedForward, 0);
+    });
+
     test('boost release does not delete existing velocity; car coasts down naturally', () => {
-        const car = createTestCar({ yaw: 0, vz: 33.0, speed: 33.0 });
+        const car = createTestCar({ yaw: 0, vz: 50.0, speed: 50.0 });
         // Throttle held, but boost released
         const normalThrottleInput = { throttle: 1, steer: 0, handbrake: false, boost: false };
         stepVehicleDynamics(car, normalThrottleInput, 0.05);
-        // Velocity should NOT drop immediately to maxSpeedForward (25 m/s)
-        expect(car.vz).toBeGreaterThan(32.0);
+        // Velocity should NOT drop immediately to maxSpeedForward (44.44 m/s)
+        expect(car.vz).toBeGreaterThan(49.0);
     });
 
     test('car coasts to a stop with negative drag acceleration when throttle is released', () => {
@@ -378,9 +481,9 @@ describe('World Vehicle Physics & Fixed Timestep Solver', () => {
 
         // All frame rates must yield nearly identical distance and velocity
         expect(Math.abs(res30.z - res60.z)).toBeLessThan(0.01);
-        expect(Math.abs(res144.z - res60.z)).toBeLessThan(0.35);
+        expect(Math.abs(res144.z - res60.z)).toBeLessThan(0.45);
         expect(Math.abs(res30.vz - res60.vz)).toBeLessThan(0.01);
-        expect(Math.abs(res144.vz - res60.vz)).toBeLessThan(0.35);
+        expect(Math.abs(res144.vz - res60.vz)).toBeLessThan(0.45);
     });
 
     test('three-car pileup against a static wall separates all cars with non-negative clearance', () => {

@@ -665,6 +665,7 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
         isAwake: false,
         isDrifting: false,
         isBraking: false,
+        tractionLoss: 0,
         steering: 0,
         remoteDriver: null,
         netTarget: null,
@@ -684,6 +685,7 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
             this.isAwake = false;
             this.isDrifting = false;
             this.isBraking = false;
+            this.tractionLoss = 0;
             this.steering = 0;
             this.remoteDriver = null;
             this.netTarget = null;
@@ -746,6 +748,7 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         leavingVehicle.isAwake = false;
         leavingVehicle.isDrifting = false;
         leavingVehicle.isBraking = false;
+        leavingVehicle.tractionLoss = 0;
         resetVehiclePose(leavingVehicle);
 
         if (onSendSnapshot) onSendSnapshot(true);
@@ -773,6 +776,7 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         hideLocalLabels();
         carObj.snapshotBuffer = null;
         carObj.remoteDriver = null;
+        carObj.tractionLoss = 0;
         resetVehiclePose(carObj);
         if (speedBox) speedBox.classList.remove('hidden');
         if (mobilePedals) mobilePedals.classList.remove('hidden');

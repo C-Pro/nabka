@@ -604,21 +604,30 @@ export const CAR_SPECS = {
     axleOffset: 1.25,
     collisionRadius: 1.15,
     restitution: 0.25,
-    maxSpeedForward: 25.0,
-    maxSpeedBoost: 34.0,
+    maxSpeedForward: 44.44,
+    maxSpeedBoost: 55.56,
     maxSpeedReverse: -10.0,
-    accelForward: 18.0,
-    accelBoost: 26.0,
+    accelForward: 24.0,
+    accelBoost: 32.0,
     accelBrake: 12.0,
     accelReverse: 8.0,
-    accelHandbrake: 15.0,
+    accelHandbrake: 18.0,
     dragRoll: 1.4,
-    dragAero: 0.003,
+    dragAero: 0.002,
     muGrip: 1.15,
     muDrift: 0.55,
     lateralDampingGrip: 12.0,
     lateralDampingDrift: 2.6,
-    steerGain: 0.52
+    steerGain: 0.52,
+    driftDriveEfficiency: 0.50,
+    driftScrubDrag: 0.012,
+    slipAngleStart: 0.14,
+    slipAngleFull: 0.55,
+    lossSpeedStart: 1.0,
+    lossSpeedFull: 5.0,
+    handbrakeSlipFloor: 0.35,
+    tractionLossRate: 12.0,
+    tractionRecoveryRate: 8.0
 };
 
 export function rotationalVelocity(r, omega) {
@@ -634,6 +643,12 @@ export function normalizeAngle(angle) {
     if (a > Math.PI) a -= Math.PI * 2;
     if (a < -Math.PI) a += Math.PI * 2;
     return a;
+}
+
+export function smoothstep(edge0, edge1, x) {
+    if (edge0 >= edge1) return x >= edge1 ? 1 : 0;
+    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
 }
 
 export function getVehicleCollisionCircles(car, axleOffset = CAR_SPECS.axleOffset, radius = CAR_SPECS.collisionRadius) {
@@ -689,6 +704,8 @@ export function stepSingleVehicleDynamics(car, input, dt) {
     car.yaw = isFinite(rawYaw) ? rawYaw : 0;
     const rawYawRate = Number(car.yawRate);
     car.yawRate = isFinite(rawYawRate) ? rawYawRate : 0;
+    const rawTractionLoss = Number(car.tractionLoss);
+    car.tractionLoss = isFinite(rawTractionLoss) ? Math.max(0, Math.min(1, rawTractionLoss)) : 0;
 
     if (input && typeof input === 'object') {
         const rawThrottle = Number(input.throttle);
@@ -704,6 +721,30 @@ export function stepSingleVehicleDynamics(car, input, dt) {
 
         let vLong = car.vx * sinY + car.vz * cosY;
         let vLat = car.vx * cosY - car.vz * sinY;
+
+        // Dynamic tire traction loss & scrub drag:
+        // Drifting is inherently less efficient (power wasted spinning/smoking tires and overcoming slide friction).
+        // Car speed is penalized during drift; when the car straightens out and regains traction,
+        // it surges forward as full propulsion efficiency restores and tire scrub drag disappears.
+        const speedBefore = Math.hypot(vLong, vLat);
+        const slipAngle = Math.atan2(Math.abs(vLat), Math.max(Math.abs(vLong), 0.5));
+        const slipFactor = smoothstep(CAR_SPECS.slipAngleStart, CAR_SPECS.slipAngleFull, slipAngle);
+        const speedFactor = smoothstep(CAR_SPECS.lossSpeedStart, CAR_SPECS.lossSpeedFull, speedBefore);
+
+        const handbrakeFloor = (handbrake && throttle > 0) ? CAR_SPECS.handbrakeSlipFloor : 0;
+        const targetLoss = speedFactor * Math.max(slipFactor, handbrakeFloor);
+
+        const currentLoss = car.tractionLoss;
+        const lossRate = targetLoss > currentLoss ? CAR_SPECS.tractionLossRate : CAR_SPECS.tractionRecoveryRate;
+        car.tractionLoss = currentLoss + (targetLoss - currentLoss) * (1 - Math.exp(-lossRate * dt));
+
+        // Dissipative tire scrub drag during slide/drift (proportional to tractionLoss and v^2)
+        const scrubDecel = CAR_SPECS.driftScrubDrag * car.tractionLoss * speedBefore * speedBefore;
+        if (speedBefore > 0.001 && scrubDecel > 0) {
+            const scrubScale = Math.max(0, 1 - (scrubDecel * dt) / speedBefore);
+            vLong *= scrubScale;
+            vLat *= scrubScale;
+        }
 
         car.isBraking = false;
         const maxFwd = boost ? CAR_SPECS.maxSpeedBoost : CAR_SPECS.maxSpeedForward;
@@ -722,7 +763,8 @@ export function stepSingleVehicleDynamics(car, input, dt) {
                 vLong = Math.min(0, vLong + CAR_SPECS.accelBrake * throttle * dt);
                 car.isBraking = true;
             } else {
-                const accel = (boost ? CAR_SPECS.accelBoost : CAR_SPECS.accelForward) * throttle;
+                const efficiency = 1 - (1 - CAR_SPECS.driftDriveEfficiency) * car.tractionLoss;
+                const accel = (boost ? CAR_SPECS.accelBoost : CAR_SPECS.accelForward) * throttle * efficiency;
                 // Add propulsion only up to maxFwd without truncating existing momentum
                 if (vLong < maxFwd) {
                     vLong += Math.min(accel * dt, maxFwd - vLong);
@@ -770,7 +812,7 @@ export function stepSingleVehicleDynamics(car, input, dt) {
         const steerSpeedFactor = Math.min(1, Math.max(0, (totalSpeed - 0.3) / 2.0));
         const steerSign = vLong >= 0 ? 1 : -1;
 
-        const speedGain = 1.0 / (1.0 + Math.pow(speedMag / 15.0, 2));
+        const speedGain = 1.0 / (1.0 + Math.pow(speedMag / 26.0, 2));
         const targetYawRate = steer * (vLong / CAR_SPECS.wheelbase) * CAR_SPECS.steerGain * speedGain;
         const demandedLatAcc = Math.abs(vLong * targetYawRate);
         const maxGripAcc = CAR_SPECS.muGrip * 9.81;
@@ -810,6 +852,7 @@ export function stepSingleVehicleDynamics(car, input, dt) {
         car.speed = car.vx * Math.sin(car.yaw) + car.vz * Math.cos(car.yaw);
         car.isAwake = true;
     } else {
+        car.tractionLoss = 0;
         // Unoccupied / parked vehicle (participates when awake after collision)
         if (!car.isAwake) return;
 

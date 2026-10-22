@@ -87,7 +87,7 @@ function gameLoop() {
     }
 
     if (GAME_STATE.inVehicle) {
-        const kmh = Math.round(Math.abs(GAME_STATE.inVehicle.speed) * 3.8);
+        const kmh = Math.round(Math.abs(GAME_STATE.inVehicle.speed) * 3.6);
         const speedVal = document.getElementById('speed-value');
         if (speedVal) speedVal.textContent = String(kmh);
     }

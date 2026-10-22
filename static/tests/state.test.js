@@ -128,6 +128,7 @@ describe('MultiplayerClient state replication', () => {
     beforeEach(() => {
         GAME_STATE.username = 'Костян-с-Луговой';
         GAME_STATE.inVehicle = null;
+        World.scene = null;
         MultiplayerClient.remotePlayers.clear();
         MultiplayerClient.onlineUsers.clear();
         World.vehicles = [
