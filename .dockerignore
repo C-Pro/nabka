@@ -1,5 +1,9 @@
 .git
 .gitignore
 *.md
-editor
 editor/
+scratchpad/
+screenshots/
+*.rar
+*.tar.gz
+*.tar

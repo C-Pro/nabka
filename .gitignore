@@ -1,5 +1,28 @@
-screenshots
+# Local archives & scratchpads
+screenshots/
 vladivostok_nabka_multiplayer_project_context.md
 nabka.tar.gz
 nabka.rar
 scratchpad/
+
+# Binaries & build artifacts
+/nabka-server
+*.exe
+*.test
+*.out
+*.log
+
+# OS & Editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Environment / Secret guards
+.env
+.env.*
+*.pem
+*.key
