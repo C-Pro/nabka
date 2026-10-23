@@ -15,33 +15,42 @@ High-performance WebSocket backend for real-time multiplayer browser games built
 Clients can register their username in one of two ways:
 
 #### Option A: URL Query Parameter (Recommended)
-Connect directly with the username in the connection URL:
+Connect directly with the username (and optional session token for reconnecting) in the connection URL:
 ```
 ws://localhost:8080/ws?username=vasya
+ws://localhost:8080/ws?username=vasya&token=4f8a12bc...
 ```
-- If the username is valid and available, the connection is upgraded.
+- If the username is valid and available (or matching the active session token), the connection is upgraded.
 - If the username query parameter is provided but invalid (e.g. whitespace, control characters, >32 chars): HTTP `400 Bad Request`.
-- If the username is already connected: WebSocket close code `4409` with reason `"username already taken"`.
+- If the username is already connected by another player (or token mismatch): WebSocket close code `4409` with reason `"username already taken"`.
+- If the username has an active connection and the provided `token` matches the session token, the server atomically replaces the old connection without 4409 error and preserves the player's world/vehicle state.
 
 #### Option B: Initial Binary Message
 Connect to `/ws` without query parameters. The connection upgrades, and the client must immediately send a registration message within 5 seconds:
 ```json
 {
   "type": "register",
-  "username": "vasya"
+  "username": "vasya",
+  "token": "4f8a12bc..."
 }
 ```
-*(Encoded as MsgPack map)*
-- If registration succeeds, the client receives its own join broadcast.
+*(Encoded as MsgPack map; `token` is optional)*
+- If registration succeeds, the client receives its own join message containing its unique session token.
 - If registration message is not sent within 5 seconds, malformed, or invalid: the socket is closed.
-- If the username is already connected: WebSocket close code `4409` with reason `"username already taken"`.
+- If the username is already connected by another player (or token mismatch): WebSocket close code `4409` with reason `"username already taken"`.
+- If the username has an active connection and the provided `token` matches the session token, the server atomically replaces the old connection without 4409 error.
+
+### Session Tokens & Reconnection
+- **Token Issuance**: When a user connects, the server assigns a cryptographically unique session token transmitted directly in the user's `join` event (`token` field).
+- **Privacy**: The session token is sent only to the authenticated user and is stripped from join broadcasts sent to other players.
+- **Seamless Reconnect**: If a client connection drops (network hiccup, sleep/wake, tab reload), the client immediately attempts automatic reconnection providing its saved session token. The server recognizes the token, closes the dangling connection, and restores the session without locking the username for 30s.
 
 ### Username Rules
 - Length: 1–32 characters
 - UTF-8 encoded (supports Latin, Cyrillic, etc.)
 - Stripped of leading/trailing whitespace
 - Control characters (ASCII < 32 or 127) are rejected
-- Duplicate active usernames are strictly rejected
+- Duplicate active usernames without matching session tokens are strictly rejected
 
 ---
 
@@ -49,9 +58,9 @@ Connect to `/ws` without query parameters. The connection upgrades, and the clie
 
 - **Deadline**: 30 seconds without a valid application message or WebSocket protocol pong (configured by `InactivityTimeout`). This checks connection health, not player activity; idle players with healthy connections stay connected.
 - **Server Heartbeat**: The server sends WebSocket protocol pings every one-third of the deadline (10 seconds by default). Browser network stacks automatically return pongs, even when game rendering or JavaScript heartbeat timers are paused or throttled. Each pong refreshes the deadline.
-- **Application Heartbeat**: Browser clients also send MessagePack `{"type": "ping"}` every 8 seconds when their timers run; the server responds with `{"type": "pong"}`. Valid `move`, `chat`, and `ping` messages continue to refresh the deadline for compatibility.
-- **Broadcast on Timeout**: Remaining clients receive a leave broadcast with the legacy reason `"kicked for 30s inactivity"`. This now denotes failed connection liveness, not an AFK policy.
-- **Reconnection**: The username is immediately freed for reconnection upon timeout or disconnect.
+- **Application Activity & Heartbeat**: Browser clients send MessagePack `{"type": "ping"}` every 8 seconds when active, and re-ping immediately upon window focus/visibility restoration. Any incoming WebSocket frame resets the server's read deadline.
+- **Broadcast on Timeout**: Remaining clients receive a leave broadcast with the legacy reason `"kicked for 30s inactivity"`. This denotes failed connection liveness, not an AFK policy.
+- **Reconnection**: The username is freed for reconnection upon timeout or disconnect, and can be reclaimed immediately with the session token even before the timeout expires.
 
 For disconnect diagnosis, expand **Детали соединения** in the browser's login error to see the WebSocket close code, reason, and endpoint. Server logs record `WebSocket connection ended` with the first failing read/write operation and its underlying error. Code `1006` means no close frame was received; by itself it does not establish an inactivity timeout.
 
@@ -63,12 +72,15 @@ All messages are encoded as MessagePack maps (`fixmap` / `map`).
 
 ### 3.1. Join Event (Server -> Clients)
 
-Broadcast to all connected clients (including the newcomer) upon successful registration:
+Broadcast upon successful registration:
+- **To the newly connected client**: Contains the authoritative `token`.
+- **To other clients**: `token` is omitted for security.
 
 ```json
 {
   "type": "join",
-  "user": "vasya"
+  "user": "vasya",
+  "token": "4f8a12bc..."
 }
 ```
 
@@ -76,6 +88,7 @@ Broadcast to all connected clients (including the newcomer) upon successful regi
 |-------|------|-------------|
 | `type` | `string` | `"join"` |
 | `user` | `string` | The registered username |
+| `token` | `string` | *(Optional, sent only to the newcomer)* Unique session token for reconnections |
 
 ---
 

@@ -30,6 +30,7 @@ const (
 	TypeError    = "error"
 	TypePing     = "ping"
 	TypePong     = "pong"
+	TypeSession  = "session"
 )
 
 // Modes for movement
@@ -55,6 +56,14 @@ type Envelope struct {
 type InboundRegisterMsg struct {
 	Type     string `msgpack:"type,omitempty"`
 	Username string `msgpack:"username"`
+	Token    string `msgpack:"token,omitempty"`
+}
+
+// OutboundSessionMsg transmits the authoritative session token directly to the connected user.
+type OutboundSessionMsg struct {
+	Type  string `msgpack:"type"`
+	User  string `msgpack:"user"`
+	Token string `msgpack:"token"`
 }
 
 // InboundPedestrianMoveMsg represents an incoming pedestrian update.
@@ -98,8 +107,9 @@ type InboundChatMsg struct {
 
 // OutboundJoinMsg broadcasts when a user connects.
 type OutboundJoinMsg struct {
-	Type string `msgpack:"type"`
-	User string `msgpack:"user"`
+	Type  string `msgpack:"type"`
+	User  string `msgpack:"user"`
+	Token string `msgpack:"token,omitempty"`
 }
 
 // OutboundLeaveMsg broadcasts when a user disconnects or times out.
@@ -420,10 +430,16 @@ func ParseChat(data []byte, verifiedUsername string) (*OutboundChatMsg, error) {
 	}, nil
 }
 
-// ParseRegister decodes an initial register message with map root and exact EOF validation.
-func ParseRegister(data []byte) (string, error) {
+// RegisterRequest represents validated registration parameters.
+type RegisterRequest struct {
+	Username string
+	Token    string
+}
+
+// ParseRegisterRequest parses an inbound register msgpack payload.
+func ParseRegisterRequest(data []byte) (*RegisterRequest, error) {
 	if err := ValidateMsgPackMap(data); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	reader := bytes.NewReader(data)
@@ -431,18 +447,35 @@ func ParseRegister(data []byte) (string, error) {
 
 	var in InboundRegisterMsg
 	if err := dec.Decode(&in); err != nil {
-		return "", fmt.Errorf("failed to decode register message: %w", err)
+		return nil, fmt.Errorf("failed to decode register message: %w", err)
 	}
 
 	if reader.Len() > 0 {
-		return "", errors.New("unexpected trailing bytes after register message")
+		return nil, errors.New("unexpected trailing bytes after register message")
 	}
 
 	if in.Type != "" && in.Type != TypeRegister {
-		return "", fmt.Errorf("expected type %q, got %q", TypeRegister, in.Type)
+		return nil, fmt.Errorf("expected type %q, got %q", TypeRegister, in.Type)
 	}
 
-	return ValidateUsername(in.Username)
+	validUsername, err := ValidateUsername(in.Username)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RegisterRequest{
+		Username: validUsername,
+		Token:    strings.TrimSpace(in.Token),
+	}, nil
+}
+
+// ParseRegister decodes an initial register message with map root and exact EOF validation.
+func ParseRegister(data []byte) (string, error) {
+	req, err := ParseRegisterRequest(data)
+	if err != nil {
+		return "", err
+	}
+	return req.Username, nil
 }
 
 // MarshalMsgPack wraps msgpack.Marshal

@@ -35,6 +35,56 @@ export const MultiplayerClient = {
     worldMap: null,
     chatAutoHideTimer: null,
     currentBuildVersion: null,
+    sessionTokens: {},
+    reconnectTimer: null,
+    reconnectAttempts: 0,
+    maxReconnectAttempts: 10,
+    isReconnecting: false,
+
+    getSessionToken(username) {
+        if (!username) return '';
+        if (this.sessionTokens && this.sessionTokens[username]) {
+            return this.sessionTokens[username];
+        }
+        try {
+            if (typeof localStorage !== 'undefined') {
+                return localStorage.getItem(`nabka_session_token_${username}`) || '';
+            }
+        } catch (e) {}
+        return '';
+    },
+
+    setSessionToken(username, token) {
+        if (!username || !token) return;
+        if (!this.sessionTokens) this.sessionTokens = {};
+        this.sessionTokens[username] = token;
+        try {
+            if (typeof localStorage !== 'undefined') {
+                localStorage.setItem(`nabka_session_token_${username}`, token);
+            }
+        } catch (e) {}
+    },
+
+    clearSessionToken(username) {
+        if (!username) return;
+        if (this.sessionTokens) delete this.sessionTokens[username];
+        try {
+            if (typeof localStorage !== 'undefined') {
+                localStorage.removeItem(`nabka_session_token_${username}`);
+            }
+        } catch (e) {}
+    },
+
+    safeSend(payload) {
+        if (!this.ws || this.ws.readyState !== 1) return false;
+        try {
+            this.ws.send(payload);
+            return true;
+        } catch (err) {
+            console.warn('WebSocket send failed:', err);
+            return false;
+        }
+    },
 
     async checkServerVersion(autoReloadOnNewVersion = false) {
         if (typeof fetch === 'undefined') return null;
@@ -234,19 +284,21 @@ export const MultiplayerClient = {
         if (typeof document !== 'undefined') {
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible' && GAME_STATE.isConnected) {
+                    this.safeSend(MsgPackCodec.encode({ type: 'ping' }));
                     this.sendMoveSnapshot(true);
                 }
                 if (document.visibilityState === 'visible') {
-                    this.checkServerVersion(true);
+                    this.checkServerVersion(!GAME_STATE.isConnected);
                 }
             });
         }
         if (typeof window !== 'undefined') {
             window.addEventListener('focus', () => {
                 if (GAME_STATE.isConnected) {
+                    this.safeSend(MsgPackCodec.encode({ type: 'ping' }));
                     this.sendMoveSnapshot(true);
                 }
-                this.checkServerVersion(true);
+                this.checkServerVersion(!GAME_STATE.isConnected);
             });
         }
 
@@ -338,7 +390,7 @@ export const MultiplayerClient = {
         if (this.pingTimer) clearInterval(this.pingTimer);
         this.pingTimer = setInterval(() => {
             if (this.serverSupportsPing && GAME_STATE.isConnected && this.ws && this.ws.readyState === 1) {
-                this.ws.send(MsgPackCodec.encode({ type: 'ping' }));
+                this.safeSend(MsgPackCodec.encode({ type: 'ping' }));
             }
         }, 8000);
     },
@@ -451,16 +503,48 @@ export const MultiplayerClient = {
         this.cancelChatAutoHide();
     },
 
-    connect(username, isFallbackAttempt = false) {
+    cleanupOnDisconnect() {
+        this.setConnectingUI(false);
+        GAME_STATE.isConnected = false;
+        if (typeof document !== 'undefined') {
+            const dot = document.getElementById('net-status-dot');
+            if (dot) dot.className = 'w-2 h-2 rounded-full bg-rose-500';
+            const overlay = document.getElementById('mp-login-overlay');
+            if (overlay) overlay.classList.remove('hidden');
+        }
+
+        if (GAME_STATE.inVehicle) {
+            toggleVehicleDrive(GAME_STATE.inVehicle);
+        }
+        World.resetVehicles();
+
+        for (const usernameKey of Array.from(this.remotePlayers.keys())) {
+            this.removeRemotePlayer(usernameKey);
+        }
+        this.onlineUsers.clear();
+        this.updateOnlineRosterUI();
+    },
+
+    connect(username, isFallbackAttempt = false, isReconnect = false) {
         SoundManager.ensureInit();
         this.stopLocalBridgeMode();
         this.hideLoginError();
+
+        if (!isReconnect) {
+            this.reconnectAttempts = 0;
+            this.isReconnecting = false;
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
+            World.resetVehicles();
+        }
+
         this.setConnectingUI(true);
         this.serverSupportsPing = true;
-        World.resetVehicles();
 
         if (this.currentBuildVersion) {
-            this.checkServerVersion(true);
+            this.checkServerVersion(!GAME_STATE.isConnected && !isReconnect);
         }
 
         if (this.ws) {
@@ -482,9 +566,11 @@ export const MultiplayerClient = {
 
         const cleanBaseUrl = this.serverUrl.replace(/\?.*$/, '');
         const useRegisterPacket = isFallbackAttempt ? (this.authMode === 'query') : (this.authMode === 'register');
+        const token = this.getSessionToken(username);
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
         const wsUrl = useRegisterPacket
             ? cleanBaseUrl
-            : `${cleanBaseUrl}?username=${encodeURIComponent(username)}`;
+            : `${cleanBaseUrl}?username=${encodeURIComponent(username)}${tokenParam}`;
 
         const wsSource = Function.prototype.toString.call((typeof window !== 'undefined' && window.WebSocket) || '');
         const isPatchedByPreview = !wsSource.includes('[native code]');
@@ -494,6 +580,15 @@ export const MultiplayerClient = {
             socket = new window.WebSocket(wsUrl);
         } catch (err) {
             this.setConnectingUI(false);
+            if (isReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
+                this.reconnectAttempts++;
+                const delay = Math.min(8000, Math.round(500 * Math.pow(1.5, this.reconnectAttempts - 1)));
+                if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = setTimeout(() => {
+                    this.connect(username, false, true);
+                }, delay);
+                return;
+            }
             const hint = isPatchedByPreview
                 ? 'Окно превью Gemini перехватывает window.WebSocket. Нажми «Скачать index.html» ниже (теперь файл сохраняется чистым, без перехватчика postMessage) или скопируй код из редактора справа.'
                 : `${err.name || 'Error'}: ${err.message || String(err)} (URL: ${wsUrl})`;
@@ -508,14 +603,26 @@ export const MultiplayerClient = {
         socket.onopen = () => {
             if (this.ws !== socket) return;
             openedSuccessfully = true;
+            const wasReconnecting = this.isReconnecting;
+            this.isReconnecting = false;
+            this.reconnectAttempts = 0;
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
+
             if (useRegisterPacket) {
-                const regPayload = MsgPackCodec.encode({
+                const regObj = {
                     type: 'register',
                     username: username
-                });
-                socket.send(regPayload);
+                };
+                if (token) regObj.token = token;
+                this.safeSend(MsgPackCodec.encode(regObj));
             }
             this.activateSessionUI(username);
+            if (wasReconnecting) {
+                showToast('🟢 Связь с сервером восстановлена!', 'emerald');
+            }
         };
 
         socket.onmessage = (event) => {
@@ -546,10 +653,6 @@ export const MultiplayerClient = {
         socket.onclose = (event) => {
             if (this.ws !== socket) return;
             this.ws = null;
-            if (!openedSuccessfully && !isFallbackAttempt && event.code !== 4409) {
-                this.connect(username, true);
-                return;
-            }
 
             if (this.keepAliveTimer) {
                 clearInterval(this.keepAliveTimer);
@@ -561,44 +664,78 @@ export const MultiplayerClient = {
             }
             this.cancelChatAutoHide();
 
-            this.setConnectingUI(false);
-            const wasConnected = GAME_STATE.isConnected;
-            GAME_STATE.isConnected = false;
-            if (typeof document !== 'undefined') {
-                const dot = document.getElementById('net-status-dot');
-                if (dot) dot.className = 'w-2 h-2 rounded-full bg-rose-500';
+            // 1. Initial fallback attempt (Option A vs Option B) on initial failure
+            if (!openedSuccessfully && !isFallbackAttempt && event.code !== 4409 && this.reconnectAttempts === 0) {
+                this.connect(username, true);
+                return;
             }
 
-            if (GAME_STATE.inVehicle) {
-                toggleVehicleDrive(GAME_STATE.inVehicle);
-            }
-            World.resetVehicles();
-
-            for (const usernameKey of Array.from(this.remotePlayers.keys())) {
-                this.removeRemotePlayer(usernameKey);
-            }
-            this.onlineUsers.clear();
-            this.updateOnlineRosterUI();
-
-            if (typeof document !== 'undefined') {
-                const overlay = document.getElementById('mp-login-overlay');
-                if (overlay) overlay.classList.remove('hidden');
-            }
-            const diagDetail = `WebSocket CloseCode: ${event.code} | Reason: "${event.reason || 'нет'}" | URL: ${wsUrl}`;
-
-            if (event.code === 4409 || (event.reason && event.reason.includes('taken'))) {
+            // 2. Name is taken by another client / session token mismatch
+            const isNameTaken = event.code === 4409 || (event.reason && event.reason.includes('taken'));
+            if (isNameTaken) {
+                this.clearSessionToken(username);
+                this.isReconnecting = false;
+                this.reconnectAttempts = 0;
+                if (this.reconnectTimer) {
+                    clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = null;
+                }
+                this.cleanupOnDisconnect();
+                const diagDetail = `WebSocket CloseCode: ${event.code} | Reason: "${event.reason || 'нет'}" | URL: ${wsUrl}`;
                 this.showLoginError(`Имя "@${GAME_STATE.username}" уже занято другим игроком онлайн! Выбери другое.`, diagDetail);
-            } else if (event.reason) {
+                return;
+            }
+
+            // 3. Normal clean closure by user or deliberate close
+            if (event.code === 1000 && !this.isReconnecting) {
+                this.cleanupOnDisconnect();
+                return;
+            }
+
+            // 4. Unexpected disconnect during active play: attempt automatic reconnection
+            const canRetry = (openedSuccessfully || this.isReconnecting) && this.reconnectAttempts < this.maxReconnectAttempts;
+            if (canRetry) {
+                GAME_STATE.isConnected = false;
+                this.isReconnecting = true;
+                this.reconnectAttempts++;
+
+                if (typeof document !== 'undefined') {
+                    const dot = document.getElementById('net-status-dot');
+                    if (dot) dot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-pulse';
+                }
+
+                const delay = Math.min(8000, Math.round(500 * Math.pow(1.5, this.reconnectAttempts - 1)));
+                showToast(`🔄 Связь потеряна. Переподключение (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`, 'amber');
+
+                if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = setTimeout(() => {
+                    this.connect(username, false, true);
+                }, delay);
+                return;
+            }
+
+            // 5. Max retry attempts exhausted or never opened
+            this.isReconnecting = false;
+            this.reconnectAttempts = 0;
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
+
+            this.cleanupOnDisconnect();
+
+            const diagDetail = `WebSocket CloseCode: ${event.code} | Reason: "${event.reason || 'нет'}" | URL: ${wsUrl}`;
+            if (event.reason) {
                 this.showLoginError(`Отключён от сервера: ${event.reason}`, diagDetail);
-            } else if (wasConnected) {
-                this.showLoginError('Соединение с сервером закрыто. Нажми «Войти», чтобы вернуться!', diagDetail);
+            } else if (openedSuccessfully) {
+                this.showLoginError('Связь с сервером потеряна. Нажми «Войти», чтобы вернуться!', diagDetail);
             } else {
                 this.showLoginError('Не удалось открыть WebSocket соединение (сервер недоступен)', diagDetail);
             }
 
             if (this.currentBuildVersion) {
                 setTimeout(() => {
-                    this.checkServerVersion(true);
+                    this.checkServerVersion(!GAME_STATE.isConnected);
                 }, 1200);
             }
         };
@@ -615,7 +752,16 @@ export const MultiplayerClient = {
                 this.onlineUsers.add(user);
                 this.updateOnlineRosterUI();
                 if (user === GAME_STATE.username) {
-                    showToast(`🌐 Ты на Спортивной набережной как @${user}!`, 'emerald');
+                    if (msg.token) {
+                        this.setSessionToken(user, String(msg.token));
+                    }
+                    if (this.isReconnecting) {
+                        showToast(`🟢 Соединение с Набкой восстановлено!`, 'emerald');
+                        this.isReconnecting = false;
+                        this.reconnectAttempts = 0;
+                    } else {
+                        showToast(`🌐 Ты на Спортивной набережной как @${user}!`, 'emerald');
+                    }
                     showLocalLabels(1500);
                     if (this.worldMap && revalidatePlayerSpawn(this.worldMap, this.remotePlayers)) {
                         this.sendMoveSnapshot(true);
@@ -625,6 +771,14 @@ export const MultiplayerClient = {
                     this.appendChatSystemMessage(`🟢 @${user} вышел на Набку`);
                     this.getOrCreateRemotePlayer(user);
                     this.sendMoveSnapshot(true);
+                }
+                break;
+            }
+            case 'session': {
+                const user = String(msg.user || '');
+                const token = String(msg.token || '');
+                if (user && token) {
+                    this.setSessionToken(user, token);
                 }
                 break;
             }
@@ -1127,7 +1281,7 @@ export const MultiplayerClient = {
             type: 'chat',
             text: trimmed
         };
-        this.ws.send(MsgPackCodec.encode(payload));
+        this.safeSend(MsgPackCodec.encode(payload));
         GAME_STATE.lastActiveEventAt = performance.now();
     },
 
@@ -1187,7 +1341,7 @@ export const MultiplayerClient = {
                         this.broadcastChannel.postMessage(MsgPackCodec.encode({ ...state, username: GAME_STATE.username }));
                     }
                 } else {
-                    this.ws.send(MsgPackCodec.encode(state));
+                    this.safeSend(MsgPackCodec.encode(state));
                 }
                 this.lastSentState = state;
                 GAME_STATE.lastPacketSentAt = now;
@@ -1221,7 +1375,7 @@ export const MultiplayerClient = {
                         this.broadcastChannel.postMessage(MsgPackCodec.encode({ ...state, username: GAME_STATE.username }));
                     }
                 } else {
-                    this.ws.send(MsgPackCodec.encode(state));
+                    this.safeSend(MsgPackCodec.encode(state));
                 }
                 this.lastSentState = state;
                 GAME_STATE.lastPacketSentAt = now;

@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultSendBufferSize    = 512
+	defaultSendBufferSize    = 1024
 	defaultInactivityTimeout = 30 * time.Second
 	defaultWriteTimeout      = 5 * time.Second
 	maxMessageSize           = 64 * 1024 // 64 KB
@@ -21,6 +21,7 @@ const (
 // Client represents an active WebSocket connection with a verified username.
 type Client struct {
 	Username          string
+	SessionToken      string
 	conn              *websocket.Conn
 	hub               *Hub
 	send              chan []byte
@@ -39,7 +40,7 @@ type ClientConfig struct {
 }
 
 // NewClient initializes a new Client instance.
-func NewClient(username string, conn *websocket.Conn, hub *Hub, cfg ClientConfig) *Client {
+func NewClient(username string, conn *websocket.Conn, hub *Hub, cfg ClientConfig, sessionToken ...string) *Client {
 	inactivity := cfg.InactivityTimeout
 	if inactivity <= 0 {
 		inactivity = defaultInactivityTimeout
@@ -53,8 +54,14 @@ func NewClient(username string, conn *websocket.Conn, hub *Hub, cfg ClientConfig
 		bufSize = defaultSendBufferSize
 	}
 
+	token := ""
+	if len(sessionToken) > 0 {
+		token = sessionToken[0]
+	}
+
 	return &Client{
 		Username:          username,
+		SessionToken:      token,
 		conn:              conn,
 		hub:               hub,
 		send:              make(chan []byte, bufSize),
@@ -130,6 +137,9 @@ func (c *Client) ReadPump() {
 			c.terminate(reason, "read", err)
 			return
 		}
+
+		// Any message received over WebSocket confirms transport liveness: refresh inactivity deadline
+		_ = c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
 
 		// Only accept binary messages (MsgPack format)
 		if msgType != websocket.BinaryMessage {

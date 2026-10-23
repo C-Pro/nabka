@@ -150,6 +150,7 @@ func (s *Server) HandleRequest(ctx *fasthttp.RequestCtx) {
 
 	if path == "/ws" {
 		queryUser := string(ctx.QueryArgs().Peek("username"))
+		queryToken := string(ctx.QueryArgs().Peek("token"))
 		if queryUser != "" {
 			validName, err := ValidateUsername(queryUser)
 			if err != nil {
@@ -169,7 +170,7 @@ func (s *Server) HandleRequest(ctx *fasthttp.RequestCtx) {
 				s.connMu.Unlock()
 				defer s.connWg.Done()
 
-				s.handleRegisteredConnection(conn, validName)
+				s.handleRegisteredConnection(conn, validName, queryToken)
 			})
 			if err != nil {
 				ctx.SetStatusCode(fasthttp.StatusBadRequest)
@@ -230,14 +231,18 @@ func (s *Server) HandleRequest(ctx *fasthttp.RequestCtx) {
 }
 
 // handleRegisteredConnection runs for clients with validated username.
-func (s *Server) handleRegisteredConnection(conn *websocket.Conn, username string) {
+func (s *Server) handleRegisteredConnection(conn *websocket.Conn, username string, sessionToken ...string) {
+	tok := ""
+	if len(sessionToken) > 0 {
+		tok = sessionToken[0]
+	}
 	client := NewClient(username, conn, s.hub, ClientConfig{
 		InactivityTimeout: s.config.InactivityTimeout,
 		WriteTimeout:      s.config.WriteTimeout,
 		SendBufferSize:    s.config.SendBufferSize,
-	})
+	}, tok)
 
-	if !s.hub.Register(client) {
+	if !s.hub.Register(client, tok) {
 		// Second user with the same username rejected
 		_ = conn.WriteControl(
 			websocket.CloseMessage,
@@ -280,7 +285,7 @@ func (s *Server) handleUnregisteredConnection(conn *websocket.Conn) {
 		return
 	}
 
-	username, err := ParseRegister(payload)
+	regReq, err := ParseRegisterRequest(payload)
 	if err != nil {
 		_ = conn.WriteControl(
 			websocket.CloseMessage,
@@ -291,7 +296,7 @@ func (s *Server) handleUnregisteredConnection(conn *websocket.Conn) {
 		return
 	}
 
-	s.handleRegisteredConnection(conn, username)
+	s.handleRegisteredConnection(conn, regReq.Username, regReq.Token)
 }
 
 // Start begins serving on the configured address.

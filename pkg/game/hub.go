@@ -2,9 +2,13 @@ package game
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,8 +19,24 @@ import (
 
 type hubCmd any
 
+const defaultSessionTTL = 5 * time.Minute
+
+type userSession struct {
+	token    string
+	lastSeen time.Time
+}
+
+func generateSessionToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%x%x", time.Now().UnixNano(), os.Getpid())
+	}
+	return hex.EncodeToString(b)
+}
+
 type cmdRegister struct {
 	client *Client
+	token  string
 	result chan bool
 }
 
@@ -65,6 +85,8 @@ type Hub struct {
 	clients     map[string]*Client
 	cars        map[string]*CarState
 	users       map[string]*UserState
+	sessions    map[string]*userSession
+	sessionTTL  time.Duration
 	allowedCars map[string]struct{}
 	cmdCh       chan hubCmd
 
@@ -123,6 +145,8 @@ func NewHub(parentCtx context.Context, allowedCars ...string) *Hub {
 		clients:     make(map[string]*Client),
 		cars:        make(map[string]*CarState),
 		users:       make(map[string]*UserState),
+		sessions:    make(map[string]*userSession),
+		sessionTTL:  defaultSessionTTL,
 		allowedCars: allowedMap,
 		cmdCh:       make(chan hubCmd, 2048),
 		ctx:         ctx,
@@ -133,11 +157,24 @@ func NewHub(parentCtx context.Context, allowedCars ...string) *Hub {
 	return h
 }
 
+// SetSessionTTL overrides session reservation duration (useful for tests).
+func (h *Hub) SetSessionTTL(ttl time.Duration) {
+	h.sessionTTL = ttl
+}
+
 // Register attempts to add a client to the hub and broadcasts join if successful.
-func (h *Hub) Register(client *Client) bool {
+// Accepts an optional session token for reconnecting users.
+func (h *Hub) Register(client *Client, token ...string) bool {
 	resCh := make(chan bool, 1)
+	tok := ""
+	if len(token) > 0 {
+		tok = strings.TrimSpace(token[0])
+	} else if client != nil {
+		tok = strings.TrimSpace(client.SessionToken)
+	}
 	req := &cmdRegister{
 		client: client,
+		token:  tok,
 		result: resCh,
 	}
 
@@ -279,20 +316,74 @@ func (h *Hub) run() {
 		case cmd := <-h.cmdCh:
 			switch c := cmd.(type) {
 			case *cmdRegister:
-				if _, exists := h.clients[c.client.Username]; exists {
-					c.result <- false
-					continue
+				sess, hasSession := h.sessions[c.client.Username]
+				existingClient, isConnected := h.clients[c.client.Username]
+
+				isReconnection := false
+				var assignedToken string
+
+				if isConnected {
+					// Client with this username is currently connected.
+					// Check if incoming client provides matching session token.
+					if hasSession && c.token != "" && sess.token == c.token {
+						// Authorized replacement of existing connection
+						isReconnection = true
+						assignedToken = sess.token
+						sess.lastSeen = time.Now()
+						c.client.SessionToken = assignedToken
+
+						// Atomically replace client in map before terminating old client
+						oldClient := existingClient
+						h.clients[c.client.Username] = c.client
+						close(oldClient.send)
+						oldClient.terminate("replaced by new connection", "replace", nil)
+					} else {
+						// Name in active use and token missing or invalid
+						c.result <- false
+						continue
+					}
+				} else {
+					// Username not currently connected
+					if hasSession && c.token != "" && sess.token == c.token {
+						// Authorized returning player
+						isReconnection = true
+						assignedToken = sess.token
+						sess.lastSeen = time.Now()
+						c.client.SessionToken = assignedToken
+					} else {
+						// Brand new user or reconnecting without token after disconnect: generate new token
+						assignedToken = generateSessionToken()
+						h.sessions[c.client.Username] = &userSession{
+							token:    assignedToken,
+							lastSeen: time.Now(),
+						}
+						c.client.SessionToken = assignedToken
+					}
+
+					h.clients[c.client.Username] = c.client
 				}
 
-				h.clients[c.client.Username] = c.client
 				c.result <- true
 
-				// Broadcast join to all connected clients including the newcomer
-				joinMsg, _ := msgpack.Marshal(OutboundJoinMsg{
-					Type: TypeJoin,
-					User: c.client.Username,
+				// 1. Send personalized join message with session token directly to the newly connected client
+				selfJoinMsg, _ := msgpack.Marshal(OutboundJoinMsg{
+					Type:  TypeJoin,
+					User:  c.client.Username,
+					Token: assignedToken,
 				})
-				h.broadcastData(joinMsg, nil)
+				select {
+				case c.client.send <- selfJoinMsg:
+				default:
+				}
+
+				// 2. Broadcast join WITHOUT token to other clients if not an in-place connection replacement
+				if !isReconnection || !isConnected {
+					broadcastJoinMsg, _ := msgpack.Marshal(OutboundJoinMsg{
+						Type: TypeJoin,
+						User: c.client.Username,
+					})
+					h.broadcastData(broadcastJoinMsg, c.client)
+				}
 
 				// Verify newcomer survived join broadcast (in case it was evicted as a slow consumer)
 				if existing, ok := h.clients[c.client.Username]; !ok || existing != c.client {
@@ -402,6 +493,10 @@ func (h *Hub) run() {
 				if !exists || existing != c.client {
 					// Idempotent: already removed or replaced by a new connection
 					continue
+				}
+
+				if sess, has := h.sessions[c.client.Username]; has {
+					sess.lastSeen = time.Now()
 				}
 
 				releasedCar := h.cleanupUserStateLocked(c.client.Username)
@@ -654,6 +749,10 @@ func (h *Hub) removeClientLocked(client *Client, reason string) {
 		return
 	}
 
+	if sess, has := h.sessions[client.Username]; has {
+		sess.lastSeen = time.Now()
+	}
+
 	releasedCar := h.cleanupUserStateLocked(client.Username)
 	delete(h.clients, client.Username)
 	close(client.send)
@@ -691,6 +790,9 @@ func (h *Hub) broadcastData(data []byte, exclude *Client) {
 		var nextSlow []*Client
 		for _, sc := range slowClients {
 			if existing, ok := h.clients[sc.Username]; ok && existing == sc {
+				if sess, has := h.sessions[sc.Username]; has {
+					sess.lastSeen = time.Now()
+				}
 				releasedCar := h.cleanupUserStateLocked(sc.Username)
 				delete(h.clients, sc.Username)
 				close(sc.send)
