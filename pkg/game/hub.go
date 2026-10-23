@@ -40,6 +40,11 @@ type cmdRegister struct {
 	result chan bool
 }
 
+type cmdSetSessionTTL struct {
+	ttl    time.Duration
+	result chan struct{}
+}
+
 type cmdUnregister struct {
 	client *Client
 	reason string
@@ -157,9 +162,17 @@ func NewHub(parentCtx context.Context, allowedCars ...string) *Hub {
 	return h
 }
 
-// SetSessionTTL overrides session reservation duration (useful for tests).
+// SetSessionTTL overrides session reservation duration safely via the actor loop (useful for tests).
 func (h *Hub) SetSessionTTL(ttl time.Duration) {
-	h.sessionTTL = ttl
+	res := make(chan struct{})
+	select {
+	case h.cmdCh <- &cmdSetSessionTTL{ttl: ttl, result: res}:
+		select {
+		case <-res:
+		case <-h.ctx.Done():
+		}
+	case <-h.ctx.Done():
+	}
 }
 
 // Register attempts to add a client to the hub and broadcasts join if successful.
@@ -718,6 +731,10 @@ func (h *Hub) run() {
 					exclude = c.sender
 				}
 				h.broadcastData(c.data, exclude)
+
+			case *cmdSetSessionTTL:
+				h.sessionTTL = c.ttl
+				close(c.result)
 
 			case *cmdSendDirect:
 				if existing, ok := h.clients[c.client.Username]; ok && existing == c.client {

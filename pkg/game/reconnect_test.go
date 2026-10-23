@@ -148,7 +148,7 @@ func TestActiveSessionReplacementSurvivesPastTTL(t *testing.T) {
 	srv, baseURL := startTestServer(t, 30*time.Second)
 
 	// Set short sessionTTL (50ms) to ensure connection stays active longer than TTL
-	srv.Hub().sessionTTL = 50 * time.Millisecond
+	srv.Hub().SetSessionTTL(50 * time.Millisecond)
 
 	// 1. Alice connects
 	c1 := connectWS(t, baseURL+"?username=alice")
@@ -399,7 +399,7 @@ func TestDisconnectedSessionReservationAndExpiry(t *testing.T) {
 	srv, baseURL := startTestServer(t, 30*time.Second)
 
 	// Set long sessionTTL during reservation assertions to eliminate real-time CI scheduling races
-	srv.Hub().sessionTTL = 10 * time.Minute
+	srv.Hub().SetSessionTTL(10 * time.Minute)
 
 	// Observer client to synchronize disconnect events without arbitrary sleeps
 	observer := connectWS(t, baseURL+"?username=observer")
@@ -476,7 +476,7 @@ func TestDisconnectedSessionReservationAndExpiry(t *testing.T) {
 	}
 
 	// 6. Explicitly expire the session using the actor-owned TTL configuration (zero-delay, race-free)
-	srv.Hub().sessionTTL = 0
+	srv.Hub().SetSessionTTL(0)
 
 	// 7. Now session has expired: connecting with the old expired token is accepted as brand new registration
 	cExpired := connectWS(t, fmt.Sprintf("%s?username=alice&token=%s", baseURL, aliceToken))
@@ -494,7 +494,7 @@ func TestDisconnectedSessionReservationAndExpiry(t *testing.T) {
 func TestReplacementConcurrentWithTerminationAndSaturatedCommandQueue(t *testing.T) {
 	srv, baseURL := startTestServer(t, 30*time.Second)
 
-	// Connect Alice
+	// 1. Alice connects via real WebSocket
 	c1 := connectWS(t, baseURL+"?username=alice")
 	defer c1.Close()
 	join1, err := readNextMsg(t, c1, time.Second)
@@ -503,28 +503,16 @@ func TestReplacementConcurrentWithTerminationAndSaturatedCommandQueue(t *testing
 	}
 	token := join1["token"].(string)
 
-	// Deterministically synchronize and pause the Hub actor using an unbuffered snapshot request.
-	// The Hub actor will block at 'c.result <- HubSnapshot' until we read from pauseCh.
-	pauseCh := make(chan HubSnapshot)
-	srv.Hub().cmdCh <- &cmdSnapshot{result: pauseCh}
-
-	// Retrieve alice's client from hub (safe because alice was registered before snapshot request)
 	c1Client := srv.Hub().clients["alice"]
 	if c1Client == nil {
 		t.Fatal("expected alice client in hub")
 	}
 
-	c2Client := NewClient("alice", &websocket.Conn{}, srv.Hub(), ClientConfig{})
-	c2RegRes := make(chan bool, 1)
+	// 2. Pause the Hub actor using an unbuffered snapshot request
+	pauseCh := make(chan HubSnapshot)
+	srv.Hub().cmdCh <- &cmdSnapshot{result: pauseCh}
 
-	// 1. Queue replacement registration directly into cmdCh ahead of filler commands
-	srv.Hub().cmdCh <- &cmdRegister{
-		client: c2Client,
-		token:  token,
-		result: c2RegRes,
-	}
-
-	// 2. Saturate the rest of cmdCh completely to capacity
+	// 3. Completely saturate the Hub's command queue to capacity while the Hub is paused
 	hub := srv.Hub()
 	for len(hub.cmdCh) < cap(hub.cmdCh) {
 		select {
@@ -534,58 +522,62 @@ func TestReplacementConcurrentWithTerminationAndSaturatedCommandQueue(t *testing
 		}
 	}
 
-	// 3. Initiate termination on c1: it must enter terminate() and block on unregistering into the full queue
+	// 4. Initiate termination on c1: because cmdCh is saturated and Hub is paused, Unregister MUST block
 	unregDone := make(chan struct{})
 	go func() {
 		c1Client.terminate("left", "read", nil)
 		close(unregDone)
 	}()
 
-	// Verify unregDone has NOT completed yet because cmdCh is saturated and Hub is paused
+	// Wait 50ms: c1Client enters terminate() and blocks at Unregister trying to send into the full cmdCh
+	time.Sleep(50 * time.Millisecond)
 	select {
 	case <-unregDone:
-		t.Fatal("expected c1 terminate to block on saturated command queue")
-	case <-time.After(50 * time.Millisecond):
-		// c1 is established as blocked on unregistering
+		t.Fatal("expected c1 terminate to be blocked on saturated command queue")
+	default:
+		// Confirmed blocked on Unregister
 	}
 
-	// 4. Release the paused Hub actor: it unblocks and executes cmdRegister for c2 ahead of filler commands
+	// 5. Invoke TerminateReplaced on c1Client:
+	// In the pre-fix implementation, c1Client held termOnce while blocked in Unregister -> DEADLOCK!
+	// In our fixed implementation, termOnce was already released before calling Unregister -> MUST RETURN IMMEDIATELY.
+	replacedDone := make(chan struct{})
+	go func() {
+		c1Client.TerminateReplaced(4408, "session replaced from another connection")
+		close(replacedDone)
+	}()
+
 	select {
-	case <-pauseCh:
-	case <-time.After(2 * time.Second):
-		t.Fatal("hub actor failed to reach pause point")
+	case <-replacedDone:
+		// Passed!
+	case <-time.After(200 * time.Millisecond):
+		<-pauseCh
+		t.Fatal("deadlock detected: TerminateReplaced blocked on termOnce while unregister is blocked on queue")
 	}
 
-	// Replacement registration must complete and receive true without deadlocking on termOnce
-	select {
-	case ok := <-c2RegRes:
-		if !ok {
-			t.Fatal("replacement registration failed")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("deadlock detected: replacement registration blocked on termOnce")
-	}
+	// 6. Release the paused Hub actor: it drains cmdCh and unblocks c1 unregister
+	<-pauseCh
 
-	// As the Hub actor drains filler commands, c1 unregister unblocks and completes
 	select {
 	case <-unregDone:
-		// c1 unregister completed successfully
-	case <-time.After(2 * time.Second):
+		// c1 unregister completed
+	case <-time.After(time.Second):
 		t.Fatal("c1 unregister never completed after queue drain")
 	}
 
-	// 5. Verify subsequent Hub responsiveness via a bounded Snapshot()
+	// 7. Verify subsequent Hub responsiveness via a bounded Snapshot()
 	snapChan := make(chan HubSnapshot, 1)
 	go func() {
 		snapChan <- srv.Hub().Snapshot()
 	}()
-
 	select {
-	case finalSnap := <-snapChan:
-		if finalSnap.Cars == nil {
+	case snap := <-snapChan:
+		if snap.Cars == nil || snap.Users == nil {
 			t.Fatal("hub returned invalid snapshot")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Second):
 		t.Fatal("hub unresponsive after concurrent replacement and termination")
 	}
+
+	_ = token
 }
