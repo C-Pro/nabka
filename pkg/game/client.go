@@ -104,20 +104,27 @@ func (c *Client) TerminateReplaced(code int, reason string) {
 // Keep the first transport failure: closing the socket also wakes the other
 // pump with a secondary error that would otherwise obscure the original cause.
 func (c *Client) terminate(reason, operation string, err error) {
+	shouldUnregister := false
 	c.termOnce.Do(func() {
 		c.termMu.Lock()
 		c.termReason = reason
 		c.termMu.Unlock()
-		slog.Info("WebSocket connection ended",
-			"username", c.Username,
-			"operation", operation,
-			"reason", reason,
-			"error", err,
-			"queued_messages", len(c.send),
-		)
-		c.CloseSocket()
-		c.hub.Unregister(c, reason)
+		shouldUnregister = true
 	})
+
+	if !shouldUnregister {
+		return
+	}
+
+	slog.Info("WebSocket connection ended",
+		"username", c.Username,
+		"operation", operation,
+		"reason", reason,
+		"error", err,
+		"queued_messages", len(c.send),
+	)
+	c.CloseSocket()
+	c.hub.Unregister(c, reason)
 }
 
 // sendDirect queues a message via Hub to avoid racing with channel closure.

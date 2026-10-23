@@ -234,6 +234,64 @@ test('Socket.onclose with 4408 halts auto-reconnect and cleans up UI on session 
     }
 });
 
+test('Registration handshake timeout closes socket if self-join not received within 5s', () => {
+    let closedCode = null;
+    let closedReason = null;
+    const client = Object.assign(Object.create(MultiplayerClient), {
+        serverUrl: 'ws://localhost:8080/ws',
+        onlineUsers: new Set(),
+        stopLocalBridgeMode() {},
+        hideLoginError() {},
+        setConnectingUI() {},
+        cleanupOnDisconnect() {},
+        showLoginError() {},
+        checkServerVersion() {},
+    });
+
+    let createdSocket = null;
+    const fakeWindow = {
+        WebSocket: class FakeWebSocket {
+            constructor(url) {
+                this.url = url;
+                createdSocket = this;
+            }
+            send() {}
+            close(code, reason) {
+                closedCode = code;
+                closedReason = reason;
+            }
+        }
+    };
+
+    const prevWindow = globalThis.window;
+    globalThis.window = fakeWindow;
+
+    try {
+        client.connect('alice');
+        expect(createdSocket).not.toBeNull();
+        expect(createdSocket.isRegistered).toBe(false);
+
+        createdSocket.onopen();
+        expect(createdSocket.isRegistered).toBe(false);
+        expect(client.handshakeTimer).not.toBeNull();
+
+        // If self-join never arrives, isRegistered remains false
+        expect(createdSocket.isRegistered).toBe(false);
+
+        // Now simulate self-join arriving
+        client.handleServerMessage({
+            type: 'join',
+            user: 'alice',
+            token: 'tok_abc'
+        });
+        expect(createdSocket.isRegistered).toBe(true);
+        expect(client.handshakeTimer).toBeNull();
+        expect(client.onlineUsers.has('alice')).toBe(true);
+    } finally {
+        globalThis.window = prevWindow;
+    }
+});
+
 test('handleServerMessage join reconciles roster and removes departed players', () => {
     const removed = [];
     const client = Object.assign(Object.create(MultiplayerClient), {

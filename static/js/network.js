@@ -608,6 +608,7 @@ export const MultiplayerClient = {
         }
 
         socket.binaryType = 'arraybuffer';
+        socket.isRegistered = false;
         this.ws = socket;
         let openedSuccessfully = false;
 
@@ -618,7 +619,7 @@ export const MultiplayerClient = {
             // Application registration handshake timeout: if server does not accept within 5s, close socket
             if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
             this.handshakeTimer = setTimeout(() => {
-                if (this.ws === socket && !this.onlineUsers.has(username)) {
+                if (this.ws === socket && !socket.isRegistered) {
                     console.warn('Registration handshake timed out');
                     try { socket.close(4008, 'registration handshake timeout'); } catch (e) {}
                 }
@@ -632,7 +633,6 @@ export const MultiplayerClient = {
                 if (token) regObj.token = token;
                 this.safeSend(MsgPackCodec.encode(regObj));
             }
-            this.activateSessionUI(username);
         };
 
         socket.onmessage = (event) => {
@@ -781,6 +781,9 @@ export const MultiplayerClient = {
                 this.onlineUsers.add(user);
                 this.updateOnlineRosterUI();
                 if (user === GAME_STATE.username) {
+                    if (this.ws) {
+                        this.ws.isRegistered = true;
+                    }
                     if (this.handshakeTimer) {
                         clearTimeout(this.handshakeTimer);
                         this.handshakeTimer = null;
@@ -788,6 +791,7 @@ export const MultiplayerClient = {
                     if (msg.token) {
                         this.setSessionToken(user, String(msg.token));
                     }
+                    this.activateSessionUI(user);
                     if (Array.isArray(msg.roster)) {
                         const rosterSet = new Set(msg.roster.map(String));
                         this.onlineUsers = rosterSet;

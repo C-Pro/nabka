@@ -331,6 +331,13 @@ func (h *Hub) run() {
 				sess, hasSession := h.sessions[c.client.Username]
 				existingClient, isConnected := h.clients[c.client.Username]
 
+				now := time.Now()
+				if hasSession && now.Sub(sess.lastSeen) > h.sessionTTL {
+					delete(h.sessions, c.client.Username)
+					hasSession = false
+					sess = nil
+				}
+
 				isReconnection := false
 				var assignedToken string
 
@@ -341,7 +348,7 @@ func (h *Hub) run() {
 						// Authorized replacement of existing connection
 						isReconnection = true
 						assignedToken = sess.token
-						sess.lastSeen = time.Now()
+						sess.lastSeen = now
 						c.client.SessionToken = assignedToken
 
 						// Atomically replace client in map before terminating old client
@@ -356,14 +363,20 @@ func (h *Hub) run() {
 					}
 				} else {
 					// Username not currently connected
-					if hasSession && c.token != "" && sess.token == c.token {
-						// Authorized returning player
-						isReconnection = true
-						assignedToken = sess.token
-						sess.lastSeen = time.Now()
-						c.client.SessionToken = assignedToken
+					if hasSession && c.token != "" {
+						if sess.token == c.token {
+							// Authorized returning player
+							isReconnection = true
+							assignedToken = sess.token
+							sess.lastSeen = now
+							c.client.SessionToken = assignedToken
+						} else {
+							// Provided an invalid token for an existing session within TTL
+							c.result <- false
+							continue
+						}
 					} else {
-						// Brand new user or reconnecting without token after disconnect: generate new token
+						// Brand new user, session expired, or connecting without token after disconnect: generate new token
 						tok, err := generateSessionToken()
 						if err != nil {
 							c.result <- false
@@ -372,7 +385,7 @@ func (h *Hub) run() {
 						assignedToken = tok
 						h.sessions[c.client.Username] = &userSession{
 							token:    assignedToken,
-							lastSeen: time.Now(),
+							lastSeen: now,
 						}
 						c.client.SessionToken = assignedToken
 					}
