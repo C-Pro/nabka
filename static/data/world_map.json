@@ -16,25 +16,27 @@
       "id": "beach",
       "name": "Пляж Юбилейный",
       "type": "beach",
-      "x": -22,
+      "x": -21.15,
       "y": -1.1,
-      "z": 0,
+      "z": -0.05,
       "width": 14,
       "height": 1.2,
       "depth": 340,
-      "color": 9732714
+      "color": 9732714,
+      "rotY": 0
     },
     {
       "id": "promenade",
       "name": "Плиточный променад Набки",
       "type": "promenade",
-      "x": 0,
+      "x": 0.92,
       "y": -0.5,
-      "z": 0,
+      "z": 0.59,
       "width": 30,
       "height": 1,
       "depth": 340,
-      "color": 13358561
+      "color": 13358561,
+      "rotY": 0
     },
     {
       "id": "east_ground",
@@ -890,9 +892,9 @@
       "id": "fountain",
       "name": "Центральный Фонтан",
       "model": "models/fountain.glb",
-      "x": 66.43,
+      "x": 53.93,
       "y": 0,
-      "z": 1.73,
+      "z": -7.57,
       "rotY": 0,
       "scale": 1.95,
       "hasFountainParticles": true
@@ -1465,10 +1467,10 @@
       "name": "Фонарь шоссе (Пограничная 0)",
       "type": "road_lamp",
       "model": "models/road_lamp.glb",
-      "x": 115.5,
+      "x": 116.54,
       "y": 0,
-      "z": 0,
-      "rotY": 3.14159,
+      "z": -15.81,
+      "rotY": 3.14,
       "scale": 1,
       "hasCollider": true
     },
@@ -1647,8 +1649,8 @@
       "name": "Toyota Mark II Tourer V",
       "model": "models/car_0.glb",
       "colorHex": 16317180,
-      "x": 33.69,
-      "z": 9.89,
+      "x": 63.45,
+      "z": 130.55,
       "rotY": 3.14,
       "y": 0
     },
@@ -1667,8 +1669,8 @@
       "name": "Subaru Forester STI",
       "model": "models/forrester.glb",
       "colorHex": 14427686,
-      "x": 78.57,
-      "z": 55.37,
+      "x": 80.32,
+      "z": 57.74,
       "rotY": 3.14,
       "y": 0.13
     },
@@ -1677,8 +1679,8 @@
       "name": "Suzuki Jimny",
       "model": "models/jimny.glb",
       "colorHex": 16096779,
-      "x": 40.05,
-      "z": 10.5,
+      "x": 72.68,
+      "z": 57.67,
       "rotY": 0,
       "y": 0.27
     },
@@ -1749,17 +1751,17 @@
       "parentId": "fountain",
       "name": "Большой фонтан на Набке",
       "prompt": "Освежиться у Центрального фонтана",
-      "x": 66.43,
-      "z": 12.23,
+      "x": 53.93,
+      "z": 2.93,
       "radius": 5.5,
       "reward": 500,
       "toast": "🌊 Ты загадал желание у Центрального фонтана Спортивной гавани!",
       "speech": "Фонтан на Спортивной — топ! ⛲",
       "label": {
         "text": "⛲ Центральный Фонтан (★ 4.7)",
-        "x": 66.43,
+        "x": 53.93,
         "y": 5.5,
-        "z": 1.73
+        "z": -7.57
       }
     },
     {
@@ -1930,8 +1932,8 @@
   ],
   "teleports": {
     "fountain": {
-      "x": 66.43,
-      "z": 15.73,
+      "x": 53.93,
+      "z": 6.43,
       "name": "Центральный Фонтан (Спортивная Гавань)"
     },
     "supra": {
