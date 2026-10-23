@@ -302,9 +302,16 @@ test('Registration handshake timeout closes socket with 4008 if self-join not re
 test('Registration handshake clears timeout and activates session upon self-join', () => {
     let activated = false;
     let clearedTimer = false;
+    const scheduledTimerId = 999;
 
+    const prevSetTimeout = globalThis.setTimeout;
     const prevClearTimeout = globalThis.clearTimeout;
-    globalThis.clearTimeout = () => { clearedTimer = true; };
+    globalThis.setTimeout = () => scheduledTimerId;
+    globalThis.clearTimeout = (id) => {
+        if (id === scheduledTimerId) {
+            clearedTimer = true;
+        }
+    };
 
     const client = Object.assign(Object.create(MultiplayerClient), {
         serverUrl: 'ws://localhost:8080/ws',
@@ -339,6 +346,7 @@ test('Registration handshake clears timeout and activates session upon self-join
         client.connect('alice');
         createdSocket.onopen();
         expect(createdSocket.isRegistered).toBe(false);
+        expect(activated).toBe(false);
 
         // Simulate self-join arriving
         client.handleServerMessage({
@@ -354,6 +362,7 @@ test('Registration handshake clears timeout and activates session upon self-join
         expect(client.onlineUsers.has('alice')).toBe(true);
     } finally {
         globalThis.window = prevWindow;
+        globalThis.setTimeout = prevSetTimeout;
         globalThis.clearTimeout = prevClearTimeout;
     }
 });

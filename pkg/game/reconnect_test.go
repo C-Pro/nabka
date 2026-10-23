@@ -398,8 +398,13 @@ func TestRosterDeliveredInJoinBaseline(t *testing.T) {
 func TestDisconnectedSessionReservationAndExpiry(t *testing.T) {
 	srv, baseURL := startTestServer(t, 30*time.Second)
 
-	// Set short sessionTTL for testing (100ms)
-	srv.Hub().sessionTTL = 100 * time.Millisecond
+	// Set short sessionTTL for testing (50ms)
+	srv.Hub().sessionTTL = 50 * time.Millisecond
+
+	// Observer client to synchronize disconnect events without arbitrary sleeps
+	observer := connectWS(t, baseURL+"?username=observer")
+	defer observer.Close()
+	_, _ = readNextMsg(t, observer, time.Second)
 
 	// 1. Alice connects and gets token
 	c1 := connectWS(t, baseURL+"?username=alice")
@@ -408,12 +413,21 @@ func TestDisconnectedSessionReservationAndExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	aliceToken := join1["token"].(string)
+	_, _ = readNextMsg(t, observer, time.Second) // consume alice join on observer
 
-	// 2. Alice disconnects
+	// 2. Alice disconnects; wait on observer for leave event
 	c1.Close()
-	time.Sleep(30 * time.Millisecond)
+	for {
+		msg, err := readNextMsg(t, observer, time.Second)
+		if err != nil {
+			t.Fatalf("failed to receive alice leave event: %v", err)
+		}
+		if msg["type"] == "leave" && msg["user"] == "alice" {
+			break
+		}
+	}
 
-	// 3. Within sessionTTL: impostor connects with WRONG token -> REJECTED (4409)
+	// 3a. Within sessionTTL: impostor connects with WRONG token -> REJECTED (4409)
 	dialer := websocket.Dialer{HandshakeTimeout: time.Second}
 	cImp, _, err := dialer.Dial(baseURL+"?username=alice&token=wrong_token", nil)
 	if err == nil {
@@ -423,7 +437,19 @@ func TestDisconnectedSessionReservationAndExpiry(t *testing.T) {
 			t.Fatalf("expected close code 4409 for wrong token on reserved name, got: %v", readErr)
 		}
 	} else if !strings.Contains(err.Error(), "4409") {
-		t.Fatalf("expected close code 4409 on dial, got: %v", err)
+		t.Fatalf("expected close code 4409 on dial for wrong token, got: %v", err)
+	}
+
+	// 3b. Within sessionTTL: impostor connects with MISSING token -> REJECTED (4409)
+	cNoTok, _, err := dialer.Dial(baseURL+"?username=alice", nil)
+	if err == nil {
+		_, _, readErr := cNoTok.ReadMessage()
+		cNoTok.Close()
+		if readErr == nil || !strings.Contains(readErr.Error(), "4409") {
+			t.Fatalf("expected close code 4409 for missing token on reserved name, got: %v", readErr)
+		}
+	} else if !strings.Contains(err.Error(), "4409") {
+		t.Fatalf("expected close code 4409 on dial for missing token, got: %v", err)
 	}
 
 	// 4. Within sessionTTL: Alice reconnects with her valid token -> SUCCEEDS
@@ -435,24 +461,33 @@ func TestDisconnectedSessionReservationAndExpiry(t *testing.T) {
 	if joinAlice["token"] != aliceToken {
 		t.Fatalf("expected token match on session reclaim, got: %v", joinAlice["token"])
 	}
+	_, _ = readNextMsg(t, observer, time.Second) // consume alice join on observer
 
-	// 5. Alice disconnects again
+	// 5. Alice disconnects again; wait on observer for leave event
 	cAlice.Close()
-	time.Sleep(30 * time.Millisecond)
+	for {
+		msg, err := readNextMsg(t, observer, time.Second)
+		if err != nil {
+			t.Fatalf("failed to receive alice second leave event: %v", err)
+		}
+		if msg["type"] == "leave" && msg["user"] == "alice" {
+			break
+		}
+	}
 
-	// 6. Wait for sessionTTL (100ms) to elapse
-	time.Sleep(150 * time.Millisecond)
+	// 6. Wait for sessionTTL (50ms) to elapse under controlled timing
+	time.Sleep(75 * time.Millisecond)
 
-	// 7. Now session has expired: connecting with the old expired token is treated as brand new registration
-	cNew := connectWS(t, baseURL+"?username=alice")
-	defer cNew.Close()
-	joinNew, err := readNextMsg(t, cNew, time.Second)
+	// 7. Now session has expired: connecting with the old expired token is accepted as brand new registration
+	cExpired := connectWS(t, fmt.Sprintf("%s?username=alice&token=%s", baseURL, aliceToken))
+	defer cExpired.Close()
+	joinExpired, err := readNextMsg(t, cExpired, time.Second)
 	if err != nil {
 		t.Fatalf("new user should be able to register expired username, got: %v", err)
 	}
-	newToken := joinNew["token"].(string)
+	newToken := joinExpired["token"].(string)
 	if newToken == "" || newToken == aliceToken {
-		t.Fatalf("expected fresh token for newly claimed expired name, got: %v", newToken)
+		t.Fatalf("expected fresh token for newly claimed expired name, got: %v (original: %v)", newToken, aliceToken)
 	}
 }
 
@@ -467,9 +502,13 @@ func TestReplacementConcurrentWithTerminationAndSaturatedCommandQueue(t *testing
 	}
 	token := join1["token"].(string)
 
-	// Fill cmdCh towards capacity using non-blocking sends
+	// Deterministically synchronize and pause the Hub actor using an unbuffered snapshot request
+	pauseCh := make(chan HubSnapshot)
+	srv.Hub().cmdCh <- &cmdSnapshot{result: pauseCh}
+
+	// Completely saturate cmdCh to capacity while Hub is paused
 	hub := srv.Hub()
-	for i := 0; i < 250; i++ {
+	for len(hub.cmdCh) < cap(hub.cmdCh) {
 		select {
 		case hub.cmdCh <- &cmdBroadcast{data: []byte("fill")}:
 		default:
@@ -477,25 +516,51 @@ func TestReplacementConcurrentWithTerminationAndSaturatedCommandQueue(t *testing
 		}
 	}
 
-	// Trigger replacement and close concurrently
-	done := make(chan struct{})
+	// Close c1 so terminate() runs and Unregister blocks on the saturated cmdCh
+	_ = c1.Close()
+
+	// Concurrently dial replacement c2 with Alice's token
+	type dialRes struct {
+		conn *websocket.Conn
+		err  error
+	}
+	c2Chan := make(chan dialRes, 1)
 	go func() {
-		_ = c1.Close()
+		dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+		conn, _, err := dialer.Dial(fmt.Sprintf("%s?username=alice&token=%s", baseURL, token), nil)
+		c2Chan <- dialRes{conn: conn, err: err}
 	}()
 
-	go func() {
-		dialer := websocket.Dialer{HandshakeTimeout: 2 * time.Second}
-		c2, _, err := dialer.Dial(fmt.Sprintf("%s?username=alice&token=%s", baseURL, token), nil)
-		if err == nil {
-			_ = c2.Close()
-		}
-		close(done)
-	}()
-
+	// Release the paused Hub actor: it unblocks and drains cmdCh
 	select {
-	case <-done:
-		// Completed without deadlock!
+	case <-pauseCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("hub actor failed to reach pause point")
+	}
+
+	// Replacement connection c2 must complete handshake, receive self-join, and not deadlock
+	select {
+	case res := <-c2Chan:
+		if res.err != nil {
+			t.Fatalf("c2 replacement dial failed: %v", res.err)
+		}
+		c2 := res.conn
+		defer c2.Close()
+
+		join2, err := readNextMsg(t, c2, 3*time.Second)
+		if err != nil {
+			t.Fatalf("c2 failed to receive self-join: %v", err)
+		}
+		if join2["type"] != "join" || join2["user"] != "alice" || join2["token"] != token {
+			t.Fatalf("unexpected join on c2: %+v", join2)
+		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("deadlock detected: replacement and termination blocked on saturated queue")
+		t.Fatal("deadlock detected: replacement blocked and timed out on saturated queue")
+	}
+
+	// Verify subsequent hub responsiveness via Snapshot()
+	snap := srv.Hub().Snapshot()
+	if snap.Cars == nil || snap.Users == nil {
+		t.Fatal("hub failed to respond with snapshot after concurrent replacement")
 	}
 }

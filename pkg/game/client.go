@@ -87,18 +87,22 @@ func (c *Client) Terminate(reason string) {
 // TerminateReplaced marks the client as replaced by an incoming session atomically
 // from within the Hub actor loop without calling Unregister on the Hub.
 func (c *Client) TerminateReplaced(code int, reason string) {
+	replaced := false
 	c.termOnce.Do(func() {
 		c.termMu.Lock()
 		c.termCode = code
 		c.termReason = reason
 		c.termMu.Unlock()
+		replaced = true
+	})
+	if replaced {
 		slog.Info("WebSocket connection replaced",
 			"username", c.Username,
 			"reason", reason,
 			"code", code,
 			"queued_messages", len(c.send),
 		)
-	})
+	}
 }
 
 // Keep the first transport failure: closing the socket also wakes the other
