@@ -29,7 +29,9 @@ type Client struct {
 	writeTimeout      time.Duration
 	closeOnce         sync.Once
 	termOnce          sync.Once
+	termMu            sync.RWMutex
 	termReason        string
+	termCode          int
 }
 
 // ClientConfig holds configuration for the client connection.
@@ -82,11 +84,30 @@ func (c *Client) Terminate(reason string) {
 	c.terminate(reason, "cleanup", nil)
 }
 
+// TerminateReplaced marks the client as replaced by an incoming session atomically
+// from within the Hub actor loop without calling Unregister on the Hub.
+func (c *Client) TerminateReplaced(code int, reason string) {
+	c.termOnce.Do(func() {
+		c.termMu.Lock()
+		c.termCode = code
+		c.termReason = reason
+		c.termMu.Unlock()
+		slog.Info("WebSocket connection replaced",
+			"username", c.Username,
+			"reason", reason,
+			"code", code,
+			"queued_messages", len(c.send),
+		)
+	})
+}
+
 // Keep the first transport failure: closing the socket also wakes the other
 // pump with a secondary error that would otherwise obscure the original cause.
 func (c *Client) terminate(reason, operation string, err error) {
 	c.termOnce.Do(func() {
+		c.termMu.Lock()
 		c.termReason = reason
+		c.termMu.Unlock()
 		slog.Info("WebSocket connection ended",
 			"username", c.Username,
 			"operation", operation,
@@ -258,8 +279,16 @@ func (c *Client) WritePump() {
 		case data, ok := <-c.send:
 			if !ok {
 				// Send channel was closed by the Hub.
+				c.termMu.RLock()
+				closeCode := websocket.CloseNormalClosure
+				if c.termCode != 0 {
+					closeCode = c.termCode
+				}
+				reason := c.termReason
+				c.termMu.RUnlock()
+
 				_ = c.conn.WriteControl(websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+					websocket.FormatCloseMessage(closeCode, reason),
 					time.Now().Add(c.writeTimeout))
 				c.CloseSocket()
 				return

@@ -30,7 +30,6 @@ const (
 	TypeError    = "error"
 	TypePing     = "ping"
 	TypePong     = "pong"
-	TypeSession  = "session"
 )
 
 // Modes for movement
@@ -57,13 +56,6 @@ type InboundRegisterMsg struct {
 	Type     string `msgpack:"type,omitempty"`
 	Username string `msgpack:"username"`
 	Token    string `msgpack:"token,omitempty"`
-}
-
-// OutboundSessionMsg transmits the authoritative session token directly to the connected user.
-type OutboundSessionMsg struct {
-	Type  string `msgpack:"type"`
-	User  string `msgpack:"user"`
-	Token string `msgpack:"token"`
 }
 
 // InboundPedestrianMoveMsg represents an incoming pedestrian update.
@@ -107,9 +99,10 @@ type InboundChatMsg struct {
 
 // OutboundJoinMsg broadcasts when a user connects.
 type OutboundJoinMsg struct {
-	Type  string `msgpack:"type"`
-	User  string `msgpack:"user"`
-	Token string `msgpack:"token,omitempty"`
+	Type   string   `msgpack:"type"`
+	User   string   `msgpack:"user"`
+	Token  string   `msgpack:"token,omitempty"`
+	Roster []string `msgpack:"roster,omitempty"`
 }
 
 // OutboundLeaveMsg broadcasts when a user disconnects or times out.

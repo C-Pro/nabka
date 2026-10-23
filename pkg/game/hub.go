@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"strings"
@@ -26,12 +26,12 @@ type userSession struct {
 	lastSeen time.Time
 }
 
-func generateSessionToken() string {
+func generateSessionToken() (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%x%x", time.Now().UnixNano(), os.Getpid())
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 type cmdRegister struct {
@@ -303,6 +303,9 @@ func (h *Hub) Stop() {
 func (h *Hub) run() {
 	defer h.wg.Done()
 
+	cleanTicker := time.NewTicker(time.Minute)
+	defer cleanTicker.Stop()
+
 	for {
 		select {
 		case <-h.ctx.Done():
@@ -312,6 +315,15 @@ func (h *Hub) run() {
 			}
 			h.clients = make(map[string]*Client)
 			return
+
+		case now := <-cleanTicker.C:
+			for uname, sess := range h.sessions {
+				if _, online := h.clients[uname]; !online {
+					if now.Sub(sess.lastSeen) > h.sessionTTL {
+						delete(h.sessions, uname)
+					}
+				}
+			}
 
 		case cmd := <-h.cmdCh:
 			switch c := cmd.(type) {
@@ -335,8 +347,8 @@ func (h *Hub) run() {
 						// Atomically replace client in map before terminating old client
 						oldClient := existingClient
 						h.clients[c.client.Username] = c.client
+						oldClient.TerminateReplaced(4408, "session replaced from another connection")
 						close(oldClient.send)
-						oldClient.terminate("replaced by new connection", "replace", nil)
 					} else {
 						// Name in active use and token missing or invalid
 						c.result <- false
@@ -352,7 +364,12 @@ func (h *Hub) run() {
 						c.client.SessionToken = assignedToken
 					} else {
 						// Brand new user or reconnecting without token after disconnect: generate new token
-						assignedToken = generateSessionToken()
+						tok, err := generateSessionToken()
+						if err != nil {
+							c.result <- false
+							continue
+						}
+						assignedToken = tok
 						h.sessions[c.client.Username] = &userSession{
 							token:    assignedToken,
 							lastSeen: time.Now(),
@@ -365,11 +382,16 @@ func (h *Hub) run() {
 
 				c.result <- true
 
-				// 1. Send personalized join message with session token directly to the newly connected client
+				// 1. Send personalized join message with session token and current roster directly to the newly connected client
+				roster := make([]string, 0, len(h.clients))
+				for u := range h.clients {
+					roster = append(roster, u)
+				}
 				selfJoinMsg, _ := msgpack.Marshal(OutboundJoinMsg{
-					Type:  TypeJoin,
-					User:  c.client.Username,
-					Token: assignedToken,
+					Type:   TypeJoin,
+					User:   c.client.Username,
+					Token:  assignedToken,
+					Roster: roster,
 				})
 				select {
 				case c.client.send <- selfJoinMsg:

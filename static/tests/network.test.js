@@ -44,7 +44,7 @@ test('Session token management persists and attaches token to connection URL', (
     expect(client.getSessionToken('alice')).toBe('');
 });
 
-test('handleServerMessage saves session token on self-join or session event', () => {
+test('handleServerMessage saves session token on self-join', () => {
     const client = Object.assign(Object.create(MultiplayerClient), {
         sessionTokens: {},
         onlineUsers: new Set(),
@@ -61,9 +61,9 @@ test('handleServerMessage saves session token on self-join or session event', ()
     });
     expect(client.getSessionToken('alice')).toBe('sess_tok_999');
 
-    // 2. Direct session event
+    // 2. Updated join event with new token for self
     client.handleServerMessage({
-        type: 'session',
+        type: 'join',
         user: 'alice',
         token: 'sess_tok_fresh'
     });
@@ -185,6 +185,123 @@ test('Socket.onclose with 4409 clears session token and halts auto-reconnect', (
         expect(client.isReconnecting).toBe(false);
         expect(client.reconnectAttempts).toBe(0);
         expect(client.reconnectTimer).toBeNull();
+    } finally {
+        globalThis.window = prevWindow;
+    }
+});
+
+test('Socket.onclose with 4408 halts auto-reconnect and cleans up UI on session replacement', () => {
+    let cleanedUp = false;
+    let loginErrorShown = false;
+    const client = Object.assign(Object.create(MultiplayerClient), {
+        serverUrl: 'ws://localhost:8080/ws',
+        sessionTokens: { alice: 'valid_tok' },
+        reconnectAttempts: 1,
+        isReconnecting: true,
+        stopLocalBridgeMode() {},
+        hideLoginError() {},
+        setConnectingUI() {},
+        showLoginError() { loginErrorShown = true; },
+        cleanupOnDisconnect() { cleanedUp = true; },
+        checkServerVersion() {},
+    });
+
+    let createdSocket = null;
+    const fakeWindow = {
+        WebSocket: class FakeWebSocket {
+            constructor(url) {
+                this.url = url;
+                createdSocket = this;
+            }
+            send() {}
+            close() {}
+        }
+    };
+
+    const prevWindow = globalThis.window;
+    globalThis.window = fakeWindow;
+
+    try {
+        client.connect('alice');
+        createdSocket.onclose({ code: 4408, reason: 'session replaced from another connection' });
+
+        expect(client.isReconnecting).toBe(false);
+        expect(client.reconnectAttempts).toBe(0);
+        expect(cleanedUp).toBe(true);
+        expect(loginErrorShown).toBe(true);
+    } finally {
+        globalThis.window = prevWindow;
+    }
+});
+
+test('handleServerMessage join reconciles roster and removes departed players', () => {
+    const removed = [];
+    const client = Object.assign(Object.create(MultiplayerClient), {
+        sessionTokens: {},
+        onlineUsers: new Set(['alice', 'bob', 'charlie']),
+        remotePlayers: new Map([
+            ['bob', { username: 'bob' }],
+            ['charlie', { username: 'charlie' }]
+        ]),
+        updateOnlineRosterUI() {},
+        removeRemotePlayer(user) {
+            removed.push(user);
+            this.remotePlayers.delete(user);
+        },
+        sendMoveSnapshot() {},
+    });
+    GAME_STATE.username = 'alice';
+
+    // Alice joins and receives roster with only ['alice', 'charlie'] (bob left during outage)
+    client.handleServerMessage({
+        type: 'join',
+        user: 'alice',
+        token: 'tok_reconcile',
+        roster: ['alice', 'charlie']
+    });
+
+    // Bob should have been pruned
+    expect(removed).toContain('bob');
+    expect(client.remotePlayers.has('bob')).toBe(false);
+    expect(client.remotePlayers.has('charlie')).toBe(true);
+    expect(client.onlineUsers.has('bob')).toBe(false);
+    expect(client.onlineUsers.has('charlie')).toBe(true);
+});
+
+test('WebSocket constructor failure with exhausted retries invokes cleanupOnDisconnect', () => {
+    let cleanedUp = false;
+    let loginErrorShown = false;
+    const client = Object.assign(Object.create(MultiplayerClient), {
+        serverUrl: 'ws://localhost:8080/ws',
+        reconnectAttempts: 10,
+        maxReconnectAttempts: 10,
+        isReconnecting: true,
+        stopLocalBridgeMode() {},
+        hideLoginError() {},
+        setConnectingUI() {},
+        showLoginError() { loginErrorShown = true; },
+        cleanupOnDisconnect() { cleanedUp = true; },
+        checkServerVersion() {},
+    });
+
+    const fakeWindow = {
+        WebSocket: class ThrowingWebSocket {
+            constructor() {
+                throw new Error('SecurityError: WebSocket blocked by CSP');
+            }
+        }
+    };
+
+    const prevWindow = globalThis.window;
+    globalThis.window = fakeWindow;
+
+    try {
+        client.connect('alice', false, true);
+
+        expect(client.isReconnecting).toBe(false);
+        expect(client.reconnectAttempts).toBe(0);
+        expect(cleanedUp).toBe(true);
+        expect(loginErrorShown).toBe(true);
     } finally {
         globalThis.window = prevWindow;
     }

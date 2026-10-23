@@ -98,7 +98,9 @@ export const MultiplayerClient = {
                         this.showLoginError('Вышло обновление Набки! Перезагрузка страницы...');
                         setTimeout(() => {
                             if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
-                                window.location.reload(true);
+                                if (!GAME_STATE.isConnected && !this.isReconnecting) {
+                                    window.location.reload(true);
+                                }
                             }
                         }, 700);
                     }
@@ -288,7 +290,7 @@ export const MultiplayerClient = {
                     this.sendMoveSnapshot(true);
                 }
                 if (document.visibilityState === 'visible') {
-                    this.checkServerVersion(!GAME_STATE.isConnected);
+                    this.checkServerVersion(!GAME_STATE.isConnected && !this.isReconnecting);
                 }
             });
         }
@@ -298,7 +300,7 @@ export const MultiplayerClient = {
                     this.safeSend(MsgPackCodec.encode({ type: 'ping' }));
                     this.sendMoveSnapshot(true);
                 }
-                this.checkServerVersion(!GAME_STATE.isConnected);
+                this.checkServerVersion(!GAME_STATE.isConnected && !this.isReconnecting);
             });
         }
 
@@ -580,7 +582,9 @@ export const MultiplayerClient = {
             socket = new window.WebSocket(wsUrl);
         } catch (err) {
             this.setConnectingUI(false);
-            if (isReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
+            const canRetry = (this.isReconnecting || isReconnect) && this.reconnectAttempts < this.maxReconnectAttempts;
+            if (canRetry) {
+                this.isReconnecting = true;
                 this.reconnectAttempts++;
                 const delay = Math.min(8000, Math.round(500 * Math.pow(1.5, this.reconnectAttempts - 1)));
                 if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -589,6 +593,13 @@ export const MultiplayerClient = {
                 }, delay);
                 return;
             }
+            this.isReconnecting = false;
+            this.reconnectAttempts = 0;
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
+            this.cleanupOnDisconnect();
             const hint = isPatchedByPreview
                 ? 'Окно превью Gemini перехватывает window.WebSocket. Нажми «Скачать index.html» ниже (теперь файл сохраняется чистым, без перехватчика postMessage) или скопируй код из редактора справа.'
                 : `${err.name || 'Error'}: ${err.message || String(err)} (URL: ${wsUrl})`;
@@ -603,13 +614,15 @@ export const MultiplayerClient = {
         socket.onopen = () => {
             if (this.ws !== socket) return;
             openedSuccessfully = true;
-            const wasReconnecting = this.isReconnecting;
-            this.isReconnecting = false;
-            this.reconnectAttempts = 0;
-            if (this.reconnectTimer) {
-                clearTimeout(this.reconnectTimer);
-                this.reconnectTimer = null;
-            }
+
+            // Application registration handshake timeout: if server does not accept within 5s, close socket
+            if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+            this.handshakeTimer = setTimeout(() => {
+                if (this.ws === socket && !this.onlineUsers.has(username)) {
+                    console.warn('Registration handshake timed out');
+                    try { socket.close(4008, 'registration handshake timeout'); } catch (e) {}
+                }
+            }, 5000);
 
             if (useRegisterPacket) {
                 const regObj = {
@@ -620,9 +633,6 @@ export const MultiplayerClient = {
                 this.safeSend(MsgPackCodec.encode(regObj));
             }
             this.activateSessionUI(username);
-            if (wasReconnecting) {
-                showToast('🟢 Связь с сервером восстановлена!', 'emerald');
-            }
         };
 
         socket.onmessage = (event) => {
@@ -654,6 +664,10 @@ export const MultiplayerClient = {
             if (this.ws !== socket) return;
             this.ws = null;
 
+            if (this.handshakeTimer) {
+                clearTimeout(this.handshakeTimer);
+                this.handshakeTimer = null;
+            }
             if (this.keepAliveTimer) {
                 clearInterval(this.keepAliveTimer);
                 this.keepAliveTimer = null;
@@ -664,13 +678,28 @@ export const MultiplayerClient = {
             }
             this.cancelChatAutoHide();
 
-            // 1. Initial fallback attempt (Option A vs Option B) on initial failure
+            // 1. Session replaced by another connection (terminal: do not auto-reconnect)
+            const isSessionReplaced = event.code === 4408 || (event.reason && event.reason.includes('session replaced'));
+            if (isSessionReplaced) {
+                this.isReconnecting = false;
+                this.reconnectAttempts = 0;
+                if (this.reconnectTimer) {
+                    clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = null;
+                }
+                this.cleanupOnDisconnect();
+                const diagDetail = `WebSocket CloseCode: 4408 | Reason: "${event.reason || 'session replaced'}" | URL: ${wsUrl}`;
+                this.showLoginError('Сессия открыта в другой вкладке или на другом устройстве.', diagDetail);
+                return;
+            }
+
+            // 2. Initial fallback attempt (Option A vs Option B) on initial failure
             if (!openedSuccessfully && !isFallbackAttempt && event.code !== 4409 && this.reconnectAttempts === 0) {
                 this.connect(username, true);
                 return;
             }
 
-            // 2. Name is taken by another client / session token mismatch
+            // 3. Name is taken by another client / session token mismatch
             const isNameTaken = event.code === 4409 || (event.reason && event.reason.includes('taken'));
             if (isNameTaken) {
                 this.clearSessionToken(username);
@@ -752,13 +781,47 @@ export const MultiplayerClient = {
                 this.onlineUsers.add(user);
                 this.updateOnlineRosterUI();
                 if (user === GAME_STATE.username) {
+                    if (this.handshakeTimer) {
+                        clearTimeout(this.handshakeTimer);
+                        this.handshakeTimer = null;
+                    }
                     if (msg.token) {
                         this.setSessionToken(user, String(msg.token));
+                    }
+                    if (Array.isArray(msg.roster)) {
+                        const rosterSet = new Set(msg.roster.map(String));
+                        this.onlineUsers = rosterSet;
+                        this.updateOnlineRosterUI();
+
+                        // Prune remote players that left while client was disconnected
+                        for (const existingUser of Array.from(this.remotePlayers.keys())) {
+                            if (!rosterSet.has(existingUser)) {
+                                this.removeRemotePlayer(existingUser);
+                            }
+                        }
+
+                        // Reconcile parked vehicles whose driver left during disconnect
+                        if (typeof World !== 'undefined' && Array.isArray(World.vehicles)) {
+                            for (const car of World.vehicles) {
+                                if (car.remoteDriver && !rosterSet.has(car.remoteDriver)) {
+                                    car.remoteDriver = null;
+                                    car.netTarget = null;
+                                    car.snapshotBuffer = null;
+                                    car.vx = car.vz = car.yawRate = car.speed = 0;
+                                    car.isAwake = false;
+                                    car.isDrifting = false;
+                                }
+                            }
+                        }
                     }
                     if (this.isReconnecting) {
                         showToast(`🟢 Соединение с Набкой восстановлено!`, 'emerald');
                         this.isReconnecting = false;
                         this.reconnectAttempts = 0;
+                        if (this.reconnectTimer) {
+                            clearTimeout(this.reconnectTimer);
+                            this.reconnectTimer = null;
+                        }
                     } else {
                         showToast(`🌐 Ты на Спортивной набережной как @${user}!`, 'emerald');
                     }
@@ -771,14 +834,6 @@ export const MultiplayerClient = {
                     this.appendChatSystemMessage(`🟢 @${user} вышел на Набку`);
                     this.getOrCreateRemotePlayer(user);
                     this.sendMoveSnapshot(true);
-                }
-                break;
-            }
-            case 'session': {
-                const user = String(msg.user || '');
-                const token = String(msg.token || '');
-                if (user && token) {
-                    this.setSessionToken(user, token);
                 }
                 break;
             }

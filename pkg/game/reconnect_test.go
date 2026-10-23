@@ -133,11 +133,14 @@ func TestReconnectReplacesActiveConnectionWithout4409(t *testing.T) {
 		t.Fatalf("expected token %s to match, got %v", aliceToken, join2["token"])
 	}
 
-	// 4. c1 should have been closed/terminated by the server replacement:
+	// 4. c1 should have been closed with terminal code 4408 ("session replaced from another connection"):
 	_ = c1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	_, _, err = c1.ReadMessage()
 	if err == nil {
 		t.Fatal("expected old connection c1 to be closed by server replacement, but read succeeded")
+	}
+	if !strings.Contains(err.Error(), "4408") {
+		t.Fatalf("expected close code 4408 on replaced connection, got: %v", err)
 	}
 }
 
@@ -249,12 +252,20 @@ func TestReconnectPreservesCarOccupancy(t *testing.T) {
 	if err := sendMsgPack(t, c1, driveMsg); err != nil {
 		t.Fatal(err)
 	}
-	// Small pause for actor loop to process
-	time.Sleep(50 * time.Millisecond)
+	// Bounded wait for actor loop to process driving move
+	deadline := time.Now().Add(2 * time.Second)
+	var car0 CarState
+	var exists bool
+	for time.Now().Before(deadline) {
+		snap := srv.Hub().Snapshot()
+		car0, exists = snap.Cars["car_0"]
+		if exists && car0.Driver == "alice" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// Verify server snapshot shows Alice is driving car_0
-	snap := srv.Hub().Snapshot()
-	car0, exists := snap.Cars["car_0"]
 	if !exists || car0.Driver != "alice" {
 		t.Fatalf("expected alice driving car_0 before reconnect: %+v", car0)
 	}
@@ -296,5 +307,46 @@ func TestReconnectPreservesCarOccupancy(t *testing.T) {
 	car0After := snap2.Cars["car_0"]
 	if car0After.Driver != "alice" {
 		t.Fatalf("expected car_0 driver to be preserved as alice, got %v", car0After.Driver)
+	}
+}
+
+func TestRosterDeliveredInJoinBaseline(t *testing.T) {
+	_, baseURL := startTestServer(t, 30*time.Second)
+
+	// Alice connects
+	c1 := connectWS(t, baseURL+"?username=alice")
+	defer c1.Close()
+	join1, err := readNextMsg(t, c1, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roster1, ok := join1["roster"].([]any)
+	if !ok || len(roster1) != 1 || roster1[0] != "alice" {
+		t.Fatalf("expected alice roster to have ['alice'], got: %+v", join1["roster"])
+	}
+
+	// Bob connects
+	c2 := connectWS(t, baseURL+"?username=bob")
+	defer c2.Close()
+	join2, err := readNextMsg(t, c2, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roster2, ok := join2["roster"].([]any)
+	if !ok || len(roster2) != 2 {
+		t.Fatalf("expected bob roster to have 2 players, got: %+v", join2["roster"])
+	}
+	hasAlice := false
+	hasBob := false
+	for _, u := range roster2 {
+		if u == "alice" {
+			hasAlice = true
+		}
+		if u == "bob" {
+			hasBob = true
+		}
+	}
+	if !hasAlice || !hasBob {
+		t.Fatalf("expected roster with both alice and bob, got: %+v", roster2)
 	}
 }

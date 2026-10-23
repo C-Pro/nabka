@@ -23,7 +23,7 @@ ws://localhost:8080/ws?username=vasya&token=4f8a12bc...
 - If the username is valid and available (or matching the active session token), the connection is upgraded.
 - If the username query parameter is provided but invalid (e.g. whitespace, control characters, >32 chars): HTTP `400 Bad Request`.
 - If the username is already connected by another player (or token mismatch): WebSocket close code `4409` with reason `"username already taken"`.
-- If the username has an active connection and the provided `token` matches the session token, the server atomically replaces the old connection without 4409 error and preserves the player's world/vehicle state.
+- If the username has an active connection and the provided `token` matches the session token, the server atomically replaces the old connection without 4409 error and preserves the player's world/vehicle state. The old connection is closed with WebSocket close code `4408` and reason `"session replaced from another connection"`, which instructs the replaced client to stop auto-reconnecting.
 
 #### Option B: Initial Binary Message
 Connect to `/ws` without query parameters. The connection upgrades, and the client must immediately send a registration message within 5 seconds:
@@ -38,12 +38,14 @@ Connect to `/ws` without query parameters. The connection upgrades, and the clie
 - If registration succeeds, the client receives its own join message containing its unique session token.
 - If registration message is not sent within 5 seconds, malformed, or invalid: the socket is closed.
 - If the username is already connected by another player (or token mismatch): WebSocket close code `4409` with reason `"username already taken"`.
-- If the username has an active connection and the provided `token` matches the session token, the server atomically replaces the old connection without 4409 error.
+- If the username has an active connection and the provided `token` matches the session token, the server atomically replaces the old connection without 4409 error. The replaced client is sent close code `4408` (`"session replaced from another connection"`).
 
 ### Session Tokens & Reconnection
 - **Token Issuance**: When a user connects, the server assigns a cryptographically unique session token transmitted directly in the user's `join` event (`token` field).
 - **Privacy**: The session token is sent only to the authenticated user and is stripped from join broadcasts sent to other players.
-- **Seamless Reconnect**: If a client connection drops (network hiccup, sleep/wake, tab reload), the client immediately attempts automatic reconnection providing its saved session token. The server recognizes the token, closes the dangling connection, and restores the session without locking the username for 30s.
+- **Roster Baseline**: The newcomer's `join` event also delivers `roster` (a list of currently online usernames) directly to the user to synchronize client rosters and prune remote avatars that departed during network hiccups.
+- **Seamless Reconnect**: If a client connection drops (network hiccup, sleep/wake, tab reload), the client immediately attempts automatic reconnection providing its saved session token. The server recognizes the token, closes the dangling connection with code `4408`, and restores the session without locking the username for 30s.
+- **Session Lifetime (TTL)**: Disconnected sessions are retained on the server for 5 minutes of inactivity (`sessionTTL`). If a player reconnects within 5 minutes, their token reclaims the session. After 5 minutes, inactive session tokens expire and the username is freed for any newcomer.
 
 ### Username Rules
 - Length: 1–32 characters
@@ -80,7 +82,8 @@ Broadcast upon successful registration:
 {
   "type": "join",
   "user": "vasya",
-  "token": "4f8a12bc..."
+  "token": "4f8a12bc...",
+  "roster": ["vasya", "dunya"]
 }
 ```
 
@@ -89,6 +92,7 @@ Broadcast upon successful registration:
 | `type` | `string` | `"join"` |
 | `user` | `string` | The registered username |
 | `token` | `string` | *(Optional, sent only to the newcomer)* Unique session token for reconnections |
+| `roster` | `[]string` | *(Optional, sent only to the newcomer)* Current online roster for reconciliation |
 
 ---
 
