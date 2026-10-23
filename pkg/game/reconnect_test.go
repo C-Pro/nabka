@@ -144,6 +144,50 @@ func TestReconnectReplacesActiveConnectionWithout4409(t *testing.T) {
 	}
 }
 
+func TestActiveSessionReplacementSurvivesPastTTL(t *testing.T) {
+	srv, baseURL := startTestServer(t, 30*time.Second)
+
+	// Set short sessionTTL (50ms) to ensure connection stays active longer than TTL
+	srv.Hub().sessionTTL = 50 * time.Millisecond
+
+	// 1. Alice connects
+	c1 := connectWS(t, baseURL+"?username=alice")
+	defer c1.Close()
+
+	join1, err := readNextMsg(t, c1, time.Second)
+	if err != nil {
+		t.Fatalf("failed to read initial join: %v", err)
+	}
+	aliceToken := join1["token"].(string)
+
+	// 2. Wait 120ms while c1 remains actively connected (exceeding 50ms sessionTTL)
+	time.Sleep(120 * time.Millisecond)
+
+	// 3. Alice reconnects on new socket c2 providing her session token:
+	// Because c1 was actively connected, the session must NOT have expired!
+	c2URL := fmt.Sprintf("%s?username=alice&token=%s", baseURL, aliceToken)
+	c2 := connectWS(t, c2URL)
+	defer c2.Close()
+
+	join2, err := readNextMsg(t, c2, time.Second)
+	if err != nil {
+		t.Fatalf("c2 failed to receive join after active session exceeded TTL: %v", err)
+	}
+	if join2["token"] != aliceToken {
+		t.Fatalf("expected token match %s, got %v", aliceToken, join2["token"])
+	}
+
+	// 4. c1 should be terminated with 4408
+	_ = c1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, _, err = c1.ReadMessage()
+	if err == nil {
+		t.Fatal("expected old connection c1 to be closed, but read succeeded")
+	}
+	if !strings.Contains(err.Error(), "4408") {
+		t.Fatalf("expected close code 4408, got: %v", err)
+	}
+}
+
 func TestReconnectWrongTokenOrNoTokenFailsWith4409(t *testing.T) {
 	_, baseURL := startTestServer(t, 30*time.Second)
 

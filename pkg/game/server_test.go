@@ -195,6 +195,13 @@ func TestInactivityTimeout(t *testing.T) {
 	inactiveConn := connectWS(t, baseURL+"?username=sleepy")
 	defer inactiveConn.Close()
 
+	// Read sleepy self-join to retrieve session token
+	sleepyJoin, err := readNextMsg(t, inactiveConn, time.Second)
+	if err != nil {
+		t.Fatalf("failed to receive sleepy self-join: %v", err)
+	}
+	sleepyToken, _ := sleepyJoin["token"].(string)
+
 	// Read sleepy join on observer
 	_, _ = readNextMsg(t, observerConn, time.Second)
 
@@ -243,8 +250,8 @@ func TestInactivityTimeout(t *testing.T) {
 		t.Fatalf("expected reason 'kicked for 30s inactivity', got %q", leaveMsg["reason"])
 	}
 
-	// Verify sleepy's username is freed and can reconnect
-	reconnectConn := connectWS(t, baseURL+"?username=sleepy")
+	// Verify sleepy can reconnect with session token
+	reconnectConn := connectWS(t, fmt.Sprintf("%s?username=sleepy&token=%s", baseURL, sleepyToken))
 	defer reconnectConn.Close()
 
 	joinMsg, err := readNextMsg(t, reconnectConn, time.Second)

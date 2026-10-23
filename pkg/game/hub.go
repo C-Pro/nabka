@@ -332,7 +332,7 @@ func (h *Hub) run() {
 				existingClient, isConnected := h.clients[c.client.Username]
 
 				now := time.Now()
-				if hasSession && now.Sub(sess.lastSeen) > h.sessionTTL {
+				if hasSession && !isConnected && now.Sub(sess.lastSeen) > h.sessionTTL {
 					delete(h.sessions, c.client.Username)
 					hasSession = false
 					sess = nil
@@ -363,15 +363,16 @@ func (h *Hub) run() {
 					}
 				} else {
 					// Username not currently connected
-					if hasSession && c.token != "" {
-						if sess.token == c.token {
+					if hasSession {
+						if c.token != "" && sess.token == c.token {
 							// Authorized returning player
 							isReconnection = true
 							assignedToken = sess.token
 							sess.lastSeen = now
 							c.client.SessionToken = assignedToken
 						} else {
-							// Provided an invalid token for an existing session within TTL
+							// Disconnected name is reserved under an active session within sessionTTL;
+							// missing or mismatched token is rejected
 							c.result <- false
 							continue
 						}

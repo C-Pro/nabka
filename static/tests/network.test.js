@@ -234,9 +234,21 @@ test('Socket.onclose with 4408 halts auto-reconnect and cleans up UI on session 
     }
 });
 
-test('Registration handshake timeout closes socket if self-join not received within 5s', () => {
+test('Registration handshake timeout closes socket with 4008 if self-join not received within 5s', () => {
     let closedCode = null;
     let closedReason = null;
+    let timerCallback = null;
+    let timerDelay = null;
+
+    const prevSetTimeout = globalThis.setTimeout;
+    const prevClearTimeout = globalThis.clearTimeout;
+    globalThis.setTimeout = (cb, delay) => {
+        timerCallback = cb;
+        timerDelay = delay;
+        return 123;
+    };
+    globalThis.clearTimeout = () => {};
+
     const client = Object.assign(Object.create(MultiplayerClient), {
         serverUrl: 'ws://localhost:8080/ws',
         onlineUsers: new Set(),
@@ -273,22 +285,76 @@ test('Registration handshake timeout closes socket if self-join not received wit
 
         createdSocket.onopen();
         expect(createdSocket.isRegistered).toBe(false);
-        expect(client.handshakeTimer).not.toBeNull();
+        expect(timerCallback).not.toBeNull();
+        expect(timerDelay).toBe(5000);
 
-        // If self-join never arrives, isRegistered remains false
+        // When timeout fires without self-join, socket is closed with 4008
+        timerCallback();
+        expect(closedCode).toBe(4008);
+        expect(closedReason).toBe('registration handshake timeout');
+    } finally {
+        globalThis.window = prevWindow;
+        globalThis.setTimeout = prevSetTimeout;
+        globalThis.clearTimeout = prevClearTimeout;
+    }
+});
+
+test('Registration handshake clears timeout and activates session upon self-join', () => {
+    let activated = false;
+    let clearedTimer = false;
+
+    const prevClearTimeout = globalThis.clearTimeout;
+    globalThis.clearTimeout = () => { clearedTimer = true; };
+
+    const client = Object.assign(Object.create(MultiplayerClient), {
+        serverUrl: 'ws://localhost:8080/ws',
+        onlineUsers: new Set(),
+        stopLocalBridgeMode() {},
+        hideLoginError() {},
+        setConnectingUI() {},
+        activateSessionUI() { activated = true; },
+        cleanupOnDisconnect() {},
+        showLoginError() {},
+        checkServerVersion() {},
+        updateOnlineRosterUI() {},
+        sendMoveSnapshot() {},
+    });
+
+    let createdSocket = null;
+    const fakeWindow = {
+        WebSocket: class FakeWebSocket {
+            constructor(url) {
+                this.url = url;
+                createdSocket = this;
+            }
+            send() {}
+            close() {}
+        }
+    };
+
+    const prevWindow = globalThis.window;
+    globalThis.window = fakeWindow;
+
+    try {
+        client.connect('alice');
+        createdSocket.onopen();
         expect(createdSocket.isRegistered).toBe(false);
 
-        // Now simulate self-join arriving
+        // Simulate self-join arriving
         client.handleServerMessage({
             type: 'join',
             user: 'alice',
             token: 'tok_abc'
         });
+
         expect(createdSocket.isRegistered).toBe(true);
         expect(client.handshakeTimer).toBeNull();
+        expect(clearedTimer).toBe(true);
+        expect(activated).toBe(true);
         expect(client.onlineUsers.has('alice')).toBe(true);
     } finally {
         globalThis.window = prevWindow;
+        globalThis.clearTimeout = prevClearTimeout;
     }
 });
 
