@@ -1,5 +1,6 @@
 # Local archives & scratchpads
-screenshots/
+screenshots/*
+!screenshots/hero.png
 vladivostok_nabka_multiplayer_project_context.md
 nabka.tar.gz
 nabka.rar
