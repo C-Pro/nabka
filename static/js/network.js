@@ -7,6 +7,9 @@ import { World } from './world.js';
 import { Player, toggleVehicleDrive, revalidatePlayerSpawn } from './entities.js';
 import { showToast, triggerPlayerSpeech, showLocalLabels } from './ui.js';
 import { ModelLoader, ModelBuilders } from './models.js';
+import { triggerCameraShake } from './camera-effects.js';
+import { consumeAbility } from './quests.js';
+import { getVladivostokDateParts } from './noon-cannon.js';
 
 export function hashUsernameColor(username) {
     const palette = ['#38bdf8', '#fbbf24', '#34d399', '#f472b6', '#a78bfa', '#fb7185', '#2dd4bf'];
@@ -40,6 +43,7 @@ export const MultiplayerClient = {
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,
     isReconnecting: false,
+    handledNoonDates: new Set(),
 
     getSessionToken(username) {
         if (!username) return '';
@@ -508,6 +512,7 @@ export const MultiplayerClient = {
     cleanupOnDisconnect() {
         this.setConnectingUI(false);
         GAME_STATE.isConnected = false;
+        GAME_STATE.isCannonFirePending = false;
         if (typeof document !== 'undefined') {
             const dot = document.getElementById('net-status-dot');
             if (dot) dot.className = 'w-2 h-2 rounded-full bg-rose-500';
@@ -924,9 +929,50 @@ export const MultiplayerClient = {
                 }
                 break;
             }
+            case 'cannon_shot': {
+                const reason = String(msg.reason || 'fortress');
+                const user = String(msg.user || '');
+
+                if (typeof SoundManager.playCannonShotWithRetry === 'function') {
+                    SoundManager.playCannonShotWithRetry(30000);
+                } else {
+                    SoundManager.playCannonShot();
+                }
+                triggerCameraShake(1.6);
+
+                if (reason === 'noon') {
+                    this.handledNoonDates.add(getVladivostokDateParts().dateString);
+                    showToast('🕛 12:00 — Традиционный полуденный выстрел Владивостокской крепости! 💥⚓', 'amber', 5000);
+                    this.appendChatMessage('Владивосток', '💥 12:00 — Традиционный полуденный выстрел пушки!');
+                } else if (reason === 'fortress') {
+                    if (user === GAME_STATE.username) {
+                        consumeAbility('can_fire_fortress_cannon', GAME_STATE);
+                        GAME_STATE.isCannonFirePending = false;
+                        triggerPlayerSpeech('ОГО! ВОТ ЭТО БАБАХНУЛО! 💥⚓');
+                        showToast('💥 Залп из пушки Владивостокской крепости произведён!', 'amber', 5000);
+                    } else if (user) {
+                        showToast(`💥 @${user} пальнул из пушки Владивостокской крепости!`, 'amber', 4000);
+                        this.appendChatMessage('Крепость', `💥 @${user} пальнул из музейной пушки!`);
+                    }
+                }
+                break;
+            }
             case 'error': {
                 const errText = String(msg.message || 'Ошибка протокола');
+                const op = String(msg.op || '');
+
+                if (op === 'cannon_fire' || errText.includes('cannon') || errText.includes('fortress') || errText.includes('пушк')) {
+                    GAME_STATE.isCannonFirePending = false;
+                    showToast(`⚠️ Крепость: ${errText}`, 'amber');
+                    break;
+                }
+
                 if (errText.includes('unknown message type')) {
+                    if (GAME_STATE.isCannonFirePending) {
+                        GAME_STATE.isCannonFirePending = false;
+                        showToast('⚠️ Сервер не поддерживает пушечный залп', 'amber');
+                        break;
+                    }
                     // Older server deployment does not support TypePing; fall back to move heartbeat silently
                     this.serverSupportsPing = false;
                     break;
@@ -1341,6 +1387,41 @@ export const MultiplayerClient = {
             text: trimmed
         };
         this.safeSend(MsgPackCodec.encode(payload));
+        GAME_STATE.lastActiveEventAt = performance.now();
+    },
+
+    sendCannonFire() {
+        if (this.isLocalBridge) {
+            const outMsg = {
+                type: 'cannon_shot',
+                user: GAME_STATE.username,
+                reason: 'fortress'
+            };
+            const encoded = MsgPackCodec.encode(outMsg);
+            if (this.broadcastChannel) {
+                this.broadcastChannel.postMessage(encoded);
+            }
+            this.handleServerMessage(MsgPackCodec.decode(encoded));
+            GAME_STATE.lastActiveEventAt = performance.now();
+            return;
+        }
+
+        if (!this.ws || this.ws.readyState !== 1) {
+            GAME_STATE.isCannonFirePending = false;
+            showToast('⚠️ Нет соединения с сервером', 'amber');
+            return;
+        }
+
+        // Flush current position so server receives accurate coordinates
+        this.sendMoveSnapshot(true);
+
+        const payload = {
+            type: 'cannon_fire'
+        };
+        const ok = this.safeSend(MsgPackCodec.encode(payload));
+        if (!ok) {
+            GAME_STATE.isCannonFirePending = false;
+        }
         GAME_STATE.lastActiveEventAt = performance.now();
     },
 

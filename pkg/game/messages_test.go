@@ -258,3 +258,44 @@ func TestNonMapRootRejection(t *testing.T) {
 		t.Fatal("expected ParseRegister to reject array root")
 	}
 }
+
+func TestParseCannonFire(t *testing.T) {
+	// Valid message
+	valid := map[string]any{"type": TypeCannonFire}
+	b, err := msgpack.Marshal(valid)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	out, err := ParseCannonFire(b)
+	if err != nil {
+		t.Fatalf("expected valid parse, got error: %v", err)
+	}
+	if out.Type != TypeCannonFire {
+		t.Fatalf("expected type %q, got %q", TypeCannonFire, out.Type)
+	}
+
+	// Wrong type
+	wrong := map[string]any{"type": "cannon_boom"}
+	bWrong, _ := msgpack.Marshal(wrong)
+	if _, err := ParseCannonFire(bWrong); err == nil {
+		t.Fatal("expected error for wrong message type")
+	}
+
+	// Trailing data
+	bTrailing := append(b, []byte("extra")...)
+	if _, err := ParseCannonFire(bTrailing); err == nil {
+		t.Fatal("expected error for trailing data")
+	}
+
+	// Non-map root
+	arr := []string{"cannon_fire"}
+	bArr, _ := msgpack.Marshal(arr)
+	if _, err := ParseCannonFire(bArr); err == nil {
+		t.Fatal("expected error for non-map root")
+	}
+
+	// Empty payload
+	if _, err := ParseCannonFire([]byte{}); err == nil {
+		t.Fatal("expected error for empty payload")
+	}
+}

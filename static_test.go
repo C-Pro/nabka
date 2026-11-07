@@ -27,6 +27,9 @@ func TestStaticFS(t *testing.T) {
 		"js/network.js",
 		"js/input.js",
 		"js/models.js",
+		"js/quests.js",
+		"js/noon-cannon.js",
+		"js/camera-effects.js",
 		"models/fountain.glb",
 		"models/dynamo_stadium.glb",
 		"models/ocean_cinema.glb",
@@ -47,6 +50,7 @@ func TestStaticFS(t *testing.T) {
 		"audio/drift2.mp3",
 		"audio/drift3.mp3",
 		"audio/drift4.mp3",
+		"audio/cannon.mp3",
 	}
 
 	for _, path := range requiredFiles {

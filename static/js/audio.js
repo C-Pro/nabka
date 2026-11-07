@@ -57,6 +57,7 @@ export function calculateDriftState(car, currentlyDrifting = false) {
 
 export const SoundManager = {
     initialized: false,
+    _initPromise: null,
     ctx: null,
     masterGain: null,
 
@@ -65,6 +66,8 @@ export const SoundManager = {
     ambienceSource: null,
     ambienceGain: null,
     ambiencePlaying: false,
+
+    cannonBuffer: null,
 
     shortSeagullBuffers: [],
     lastShortSeagullIndex: -1,
@@ -184,6 +187,12 @@ export const SoundManager = {
             if (this.initialized) {
                 this.startAmbienceLoop();
             }
+        });
+
+        // Vladivostok Fortress Cannon Shot
+        this.loadAudioBuffer('audio/cannon.mp3').then((buf) => {
+            if (!buf) return;
+            this.cannonBuffer = buf;
         });
 
         // 2. Short Seagull Calls (ch1, ch2, ch3)
@@ -623,25 +632,35 @@ export const SoundManager = {
     async ensureInit() {
         if (this.initialized) {
             if (this.ctx && this.ctx.state === 'suspended') {
-                await this.ctx.resume();
+                try {
+                    await this.ctx.resume();
+                } catch (e) {
+                    console.warn('Audio resume error:', e);
+                }
             }
             if (this.ambienceBuffer && !this.ambienceSource) {
                 this.startAmbienceLoop();
             }
             return;
         }
-        if (typeof window === 'undefined') return;
-        try {
-            const AudioCtx = window.AudioContext || window.webkitAudioContext;
-            if (!AudioCtx) return;
-            this.ctx = new AudioCtx();
-            if (this.ctx.state === 'suspended') {
-                await this.ctx.resume();
-            }
+        if (this._initPromise) return this._initPromise;
+        this._initPromise = (async () => {
+            if (typeof window === 'undefined') return;
+            try {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (!AudioCtx) return;
+                this.ctx = new AudioCtx();
+                if (this.ctx.state === 'suspended') {
+                    try {
+                        await this.ctx.resume();
+                    } catch (e) {
+                        console.warn('Audio resume error during init:', e);
+                    }
+                }
 
-            this.masterGain = this.ctx.createGain();
-            this.masterGain.gain.value = getGameState().sfxEnabled ? 1.0 : 0.0;
-            this.masterGain.connect(this.ctx.destination);
+                this.masterGain = this.ctx.createGain();
+                this.masterGain.gain.value = getGameState().sfxEnabled ? 1.0 : 0.0;
+                this.masterGain.connect(this.ctx.destination);
 
             // Pre-create ambience gain node
             this.ambienceGain = this.ctx.createGain();
@@ -808,8 +827,12 @@ export const SoundManager = {
             }
         } catch (err) {
             console.warn('Audio init warning:', err);
+        } finally {
+            this._initPromise = null;
         }
-    },
+    })();
+    return this._initPromise;
+},
 
     async toggleSfx() {
         await this.ensureInit();
@@ -1221,7 +1244,109 @@ export const SoundManager = {
         } catch (e) {}
     },
 
+    playCannonShot() {
+        const gs = getGameState();
+        if (!this.initialized || !this.ctx) {
+            return { status: 'uninitialized' };
+        }
+        if (!gs.sfxEnabled) {
+            return { status: 'muted' };
+        }
+        if (this.ctx.state !== 'running') {
+            return { status: 'suspended', contextState: this.ctx.state };
+        }
+        try {
+            if (this.cannonBuffer) {
+                const src = this.ctx.createBufferSource();
+                src.buffer = this.cannonBuffer;
+                const g = this.ctx.createGain();
+                g.gain.setValueAtTime(1.0, this.ctx.currentTime);
+                src.connect(g);
+                g.connect(this.masterGain);
+                src.onended = () => {
+                    try {
+                        src.disconnect();
+                        g.disconnect();
+                    } catch (e) {}
+                };
+                src.start(0);
+                return { status: 'played' };
+            } else {
+                // Synthesize powerful cannon boom if buffer is still loading
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const g = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(120, now);
+                osc.frequency.exponentialRampToValueAtTime(30, now + 0.6);
+                g.gain.setValueAtTime(0.5, now);
+                g.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+                osc.connect(g);
+                g.connect(this.masterGain);
+                osc.onended = () => {
+                    try {
+                        osc.disconnect();
+                        g.disconnect();
+                    } catch (e) {}
+                };
+                osc.start(now);
+                osc.stop(now + 0.85);
+                return { status: 'played_fallback' };
+            }
+        } catch (e) {
+            console.warn('Failed to play cannon sound:', e);
+            return { status: 'error', error: e };
+        }
+    },
+
+    playCannonShotWithRetry(maxWaitMs = 30000) {
+        const res = this.playCannonShot();
+        if (res && (res.status === 'played' || res.status === 'played_fallback' || res.status === 'muted')) {
+            return res;
+        }
+        if (typeof document === 'undefined') return res;
+
+        const deadline = Date.now() + maxWaitMs;
+        const retry = () => {
+            if (Date.now() > deadline) {
+                cleanup();
+                return;
+            }
+            if (!this.initialized && typeof this.ensureInit === 'function') {
+                this.ensureInit().then(() => {
+                    const r = this.playCannonShot();
+                    if (r && (r.status === 'played' || r.status === 'played_fallback' || r.status === 'muted')) {
+                        cleanup();
+                    }
+                }).catch(() => {});
+            } else {
+                const r = this.playCannonShot();
+                if (r && (r.status === 'played' || r.status === 'played_fallback' || r.status === 'muted')) {
+                    cleanup();
+                }
+            }
+        };
+
+        const cleanup = () => {
+            if (typeof document !== 'undefined') {
+                document.removeEventListener('pointerdown', retry);
+                document.removeEventListener('keydown', retry);
+                document.removeEventListener('touchstart', retry);
+            }
+        };
+
+        document.addEventListener('pointerdown', retry, { passive: true });
+        document.addEventListener('keydown', retry, { passive: true });
+        document.addEventListener('touchstart', retry, { passive: true });
+
+        setTimeout(cleanup, maxWaitMs);
+        return res;
+    },
+
     playActionSound(type) {
+        if (type === 'cannon') {
+            return this.playCannonShot();
+        }
         if (!this.initialized || !getGameState().sfxEnabled || !this.ctx) return;
         try {
             const now = this.ctx.currentTime;

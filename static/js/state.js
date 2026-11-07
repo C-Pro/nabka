@@ -99,6 +99,8 @@ export function createGameState(overrides = {}) {
             { name: 'Солнечный День', icon: 'fa-cloud-sun', sky: 0x0284c7, horizon: 0x7dd3fc, fogColor: 0xbae6fd, fogDensity: 0.0015, sunIntensity: 1.5, sunColor: 0xffffff, ambientIntensity: 0.85, nightLights: false, timeText: '14:45', westTint: 0x38bdf8, westOpacity: 0.36 }
         ],
         completedPOIs: new Set(),
+        completedQuests: overrides.completedQuests || new Set(),
+        questFlags: overrides.questFlags || {},
         totalPOIs: 10,
         inVehicle: null,
         cameraMode: 0, // 0: GTA Standard, 1: Close Action, 2: Far Cinematic, 3: RHD Cockpit / First-Person

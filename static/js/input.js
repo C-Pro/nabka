@@ -117,6 +117,7 @@ export function bindInputControls(worldMap = {}) {
                 return;
             }
             if (GAME_STATE.activeNpcChat) {
+                if (e.repeat) return;
                 if (e.code === 'Digit1' || e.code === 'Numpad1') {
                     const btns = document.querySelectorAll('#npc-options-container button');
                     if (btns[0]) btns[0].click();
@@ -126,6 +127,9 @@ export function bindInputControls(worldMap = {}) {
                 } else if (e.code === 'Digit3' || e.code === 'Numpad3') {
                     const btns = document.querySelectorAll('#npc-options-container button');
                     if (btns[2]) btns[2].click();
+                } else if (e.code === 'Digit4' || e.code === 'Numpad4') {
+                    const btns = document.querySelectorAll('#npc-options-container button');
+                    if (btns[3]) btns[3].click();
                 }
             }
             return;
@@ -150,7 +154,10 @@ export function bindInputControls(worldMap = {}) {
             GAME_STATE.keys.space = true;
             Player.jump(MultiplayerClient);
         }
-        if (code === 'KeyE') triggerCurrentInteraction();
+        if (code === 'KeyE') {
+            if (e.repeat) return;
+            triggerCurrentInteraction();
+        }
         if (code === 'KeyF') Player.emote(MultiplayerClient);
         if (code === 'KeyV') handleCycleCamera();
         if (code === 'KeyH') handleToggleHeadlights();

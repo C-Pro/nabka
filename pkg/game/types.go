@@ -22,14 +22,16 @@ const (
 
 // Standard message types
 const (
-	TypeRegister = "register"
-	TypeJoin     = "join"
-	TypeLeave    = "leave"
-	TypeMove     = "move"
-	TypeChat     = "chat"
-	TypeError    = "error"
-	TypePing     = "ping"
-	TypePong     = "pong"
+	TypeRegister   = "register"
+	TypeJoin       = "join"
+	TypeLeave      = "leave"
+	TypeMove       = "move"
+	TypeChat       = "chat"
+	TypeError      = "error"
+	TypePing       = "ping"
+	TypePong       = "pong"
+	TypeCannonFire = "cannon_fire"
+	TypeCannonShot = "cannon_shot"
 )
 
 // Modes for movement
@@ -97,6 +99,11 @@ type InboundChatMsg struct {
 	Text     string `msgpack:"text"`
 }
 
+// InboundCannonFireMsg represents a request from a client to fire the fortress cannon.
+type InboundCannonFireMsg struct {
+	Type string `msgpack:"type"`
+}
+
 // OutboundJoinMsg broadcasts when a user connects.
 type OutboundJoinMsg struct {
 	Type   string   `msgpack:"type"`
@@ -158,6 +165,14 @@ type OutboundChatMsg struct {
 type OutboundErrorMsg struct {
 	Type    string `msgpack:"type"`
 	Message string `msgpack:"message"`
+	Op      string `msgpack:"op,omitempty"`
+}
+
+// OutboundCannonShotMsg broadcasts a confirmed cannon shot to all connected clients.
+type OutboundCannonShotMsg struct {
+	Type   string `msgpack:"type"`
+	User   string `msgpack:"user,omitempty"`
+	Reason string `msgpack:"reason"`
 }
 
 // CarState tracks the last seen world position and state of a vehicle.
@@ -421,6 +436,31 @@ func ParseChat(data []byte, verifiedUsername string) (*OutboundChatMsg, error) {
 		From:     verifiedUsername,
 		Text:     text,
 	}, nil
+}
+
+// ParseCannonFire decodes and strictly validates cannon fire requests.
+func ParseCannonFire(data []byte) (*InboundCannonFireMsg, error) {
+	if err := ValidateMsgPackMap(data); err != nil {
+		return nil, err
+	}
+
+	reader := bytes.NewReader(data)
+	dec := msgpack.NewDecoder(reader)
+
+	var in InboundCannonFireMsg
+	if err := dec.Decode(&in); err != nil {
+		return nil, fmt.Errorf("failed to decode cannon fire: %w", err)
+	}
+
+	if reader.Len() > 0 {
+		return nil, errors.New("unexpected trailing bytes after cannon fire message")
+	}
+
+	if in.Type != TypeCannonFire {
+		return nil, fmt.Errorf("expected type %q, got %q", TypeCannonFire, in.Type)
+	}
+
+	return &in, nil
 }
 
 // RegisterRequest represents validated registration parameters.

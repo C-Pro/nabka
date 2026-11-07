@@ -1,5 +1,8 @@
 import { GAME_STATE, applyPOICompletion, startNpcDialogueSession, advanceNpcDialogue, resolveZoneName } from './state.js';
 import { SoundManager } from './audio.js';
+import { getQuestById, canAcceptQuest, acceptQuest, consumeAbility, hasQuestAbility, isQuestCompleted } from './quests.js';
+import { triggerCameraShake } from './camera-effects.js';
+import { MultiplayerClient } from './network.js';
 
 export function substitutePlayerMentions(text, username = (typeof GAME_STATE !== 'undefined' ? GAME_STATE.username : 'Игрок')) {
     if (!text) return '';
@@ -113,7 +116,10 @@ export function openNpcDialogue(npc, playerPos) {
 
         document.getElementById('npc-dialogue-modal').classList.remove('hidden');
     }
-    completePOI('npc_' + npc.persona.name, `💬 Разговор на Набке с ${npc.persona.name}`, 300);
+    const poiKey = 'npc_' + (npc.persona.id || npc.persona.name);
+    if (!GAME_STATE.completedPOIs.has(poiKey)) {
+        completePOI(poiKey, `💬 Разговор на Набке с ${npc.persona.name}`, 300);
+    }
 }
 
 export function closeNpcDialogue() {
@@ -165,6 +171,8 @@ export function renderNpcDialogueOptions(npc) {
     if (!optionsContainer) return;
     optionsContainer.innerHTML = '';
 
+    const isMikhalych = npc.persona && (npc.persona.id === 'captain_mikhalych' || npc.persona.name === 'Капитан Михалыч');
+
     if (npc.chatStage === 'opening') {
         npc.persona.options.forEach((opt, idx) => {
             const btn = document.createElement('button');
@@ -183,6 +191,69 @@ export function renderNpcDialogueOptions(npc) {
             btn.addEventListener('click', () => selectNpcFollowUpOption(idx));
             optionsContainer.appendChild(btn);
         });
+
+        // Quest option for Captain Mikhalych
+        if (isMikhalych) {
+            const questBtn = document.createElement('button');
+            questBtn.type = 'button';
+            questBtn.className = 'btn-game w-full text-left bg-amber-950/60 hover:bg-amber-600/35 text-amber-200 border border-amber-400/50 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2.5 transition shadow';
+
+            const numBadge = document.createElement('span');
+            numBadge.className = 'bg-amber-500/25 text-amber-300 border border-amber-400/40 font-mono-code text-[10px] px-1.5 py-0.5 rounded shrink-0';
+            numBadge.textContent = '4';
+
+            const labelSpan = document.createElement('span');
+            const hasAbility = hasQuestAbility('can_fire_fortress_cannon', GAME_STATE);
+            const isCompleted = isQuestCompleted('captain_cannon', GAME_STATE);
+
+            if (hasAbility) {
+                labelSpan.textContent = '⚓ Где там пушка, капитан?';
+                questBtn.addEventListener('click', () => selectCaptainCannonStatus(npc, 'pending'));
+            } else if (!isCompleted) {
+                labelSpan.textContent = '⚓ Пальнуть из пушки на крепости (50 000 ₽)';
+                questBtn.addEventListener('click', () => selectCaptainCannonPrompt(npc, false));
+            } else {
+                // Quest was completed previously and fired; offer to fire again!
+                labelSpan.textContent = '⚓ Пальнуть из пушки ещё разок (50 000 ₽)';
+                questBtn.addEventListener('click', () => selectCaptainCannonPrompt(npc, true));
+            }
+
+            questBtn.appendChild(numBadge);
+            questBtn.appendChild(labelSpan);
+            optionsContainer.appendChild(questBtn);
+        }
+    } else if (npc.chatStage === 'quest_offer') {
+        const acceptBtn = document.createElement('button');
+        acceptBtn.type = 'button';
+        acceptBtn.className = 'btn-game w-full text-left bg-emerald-950/70 hover:bg-emerald-600/35 text-emerald-200 border border-emerald-400/50 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2.5 transition shadow';
+
+        const num1 = document.createElement('span');
+        num1.className = 'bg-emerald-500/25 text-emerald-300 border border-emerald-400/40 font-mono-code text-[10px] px-1.5 py-0.5 rounded shrink-0';
+        num1.textContent = '1';
+
+        const text1 = document.createElement('span');
+        text1.textContent = '[Заплатить 50 000 ₽] По рукам, капитан! Вот деньги.';
+
+        acceptBtn.appendChild(num1);
+        acceptBtn.appendChild(text1);
+        acceptBtn.addEventListener('click', () => selectCaptainCannonAccept(npc));
+        optionsContainer.appendChild(acceptBtn);
+
+        const declineBtn = document.createElement('button');
+        declineBtn.type = 'button';
+        declineBtn.className = 'btn-game w-full text-left bg-slate-800/95 hover:bg-slate-700 text-slate-300 border border-slate-600 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2.5 transition shadow';
+
+        const num2 = document.createElement('span');
+        num2.className = 'bg-slate-500/25 text-slate-300 border border-slate-400/40 font-mono-code text-[10px] px-1.5 py-0.5 rounded shrink-0';
+        num2.textContent = '2';
+
+        const text2 = document.createElement('span');
+        text2.textContent = 'Ого, дороговато... В другой раз.';
+
+        declineBtn.appendChild(num2);
+        declineBtn.appendChild(text2);
+        declineBtn.addEventListener('click', () => selectCaptainCannonDecline(npc));
+        optionsContainer.appendChild(declineBtn);
     } else {
         npc.persona.goodbyes.forEach((byeText, idx) => {
             const btn = document.createElement('button');
@@ -202,6 +273,95 @@ export function renderNpcDialogueOptions(npc) {
             optionsContainer.appendChild(btn);
         });
     }
+}
+
+export function selectCaptainCannonPrompt(npc, isRepeat = false) {
+    if (!npc) return;
+    const quest = getQuestById('captain_cannon');
+    if (!quest) return;
+
+    const userText = (isRepeat && quest.dialogue.repeatPromptQuestion)
+        ? quest.dialogue.repeatPromptQuestion
+        : quest.dialogue.promptQuestion;
+
+    const offerText = (isRepeat && quest.dialogue.repeatOfferAnswer)
+        ? quest.dialogue.repeatOfferAnswer
+        : quest.dialogue.offerAnswer;
+
+    npc.chatHistory.push({ role: 'user', text: userText });
+    npc.chatHistory.push({ role: 'model', text: offerText });
+    npc.chatStage = 'quest_offer';
+    triggerPlayerSpeech(userText);
+    SoundManager.playActionSound('cash');
+    renderNpcChatHistory(npc);
+    renderNpcDialogueOptions(npc);
+}
+
+export function selectCaptainCannonAccept(npc) {
+    if (!npc) return;
+    const quest = getQuestById('captain_cannon');
+    if (!quest) return;
+    const res = acceptQuest('captain_cannon', GAME_STATE);
+    if (res.ok) {
+        const isRepeat = (res.completions && res.completions > 1);
+        const replyText = (isRepeat && quest.dialogue.repeatSuccessAnswer)
+            ? quest.dialogue.repeatSuccessAnswer
+            : quest.dialogue.successAnswer;
+
+        npc.chatHistory.push({ role: 'user', text: quest.dialogue.acceptOptionText });
+        npc.chatHistory.push({ role: 'model', text: replyText });
+        npc.chatStage = 'answered';
+        triggerPlayerSpeech(quest.dialogue.acceptOptionText);
+        SoundManager.playActionSound('cash');
+        if (typeof document !== 'undefined') {
+            const moneyEl = document.getElementById('hud-money');
+            if (moneyEl) moneyEl.textContent = `₽ ${GAME_STATE.money.toLocaleString('ru-RU')}`;
+        }
+        const toastMsg = isRepeat
+            ? '💰 Ты снова заплатил 50 000 ₽ капитану Михалычу! Повторный залп готов.'
+            : '💰 Ты заплатил 50 000 ₽ капитану Михалычу! Разрешение на выстрел получено.';
+        showToast(toastMsg, 'amber');
+    } else if (res.reason === 'ABILITY_ALREADY_ACTIVE' || res.reason === 'ALREADY_COMPLETED') {
+        npc.chatHistory.push({ role: 'user', text: quest.dialogue.acceptOptionText });
+        npc.chatHistory.push({ role: 'model', text: quest.dialogue.alreadyCompletedAnswer });
+        npc.chatStage = 'answered';
+        triggerPlayerSpeech(quest.dialogue.acceptOptionText);
+        showToast('ℹ️ Разрешение на выстрел уже активно! Иди к пушке на Батарейной.', 'sky');
+    } else {
+        npc.chatHistory.push({ role: 'user', text: quest.dialogue.acceptOptionText });
+        npc.chatHistory.push({ role: 'model', text: quest.dialogue.insufficientFundsAnswer });
+        npc.chatStage = 'answered';
+        triggerPlayerSpeech(quest.dialogue.acceptOptionText);
+        showToast('❌ Недостаточно денег! Требуется 50 000 ₽.', 'amber');
+    }
+    renderNpcChatHistory(npc);
+    renderNpcDialogueOptions(npc);
+}
+
+export function selectCaptainCannonDecline(npc) {
+    if (!npc) return;
+    const quest = getQuestById('captain_cannon');
+    if (!quest) return;
+    npc.chatHistory.push({ role: 'user', text: quest.dialogue.declineOptionText });
+    npc.chatHistory.push({ role: 'model', text: quest.dialogue.declineAnswer });
+    npc.chatStage = 'answered';
+    triggerPlayerSpeech(quest.dialogue.declineOptionText);
+    renderNpcChatHistory(npc);
+    renderNpcDialogueOptions(npc);
+}
+
+export function selectCaptainCannonStatus(npc, status) {
+    if (!npc) return;
+    const quest = getQuestById('captain_cannon');
+    if (!quest) return;
+    const userText = status === 'pending' ? 'Где там пушка, капитан?' : 'Капитан, ну как тебе мой выстрел?';
+    const answerText = status === 'pending' ? quest.dialogue.pendingShotAnswer : quest.dialogue.firedAnswer;
+    npc.chatHistory.push({ role: 'user', text: userText });
+    npc.chatHistory.push({ role: 'model', text: answerText });
+    npc.chatStage = 'answered';
+    triggerPlayerSpeech(userText);
+    renderNpcChatHistory(npc);
+    renderNpcDialogueOptions(npc);
 }
 
 export function selectNpcFollowUpOption(optionIndex) {
@@ -528,6 +688,33 @@ export function checkProximityInteractions({ playerPos, npcs, interactables, dun
             minDist = d;
             closest = item;
         }
+    }
+
+    if (closest && closest.id === 'fortress' && !GAME_STATE.inVehicle && hasQuestAbility('can_fire_fortress_cannon', GAME_STATE)) {
+        const targetX = closest.x;
+        const targetZ = closest.z;
+        const targetRadius = closest.radius || 6;
+        closest = {
+            id: 'fortress_cannon',
+            name: closest.name,
+            prompt: 'Пальнуть из пушки Владивостокской крепости! 💥 [E]',
+            onInteract: () => {
+                if (!hasQuestAbility('can_fire_fortress_cannon', GAME_STATE)) return;
+                if (GAME_STATE.isCannonFirePending) return;
+                const currentDist = Math.hypot(playerPos.x - targetX, playerPos.z - targetZ);
+                if (currentDist > targetRadius) return;
+                dismissInteractionPrompt();
+
+                if (MultiplayerClient && MultiplayerClient.isLocalBridge) {
+                    MultiplayerClient.sendCannonFire();
+                } else if (MultiplayerClient && MultiplayerClient.ws && MultiplayerClient.ws.readyState === 1) {
+                    GAME_STATE.isCannonFirePending = true;
+                    MultiplayerClient.sendCannonFire();
+                } else {
+                    showToast('⚠️ Нет соединения с сервером', 'amber');
+                }
+            }
+        };
     }
 
     if (!closest && !GAME_STATE.inVehicle && dunya && dunya.group) {

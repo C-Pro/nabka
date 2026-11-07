@@ -249,6 +249,21 @@ func (c *Client) ReadPump() {
 			pongMsg, _ := MarshalMsgPack(map[string]interface{}{"type": TypePong})
 			c.sendDirect(pongMsg)
 
+		case TypeCannonFire:
+			if _, err := ParseCannonFire(payload); err != nil {
+				errMsg, _ := MarshalMsgPack(OutboundErrorMsg{
+					Type:    TypeError,
+					Message: err.Error(),
+					Op:      TypeCannonFire,
+				})
+				c.sendDirect(errMsg)
+				continue
+			}
+
+			// Valid application message: refresh inactivity deadline
+			_ = c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
+			c.hub.RequestCannonFire(c)
+
 		case TypeRegister:
 			errMsg, _ := MarshalMsgPack(OutboundErrorMsg{
 				Type:    TypeError,
@@ -256,10 +271,10 @@ func (c *Client) ReadPump() {
 			})
 			c.sendDirect(errMsg)
 
-		case TypeJoin, TypeLeave:
+		case TypeJoin, TypeLeave, TypeCannonShot:
 			errMsg, _ := MarshalMsgPack(OutboundErrorMsg{
 				Type:    TypeError,
-				Message: "join and leave message types are server reserved",
+				Message: "cannon_shot, join, and leave message types are server reserved",
 			})
 			c.sendDirect(errMsg)
 

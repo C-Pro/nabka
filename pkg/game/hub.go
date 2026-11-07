@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -77,23 +78,51 @@ type cmdSnapshot struct {
 	result chan HubSnapshot
 }
 
+type cmdCannonFire struct {
+	sender *Client
+}
+
+type cmdTriggerNoon struct {
+	result chan struct{}
+}
+
+type cmdTickNoon struct {
+	result chan bool
+}
+
+type cmdSetNowFunc struct {
+	fn     func() time.Time
+	result chan struct{}
+}
+
 // HubSnapshot contains an immutable copy of cars and users states.
 type HubSnapshot struct {
 	Cars  map[string]CarState
 	Users map[string]UserState
 }
 
+type fortressCoords struct {
+	x      float64
+	z      float64
+	radius float64
+}
+
 // Hub maintains the set of active clients, tracks world state (cars and users), and broadcasts messages via an actor loop.
 type Hub struct {
-	sequence    uint64
-	started     time.Time
-	clients     map[string]*Client
-	cars        map[string]*CarState
-	users       map[string]*UserState
-	sessions    map[string]*userSession
-	sessionTTL  time.Duration
-	allowedCars map[string]struct{}
-	cmdCh       chan hubCmd
+	sequence       uint64
+	started        time.Time
+	clients        map[string]*Client
+	cars           map[string]*CarState
+	users          map[string]*UserState
+	sessions       map[string]*userSession
+	sessionTTL     time.Duration
+	allowedCars    map[string]struct{}
+	fortress       fortressCoords
+	cannonCooldown time.Duration
+	lastCannonFire map[string]time.Time
+	noonFiredDate  string
+	nowFunc        func() time.Time
+	cmdCh          chan hubCmd
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -125,6 +154,60 @@ func loadWorldMapVehicleIDs() []string {
 	return ids
 }
 
+func loadWorldMapFortressCoords() fortressCoords {
+	def := fortressCoords{x: 127.87, z: -124.43, radius: 6.0}
+	raw, err := os.ReadFile("static/data/world_map.json")
+	if err != nil {
+		raw, err = fs.ReadFile(nabka.FS(), "data/world_map.json")
+		if err != nil {
+			return def
+		}
+	}
+	var parsed struct {
+		Interactables []struct {
+			ID     string  `json:"id"`
+			X      float64 `json:"x"`
+			Z      float64 `json:"z"`
+			Radius float64 `json:"radius"`
+		} `json:"interactables"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return def
+	}
+	for _, it := range parsed.Interactables {
+		if it.ID == "fortress" {
+			r := it.Radius
+			if r <= 0 {
+				r = 6.0
+			}
+			return fortressCoords{x: it.X, z: it.Z, radius: r}
+		}
+	}
+	return def
+}
+
+func vladivostokDateAndNoon(now time.Time) (dateStr string, todayNoonUtc time.Time) {
+	utc := now.UTC()
+	vvoTime := utc.Add(10 * time.Hour)
+	year, month, day := vvoTime.Date()
+	dateStr = fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+	todayNoonUtc = time.Date(year, month, day, 2, 0, 0, 0, time.UTC)
+	return dateStr, todayNoonUtc
+}
+
+func nextVladivostokNoonDelay(now time.Time) time.Duration {
+	_, todayNoonUtc := vladivostokDateAndNoon(now)
+	target := todayNoonUtc
+	if !now.Before(todayNoonUtc) {
+		target = todayNoonUtc.AddDate(0, 0, 1)
+	}
+	d := target.Sub(now)
+	if d <= 0 {
+		d = time.Second
+	}
+	return d
+}
+
 // NewHub creates and starts a new Hub instance.
 func NewHub(parentCtx context.Context, allowedCars ...string) *Hub {
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -146,16 +229,19 @@ func NewHub(parentCtx context.Context, allowedCars ...string) *Hub {
 	}
 
 	h := &Hub{
-		started:     time.Now(),
-		clients:     make(map[string]*Client),
-		cars:        make(map[string]*CarState),
-		users:       make(map[string]*UserState),
-		sessions:    make(map[string]*userSession),
-		sessionTTL:  defaultSessionTTL,
-		allowedCars: allowedMap,
-		cmdCh:       make(chan hubCmd, 2048),
-		ctx:         ctx,
-		cancel:      cancel,
+		started:        time.Now(),
+		clients:        make(map[string]*Client),
+		cars:           make(map[string]*CarState),
+		users:          make(map[string]*UserState),
+		sessions:       make(map[string]*userSession),
+		sessionTTL:     defaultSessionTTL,
+		allowedCars:    allowedMap,
+		fortress:       loadWorldMapFortressCoords(),
+		cannonCooldown: 2 * time.Second,
+		lastCannonFire: make(map[string]time.Time),
+		cmdCh:          make(chan hubCmd, 2048),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 	h.wg.Add(1)
 	go h.run()
@@ -306,6 +392,83 @@ func (h *Hub) SendDirect(client *Client, data []byte) {
 	}
 }
 
+// RequestCannonFire forwards a client request to fire the fortress cannon into the Hub actor.
+func (h *Hub) RequestCannonFire(sender *Client) {
+	req := &cmdCannonFire{sender: sender}
+	select {
+	case h.cmdCh <- req:
+	case <-h.ctx.Done():
+	}
+}
+
+// TriggerNoonCannon triggers a noon cannon broadcast explicitly (primarily for tests).
+func (h *Hub) TriggerNoonCannon() {
+	res := make(chan struct{})
+	select {
+	case h.cmdCh <- &cmdTriggerNoon{result: res}:
+		select {
+		case <-res:
+		case <-h.ctx.Done():
+		}
+	case <-h.ctx.Done():
+	}
+}
+
+// SetNowFunc injects a custom clock for simulation testing.
+func (h *Hub) SetNowFunc(fn func() time.Time) {
+	res := make(chan struct{})
+	select {
+	case h.cmdCh <- &cmdSetNowFunc{fn: fn, result: res}:
+		select {
+		case <-res:
+		case <-h.ctx.Done():
+		}
+	case <-h.ctx.Done():
+	}
+}
+
+// TickNoon evaluates whether noon cannon should fire according to the clock and broadcasts if due.
+// Returns true if the noon event fired, false otherwise (useful for deterministic tests).
+func (h *Hub) TickNoon() bool {
+	res := make(chan bool, 1)
+	select {
+	case h.cmdCh <- &cmdTickNoon{result: res}:
+		select {
+		case fired := <-res:
+			return fired
+		case <-h.ctx.Done():
+			return false
+		}
+	case <-h.ctx.Done():
+		return false
+	}
+}
+
+// evaluateNoonTransition checks if a noon cannon broadcast is due for the given time.
+// If due and not yet fired for today's Vladivostok date, it marks the date and returns true.
+// Must be called from the actor loop.
+func (h *Hub) evaluateNoonTransition(now time.Time) bool {
+	dateStr, todayNoonUtc := vladivostokDateAndNoon(now)
+	if h.noonFiredDate == dateStr {
+		return false
+	}
+	if now.Before(todayNoonUtc) {
+		return false
+	}
+	if now.After(todayNoonUtc.Add(60 * time.Second)) {
+		return false
+	}
+	h.noonFiredDate = dateStr
+	return true
+}
+
+func (h *Hub) now() time.Time {
+	if h.nowFunc != nil {
+		return h.nowFunc()
+	}
+	return time.Now()
+}
+
 // Stop terminates the hub event loop and cleans up.
 func (h *Hub) Stop() {
 	h.cancel()
@@ -318,6 +481,9 @@ func (h *Hub) run() {
 
 	cleanTicker := time.NewTicker(time.Minute)
 	defer cleanTicker.Stop()
+
+	noonTimer := time.NewTimer(nextVladivostokNoonDelay(h.now()))
+	defer noonTimer.Stop()
 
 	for {
 		select {
@@ -334,9 +500,22 @@ func (h *Hub) run() {
 				if _, online := h.clients[uname]; !online {
 					if now.Sub(sess.lastSeen) > h.sessionTTL {
 						delete(h.sessions, uname)
+						delete(h.lastCannonFire, uname)
 					}
 				}
 			}
+
+		case <-noonTimer.C:
+			now := h.now()
+			if h.evaluateNoonTransition(now) {
+				noonMsg, _ := msgpack.Marshal(OutboundCannonShotMsg{
+					Type:   TypeCannonShot,
+					User:   "",
+					Reason: "noon",
+				})
+				h.broadcastData(noonMsg, nil)
+			}
+			noonTimer.Reset(nextVladivostokNoonDelay(h.now()))
 
 		case cmd := <-h.cmdCh:
 			switch c := cmd.(type) {
@@ -735,6 +914,110 @@ func (h *Hub) run() {
 			case *cmdSetSessionTTL:
 				h.sessionTTL = c.ttl
 				close(c.result)
+
+			case *cmdTriggerNoon:
+				now := h.now()
+				dateStr, _ := vladivostokDateAndNoon(now)
+				h.noonFiredDate = dateStr
+				noonMsg, _ := msgpack.Marshal(OutboundCannonShotMsg{
+					Type:   TypeCannonShot,
+					User:   "",
+					Reason: "noon",
+				})
+				h.broadcastData(noonMsg, nil)
+				close(c.result)
+
+			case *cmdTickNoon:
+				now := h.now()
+				fired := h.evaluateNoonTransition(now)
+				if fired {
+					noonMsg, _ := msgpack.Marshal(OutboundCannonShotMsg{
+						Type:   TypeCannonShot,
+						User:   "",
+						Reason: "noon",
+					})
+					h.broadcastData(noonMsg, nil)
+				}
+				c.result <- fired
+
+			case *cmdSetNowFunc:
+				h.nowFunc = c.fn
+				noonTimer.Stop()
+				noonTimer.Reset(nextVladivostokNoonDelay(h.now()))
+				close(c.result)
+
+			case *cmdCannonFire:
+				existing, ok := h.clients[c.sender.Username]
+				if !ok || existing != c.sender {
+					continue
+				}
+
+				uState, uExists := h.users[c.sender.Username]
+				if !uExists {
+					errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+						Type:    TypeError,
+						Message: "player position not established",
+						Op:      TypeCannonFire,
+					})
+					select {
+					case c.sender.send <- errMsg:
+					default:
+					}
+					continue
+				}
+
+				if uState.Mode != ModePedestrian {
+					errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+						Type:    TypeError,
+						Message: "cannot fire cannon while driving",
+						Op:      TypeCannonFire,
+					})
+					select {
+					case c.sender.send <- errMsg:
+					default:
+					}
+					continue
+				}
+
+				dx := uState.X - h.fortress.x
+				dz := uState.Z - h.fortress.z
+				maxDist := h.fortress.radius + 1.5 // 7.5m with tolerance
+				if (dx*dx + dz*dz) > (maxDist * maxDist) {
+					errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+						Type:    TypeError,
+						Message: "too far from fortress cannon",
+						Op:      TypeCannonFire,
+					})
+					select {
+					case c.sender.send <- errMsg:
+					default:
+					}
+					continue
+				}
+
+				now := h.now()
+				if last, ok := h.lastCannonFire[c.sender.Username]; ok {
+					if now.Sub(last) < h.cannonCooldown {
+						errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+							Type:    TypeError,
+							Message: "cannon is cooling down",
+							Op:      TypeCannonFire,
+						})
+						select {
+						case c.sender.send <- errMsg:
+						default:
+						}
+						continue
+					}
+				}
+
+				h.lastCannonFire[c.sender.Username] = now
+				shotMsg, _ := msgpack.Marshal(OutboundCannonShotMsg{
+					Type:   TypeCannonShot,
+					User:   c.sender.Username,
+					Reason: "fortress",
+				})
+				h.broadcastData(shotMsg, nil)
 
 			case *cmdSendDirect:
 				if existing, ok := h.clients[c.client.Username]; ok && existing == c.client {

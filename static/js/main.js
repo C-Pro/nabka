@@ -4,14 +4,47 @@ import { World } from './world.js';
 import { Player, Dunya, createJDMCar, toggleVehicleDrive, initPromenadeNPCs, selectValidSpawnPoint, updateWorldVehicles } from './entities.js';
 import { MultiplayerClient } from './network.js';
 import { bindInputControls } from './input.js';
-import { checkProximityInteractions, updateScreenProjections, drawGTARadar, showLocalLabels } from './ui.js';
+import { checkProximityInteractions, updateScreenProjections, drawGTARadar, showLocalLabels, showToast } from './ui.js';
 import { ModelLoader } from './models.js';
+import { applyCameraShake, removeCameraShake, triggerCameraShake } from './camera-effects.js';
+import { NoonCannonScheduler } from './noon-cannon.js';
+import { SoundManager } from './audio.js';
 
+const pageOpenedAt = Date.now();
+const handledNoonDates = new Set();
 let activeWorldMap = {};
+let activeNoonScheduler = null;
+
+export function getActiveNoonScheduler() {
+    return activeNoonScheduler;
+}
+
+export function disposeNoonScheduler() {
+    if (activeNoonScheduler) {
+        activeNoonScheduler.dispose();
+        activeNoonScheduler = null;
+    }
+}
+
+// Trusted gesture listener to resume audio and flush any pending noon playback
+if (typeof window !== 'undefined') {
+    const handleGestureAudioUnlock = async () => {
+        if (SoundManager.ctx && SoundManager.ctx.state === 'suspended') {
+            await SoundManager.ensureInit();
+        }
+        if (activeNoonScheduler) {
+            activeNoonScheduler.retryPendingAudio();
+        }
+    };
+    window.addEventListener('click', handleGestureAudioUnlock, { passive: true });
+    window.addEventListener('keydown', handleGestureAudioUnlock, { passive: true });
+}
 
 export function updateThirdPersonCamera(dt = 0.016) {
     const camera = World.camera;
     if (!camera || !Player.position) return;
+
+    removeCameraShake(camera);
 
     const mode = GAME_STATE.cameraModes[GAME_STATE.cameraMode] || { heightOffset: 2.6 };
     const targetBase = GAME_STATE.inVehicle ? GAME_STATE.inVehicle.group.position : Player.position;
@@ -51,6 +84,7 @@ export function updateThirdPersonCamera(dt = 0.016) {
             );
             camera.lookAt(eyePos.clone().add(lookDir.multiplyScalar(20)));
         }
+        applyCameraShake(camera, dt);
         return;
     }
 
@@ -71,6 +105,7 @@ export function updateThirdPersonCamera(dt = 0.016) {
 
     camera.position.lerp(new THREE.Vector3(camX, camY, camZ), smoothingAlpha(GAME_STATE.inVehicle ? 25.85 : 14.91, dt));
     camera.lookAt(lookTarget);
+    applyCameraShake(camera, dt);
 }
 
 function gameLoop() {
@@ -186,6 +221,21 @@ export async function startApp() {
     MultiplayerClient.initUI(worldMap);
     bindInputControls(worldMap);
     showLocalLabels(1500);
+
+    disposeNoonScheduler();
+    activeNoonScheduler = new NoonCannonScheduler({
+        pageOpenedAt,
+        firedDates: MultiplayerClient.handledNoonDates,
+        shouldRun: () => !GAME_STATE.isConnected || MultiplayerClient.isLocalBridge,
+        onAnnounce: () => {
+            triggerCameraShake(1.6);
+            showToast('🕛 12:00 — Традиционный полуденный выстрел Владивостокской крепости! 💥⚓', 'amber');
+        },
+        onPlayAudio: () => {
+            return SoundManager.playCannonShot();
+        }
+    });
+    activeNoonScheduler.start();
 
     gameLoop();
 }

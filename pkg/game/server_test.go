@@ -1193,6 +1193,7 @@ func TestEmbeddedModularStaticAssetsHTTP(t *testing.T) {
 		"/audio/roadster_idle.mp3",
 		"/audio/roadster_driving.mp3",
 		"/audio/drift1.mp3",
+		"/audio/cannon.mp3",
 	} {
 		respAudio, err := client.Get(httpBase + audioPath)
 		if err != nil {
@@ -1398,5 +1399,168 @@ func TestHub_SnapshotCancellationSafe(t *testing.T) {
 	snap := h.Snapshot()
 	if snap.Cars == nil || snap.Users == nil {
 		t.Fatalf("expected non-nil maps from cancelled snapshot")
+	}
+}
+
+func TestCannonFire_ValidationAndBroadcast(t *testing.T) {
+	_, wsURL := startTestServer(t, 5*time.Second)
+
+	aliceConn := connectWS(t, wsURL+"?username=alice")
+	defer aliceConn.Close()
+	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // join
+
+	bobConn := connectWS(t, wsURL+"?username=bob")
+	defer bobConn.Close()
+	_, _ = readNextMsg(t, bobConn, 2*time.Second)   // join
+	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // bob's join
+
+	fireMsg, _ := msgpack.Marshal(map[string]any{"type": TypeCannonFire})
+
+	// 1. Try to fire before position is established
+	if err := aliceConn.WriteMessage(websocket.BinaryMessage, fireMsg); err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+	errReply, err := readNextMsg(t, aliceConn, 2*time.Second)
+	if err != nil || errReply["type"] != TypeError || !strings.Contains(fmt.Sprint(errReply["message"]), "position not established") {
+		t.Fatalf("expected position not established error, got: %+v (err: %v)", errReply, err)
+	}
+
+	// 2. Set position far away from fortress (x: 0, z: 0)
+	farMove, _ := msgpack.Marshal(map[string]any{
+		"type": "move",
+		"mode": ModePedestrian,
+		"x":    0.0,
+		"y":    0.0,
+		"z":    0.0,
+		"yaw":  0.0,
+		"anim": AnimIdle,
+	})
+	_ = aliceConn.WriteMessage(websocket.BinaryMessage, farMove)
+	_, _ = readNextMsg(t, bobConn, 2*time.Second) // alice move
+
+	_ = aliceConn.WriteMessage(websocket.BinaryMessage, fireMsg)
+	errReply, err = readNextMsg(t, aliceConn, 2*time.Second)
+	if err != nil || errReply["type"] != TypeError || !strings.Contains(fmt.Sprint(errReply["message"]), "too far") {
+		t.Fatalf("expected too far error, got: %+v (err: %v)", errReply, err)
+	}
+
+	// 3. Move near fortress (127.87, -124.43)
+	nearMove, _ := msgpack.Marshal(map[string]any{
+		"type": "move",
+		"mode": ModePedestrian,
+		"x":    127.87,
+		"y":    0.0,
+		"z":    -124.43,
+		"yaw":  0.0,
+		"anim": AnimIdle,
+	})
+	_ = aliceConn.WriteMessage(websocket.BinaryMessage, nearMove)
+	_, _ = readNextMsg(t, bobConn, 2*time.Second) // alice move
+
+	// 4. Valid cannon fire!
+	_ = aliceConn.WriteMessage(websocket.BinaryMessage, fireMsg)
+
+	// Alice receives confirmed shot
+	aliceShot, err := readNextMsg(t, aliceConn, 2*time.Second)
+	if err != nil || aliceShot["type"] != TypeCannonShot || aliceShot["user"] != "alice" || aliceShot["reason"] != "fortress" {
+		t.Fatalf("expected confirmed cannon shot for alice, got: %+v (err: %v)", aliceShot, err)
+	}
+
+	// Bob also receives cannon shot
+	bobShot, err := readNextMsg(t, bobConn, 2*time.Second)
+	if err != nil || bobShot["type"] != TypeCannonShot || bobShot["user"] != "alice" || bobShot["reason"] != "fortress" {
+		t.Fatalf("expected confirmed cannon shot for bob, got: %+v (err: %v)", bobShot, err)
+	}
+
+	// 5. Immediate second shot -> cooldown error
+	_ = aliceConn.WriteMessage(websocket.BinaryMessage, fireMsg)
+	errReply, err = readNextMsg(t, aliceConn, 2*time.Second)
+	if err != nil || errReply["type"] != TypeError || !strings.Contains(fmt.Sprint(errReply["message"]), "cooling down") {
+		t.Fatalf("expected cooldown error, got: %+v (err: %v)", errReply, err)
+	}
+}
+
+func TestCannonShot_ServerReserved(t *testing.T) {
+	_, wsURL := startTestServer(t, 5*time.Second)
+
+	aliceConn := connectWS(t, wsURL+"?username=alice")
+	defer aliceConn.Close()
+	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // join
+
+	reservedMsg, _ := msgpack.Marshal(map[string]any{
+		"type":   TypeCannonShot,
+		"user":   "alice",
+		"reason": "fortress",
+	})
+	_ = aliceConn.WriteMessage(websocket.BinaryMessage, reservedMsg)
+
+	errReply, err := readNextMsg(t, aliceConn, 2*time.Second)
+	if err != nil || errReply["type"] != TypeError || !strings.Contains(fmt.Sprint(errReply["message"]), "server reserved") {
+		t.Fatalf("expected server reserved error, got: %+v (err: %v)", errReply, err)
+	}
+}
+
+func TestNoonCannonBroadcast(t *testing.T) {
+	srv, wsURL := startTestServer(t, 5*time.Second)
+
+	aliceConn := connectWS(t, wsURL+"?username=alice")
+	defer aliceConn.Close()
+	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // join
+
+	bobConn := connectWS(t, wsURL+"?username=bob")
+	defer bobConn.Close()
+	_, _ = readNextMsg(t, bobConn, 2*time.Second)   // join
+	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // bob's join
+
+	srv.Hub().TriggerNoonCannon()
+
+	aliceMsg, err := readNextMsg(t, aliceConn, 2*time.Second)
+	if err != nil || aliceMsg["type"] != TypeCannonShot || aliceMsg["reason"] != "noon" {
+		t.Fatalf("expected noon cannon shot for alice, got: %+v (err: %v)", aliceMsg, err)
+	}
+
+	bobMsg, err := readNextMsg(t, bobConn, 2*time.Second)
+	if err != nil || bobMsg["type"] != TypeCannonShot || bobMsg["reason"] != "noon" {
+		t.Fatalf("expected noon cannon shot for bob, got: %+v (err: %v)", bobMsg, err)
+	}
+}
+
+func TestNoonCannonSchedulingEligibility(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hub := NewHub(ctx)
+	defer hub.Stop()
+
+	// 1. Before noon: 2026-10-24 11:59:50 Vladivostok = 2026-10-24 01:59:50 UTC
+	simTime := time.Date(2026, 10, 24, 1, 59, 50, 0, time.UTC)
+	hub.SetNowFunc(func() time.Time { return simTime })
+
+	if hub.TickNoon() {
+		t.Fatal("expected TickNoon to return false before noon")
+	}
+
+	// 2. Exact noon: 2026-10-24 12:00:00 Vladivostok = 2026-10-24 02:00:00 UTC
+	simTime = time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC)
+	if !hub.TickNoon() {
+		t.Fatal("expected TickNoon to fire at 12:00 Vladivostok")
+	}
+
+	// 3. Duplicate check for same date (12:00:10): must return false
+	simTime = time.Date(2026, 10, 24, 2, 0, 10, 0, time.UTC)
+	if hub.TickNoon() {
+		t.Fatal("expected duplicate tick for same date to be suppressed")
+	}
+
+	// 4. Next day after grace period (> 60s): 2026-10-25 12:01:05 Vladivostok = 2026-10-25 02:01:05 UTC
+	simTime = time.Date(2026, 10, 25, 2, 1, 5, 0, time.UTC)
+	if hub.TickNoon() {
+		t.Fatal("expected tick outside grace window to be suppressed")
+	}
+
+	// 5. Next day within grace period: 2026-10-26 12:00:30 Vladivostok = 2026-10-26 02:00:30 UTC
+	simTime = time.Date(2026, 10, 26, 2, 0, 30, 0, time.UTC)
+	if !hub.TickNoon() {
+		t.Fatal("expected tick within 60s grace window to fire")
 	}
 }

@@ -340,6 +340,44 @@ Receiving `ping` refreshes the 30-second application inactivity deadline on the 
 
 ---
 
+### 3.9. Cannon Events
+
+#### Inbound: Cannon Fire Request (Client -> Server)
+Sent by a client to fire the ceremonial artillery gun at Vladivostok Fortress:
+```json
+{
+  "type": "cannon_fire"
+}
+```
+Validation rules:
+- Sender connection must be registered.
+- Sender must have established an authoritative pedestrian world position (`mode: "pedestrian"`); driving clients cannot fire.
+- Distance from player position to Vladivostok Fortress (`(127.87, -124.43)`) must be within the interaction tolerance ($\le 7.5\text{ m}$, based on the map's $6.0\text{ m}$ radius).
+- Cooldown: 2 seconds per player account (retained across reconnections and connection replacements).
+- If rejected, server replies directly with `type: "error"`.
+
+*Scope note: The server validates physical presence, mode, and rate limiting, but clients own their quest progression. Ability consumption is confirmed upon receiving the matching outbound event.*
+
+#### Outbound: Cannon Shot Event (Server -> All Clients)
+Broadcast when a cannon shot is confirmed, or at daily noon:
+```json
+{
+  "type": "cannon_shot",
+  "user": "vasya",
+  "reason": "fortress"
+}
+```
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `string` | `"cannon_shot"` |
+| `user` | `string` | *(Optional)* Username of the player who fired, or empty string for server-scheduled events |
+| `reason` | `string` | `"fortress"` (player fired fortress cannon) or `"noon"` (12:00 Vladivostok tradition) |
+
+- When `reason === "fortress"`: all connected clients hear the cannon sound and experience camera shake. The firing player reconciles their one-time quest ability and displays celebration speech/toast. Other players see attribution toast/chat.
+- When `reason === "noon"`: the server broadcasts at exactly 12:00 Vladivostok time (02:00:00 UTC) with a 60-second grace window on restart. All connected clients play the cannon sound and display the traditional noon announcement.
+
+---
+
 ## 4. HTTP Static File Server & Versioning
 
 The server embeds all assets in the `static/` directory directly into the compiled Go binary using Go standard library `embed.FS` (`//go:embed all:static`), requiring zero external filesystem assets at runtime.
