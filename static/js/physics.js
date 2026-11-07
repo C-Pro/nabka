@@ -34,11 +34,16 @@ export const DEFAULT_MODEL_BOUNDS = {
     'models/dunya.glb': { minX: -0.253, maxX: 0.253, minY: 0, maxY: 0.89, minZ: -0.461, maxZ: 0.585 },
     'models/dynamo_stadium.glb': { minX: -18.625, maxX: 18, minY: 0, maxY: 19, minZ: -28, maxZ: 28 },
     'models/ferris_wheel.glb': { minX: -14.4, maxX: 14.4, minY: -0.844, maxY: 33.9, minZ: -2.7, maxZ: 2.7 },
+    'models/fish_kambala.glb': { minX: -0.325, maxX: 0.325, minY: 0.019, maxY: 0.097, minZ: -0.337, maxZ: 0.275, width: 0.65, height: 0.078, depth: 0.613, centerX: 0, centerY: 0.058, centerZ: -0.031 },
+    'models/fish_okun.glb': { minX: -0.176, maxX: 0.176, minY: 0.013, maxY: 0.347, minZ: -0.325, maxZ: 0.294, width: 0.352, height: 0.335, depth: 0.619, centerX: 0, centerY: 0.18, centerZ: -0.016 },
+    'models/fish_terpug.glb': { minX: -0.163, maxX: 0.163, minY: 0.017, maxY: 0.294, minZ: -0.362, maxZ: 0.338, width: 0.326, height: 0.277, depth: 0.7, centerX: 0, centerY: 0.155, centerZ: -0.012 },
     'models/forrester.glb': { minX: -1.31, maxX: 1.31, minY: 0, maxY: 1.867, minZ: -2.51, maxZ: 2.51 },
     'models/fortress_museum.glb': { minX: -5.502, maxX: 11, minY: 0, maxY: 7.3, minZ: -11, maxZ: 11 },
     'models/fountain.glb': { minX: -10.2, maxX: 10.2, minY: 0, maxY: 2, minZ: -10.2, maxZ: 10.2 },
     'models/impreza_wrx.glb': { minX: -1.316, maxX: 1.316, minY: 0, maxY: 1.563, minZ: -2.456, maxZ: 2.47 },
     'models/jimny.glb': { minX: -1.322, maxX: 1.31, minY: -0.187, maxY: 2.375, minZ: -2.347, maxZ: 2.25 },
+    'models/jellyfish.glb': { minX: -0.237, maxX: 0.237, minY: -0.012, maxY: 0.438, minZ: -0.237, maxZ: 0.237, width: 0.475, height: 0.45, depth: 0.475, centerX: 0, centerY: 0.213, centerZ: 0 },
+    'models/laminaria.glb': { minX: -0.239, maxX: 0.188, minY: 0, maxY: 1.76, minZ: -0.18, maxZ: 0.194, width: 0.427, height: 1.76, depth: 0.374, centerX: -0.025, centerY: 0.88, centerZ: 0.007 },
     'models/lighthouse.glb': { minX: -5.5, maxX: 49.5, minY: -0.4, maxY: 18, minZ: -3, maxZ: 3 },
     'models/npc.glb': { minX: -0.68, maxX: 0.68, minY: 0.04, maxY: 2, minZ: -0.68, maxZ: 0.68 },
     'models/ocean_cinema.glb': { minX: -12.5, maxX: 11, minY: 0, maxY: 16.5, minZ: -14, maxZ: 14 },
@@ -55,6 +60,8 @@ export const DEFAULT_MODEL_BOUNDS = {
     'models/stall_chifanka.glb': { minX: -2.3, maxX: 2.2, minY: 0, maxY: 4.9, minZ: -3.1, maxZ: 3.1 },
     'models/stall_coffee.glb': { minX: -2.3, maxX: 2.2, minY: 0, maxY: 4.9, minZ: -3.1, maxZ: 3.1 },
     'models/stall_pyanse.glb': { minX: -2.3, maxX: 2.2, minY: 0, maxY: 4.9, minZ: -3.1, maxZ: 3.1 },
+    'models/starfish_amur.glb': { minX: -0.302, maxX: 0.302, minY: 0.003, maxY: 0.072, minZ: -0.269, maxZ: 0.306, width: 0.605, height: 0.069, depth: 0.575, centerX: 0, centerY: 0.038, centerZ: 0.019 },
+    'models/starfish_patiria.glb': { minX: -0.244, maxX: 0.244, minY: 0.004, maxY: 0.078, minZ: -0.239, maxZ: 0.237, width: 0.488, height: 0.074, depth: 0.476, centerX: 0, centerY: 0.041, centerZ: -0.001 },
     'models/street_lamp.glb': { minX: -0.42, maxX: 0.42, minY: 0, maxY: 5.72, minZ: -0.399, maxZ: 0.399 },
     'models/supra_restaurant.glb': { minX: -8.7, maxX: 5.5, minY: 0, maxY: 7.5, minZ: -6.5, maxZ: 6.5 },
     'models/tanker.glb': { minX: -3.5, maxX: 3.5, minY: -0.2, maxY: 10.25, minZ: -17.1, maxZ: 17.1 },
@@ -62,6 +69,33 @@ export const DEFAULT_MODEL_BOUNDS = {
     'models/yacht_club_boathouse.glb': { minX: -3.5, maxX: 3.5, minY: -2.25, maxY: 2.25, minZ: -4.5, maxZ: 4.5 },
     'models/yacht_club_pier.glb': { minX: -15, maxX: 15, minY: -0.35, maxY: 0.35, minZ: -4, maxZ: 4 }
 };
+
+export const SEA_SURFACE_Y = -1.2;
+export const SHORE_X = -22;
+export const PIER_END_X = -50;
+export const DEEP_SEA_X = -70;
+export const MAX_SWIM_DISTANCE = 50;
+export const MIN_SWIM_X = SHORE_X - MAX_SWIM_DISTANCE;
+export const SWIM_DEPTH_THRESHOLD = 1.5;
+export const SWIM_FLOOR_OFFSET = 1.5;
+
+export function getWaterDepthAt(x, z = 0) {
+    if (x >= SHORE_X) return 0;
+    if (x >= PIER_END_X) return ((SHORE_X - x) / (SHORE_X - PIER_END_X)) * 6;
+    if (x >= DEEP_SEA_X) return 6 + ((PIER_END_X - x) / (PIER_END_X - DEEP_SEA_X)) * 4;
+    return 10;
+}
+
+export function getSeabedHeightAt(x, z = 0) {
+    if (x >= -15) return 0;
+    if (x >= SHORE_X) return ((x + 15) / (-15 - SHORE_X)) * (-SEA_SURFACE_Y);
+    return SEA_SURFACE_Y - getWaterDepthAt(x, z);
+}
+
+export function getTargetSwimY(x, z = 0) {
+    const seabedY = getSeabedHeightAt(x, z);
+    return Math.max(seabedY, Math.min(SEA_SURFACE_Y - 1.2, seabedY + SWIM_FLOOR_OFFSET));
+}
 
 /**
  * Compound multi-box collider presets for models with complex boundaries (e.g. stadiums with gates).
@@ -301,6 +335,9 @@ export function createColliderStore(initialColliders = []) {
 
     const engine = {
         colliders,
+        getWaterDepthAt,
+        getSeabedHeightAt,
+        getTargetSwimY,
 
         clear() {
             colliders.length = 0;
@@ -450,11 +487,7 @@ export function createColliderStore(initialColliders = []) {
          */
         getSupportHeightAt(x, z, currentY, entityRadius = 0.45, vehiclesList = [], activeVehicle = null) {
             let baseGround = 0;
-            // Seaside amphitheater steps down to Yubileyny Beach (except pier corridors)
-            const onPier = (z >= 42 && z <= 54) || (z >= 112 && z <= 124) || (z >= 142 && z <= 154);
-            if (x < -15 && !onPier) {
-                baseGround = Math.max(-1.2, (x + 15) * 0.16);
-            }
+            if (x < -15) baseGround = getSeabedHeightAt(x, z);
 
             let maxSupport = baseGround;
             for (const col of colliders) {
@@ -512,6 +545,7 @@ export function createColliderStore(initialColliders = []) {
         resolveWorldCollision(pos, radius, currentY = 0) {
             let hitAny = false;
             for (const col of colliders) {
+                if (currentY < SEA_SURFACE_Y && (col.tag === 'pier' || col.tag === 'yacht_club_pier' || col.id === 'pier' || col.id === 'yacht_club_pier')) continue;
                 // Skip overhead structures high above the entity (e.g. Golden Bridge deck at y=24)
                 if (col.minY !== undefined && currentY + 1.8 < col.minY) continue;
                 // If entity is above the top of this structure (or it is a low walkable surface <= 0.52m), do not block horizontally

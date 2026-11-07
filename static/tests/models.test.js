@@ -306,6 +306,11 @@ function installMockThree() {
             this.opacity = opts.opacity !== undefined ? opts.opacity : 1.0;
             this.side = opts.side || 0;
             this.map = opts.map || null;
+            this.normalMap = opts.normalMap || null;
+            this.normalScale = opts.normalScale || null;
+            this.envMap = opts.envMap || null;
+            this.envMapIntensity = opts.envMapIntensity;
+            this.depthWrite = opts.depthWrite;
             this.emissive = new Color(opts.emissive !== undefined ? opts.emissive : 0x000000);
             this.emissiveIntensity = opts.emissiveIntensity !== undefined ? opts.emissiveIntensity : 1.0;
         }
@@ -362,6 +367,15 @@ function installMockThree() {
             this.needsUpdate = false;
             this.wrapS = 1001;
             this.wrapT = 1001;
+            this.repeat = { x: 1, y: 1, set(x, y) { this.x = x; this.y = y; } };
+            this.offset = { x: 0, y: 0 };
+        }
+    }
+
+    class CubeTexture extends Texture {
+        constructor(images) {
+            super(images);
+            this.images = images;
         }
     }
 
@@ -403,6 +417,7 @@ function installMockThree() {
     globalThis.THREE = {
         Color,
         Vector3,
+        Vector2: class { constructor(x, y) { this.x = x; this.y = y; } },
         Quaternion,
         Euler,
         Object3D,
@@ -425,6 +440,7 @@ function installMockThree() {
         MeshBasicMaterial,
         Texture,
         CanvasTexture: Texture,
+        CubeTexture,
         FrontSide: 0,
         DoubleSide: 2,
         RepeatWrapping: 1000,
@@ -438,6 +454,135 @@ beforeAll(() => {
 });
 
 describe('GLB 2.0 Exporter & Loader Interoperability', () => {
+    test('third-person camera follows a submerged swimmer below the sea surface', async () => {
+        const { World } = await import('../js/world.js');
+        const { updateThirdPersonCamera } = await import('../js/main.js');
+        const { Player } = await import('../js/entities.js');
+        const { GAME_STATE } = await import('../js/state.js');
+        const { SEA_SURFACE_Y, getSeabedHeightAt } = await import('../js/physics.js');
+        const originalCamera = World.camera;
+        const originalPosition = Player.position;
+        const originalSwimming = Player.isSwimming;
+        const originalBlend = Player.swimBlend;
+        const originalState = {
+            cameraMode: GAME_STATE.cameraMode,
+            cameraYaw: GAME_STATE.cameraYaw,
+            cameraPitch: GAME_STATE.cameraPitch,
+            cameraDistance: GAME_STATE.cameraDistance,
+            lastMouseMoveTime: GAME_STATE.lastMouseMoveTime,
+            inVehicle: GAME_STATE.inVehicle
+        };
+        try {
+            const position = new globalThis.THREE.Vector3(-80, SEA_SURFACE_Y - 1.5, 0);
+            Player.position = position;
+            Player.isSwimming = true;
+            Player.swimBlend = 1;
+            GAME_STATE.inVehicle = null;
+            GAME_STATE.cameraMode = 0;
+            GAME_STATE.cameraYaw = 0;
+            GAME_STATE.cameraPitch = 0.56;
+            GAME_STATE.cameraDistance = 5;
+            GAME_STATE.lastMouseMoveTime = performance.now();
+            World.camera = {
+                position: {
+                    x: position.x, y: 2, z: position.z,
+                    lerp(target, alpha) {
+                        this.x += (target.x - this.x) * alpha;
+                        this.y += (target.y - this.y) * alpha;
+                        this.z += (target.z - this.z) * alpha;
+                    }
+                },
+                lookAt() {}
+            };
+
+            for (let frame = 0; frame < 40; frame++) updateThirdPersonCamera(0.016);
+
+            expect(World.camera.position.y).toBeLessThan(SEA_SURFACE_Y);
+            expect(World.camera.position.y).toBeGreaterThanOrEqual(getSeabedHeightAt(World.camera.position.x, World.camera.position.z) + 0.45);
+        } finally {
+            World.camera = originalCamera;
+            Player.position = originalPosition;
+            Player.isSwimming = originalSwimming;
+            Player.swimBlend = originalBlend;
+            Object.assign(GAME_STATE, originalState);
+        }
+    });
+
+    test('water textures and ocean material use animated normals and sky reflections', async () => {
+        const { TextureFactory } = await import('../js/textures.js');
+        const { World } = await import('../js/world.js');
+        const originalDoc = globalThis.document;
+        const originalScene = World.scene;
+        const originalAmbientLight = World.ambientLight;
+        const originalAirAtmosphere = World.airAtmosphere;
+        const originalIsUnderwater = World.isUnderwater;
+        const originalOceanMesh = World.oceanMesh;
+        const originals = {};
+        let normalPixels;
+        globalThis.document = {
+            getElementById: () => null,
+            createElement: () => ({
+                width: 0, height: 0,
+                getContext: () => ({
+                    createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+                    putImageData: (image) => { normalPixels = image.data; },
+                    createLinearGradient: () => ({ addColorStop() {} }),
+                    createRadialGradient: () => ({ addColorStop() {} }),
+                    fillRect() {}
+                })
+            })
+        };
+        try {
+            const normal = TextureFactory.createWaterNormalTexture();
+            const reflection = TextureFactory.createSkyReflectionCubeTexture();
+            expect(normal.image.width).toBe(256);
+            expect(normal.image.height).toBe(256);
+            expect(normal.repeat.x).toBe(24);
+            expect(normal.repeat.y).toBe(96);
+            expect(normal.wrapS).toBe(globalThis.THREE.RepeatWrapping);
+            expect(normalPixels[2]).toBeGreaterThanOrEqual(230);
+            expect(reflection.images).toHaveLength(6);
+            expect(reflection.images.every(face => face.width === 64 && face.height === 64)).toBe(true);
+            expect(reflection.needsUpdate).toBe(true);
+
+            for (const name of ['buildSeabed', 'buildUnderwaterEcosystem', 'buildSeasideBalustrade', 'buildLandmarks', 'buildStreetFoodRow', 'buildPierAndYachts', 'buildPromenadeProps', 'registerPOIInteractables', 'buildVladivostokSopkiAndBayHorizon', 'initSeagullsAndDriftParticles']) {
+                originals[name] = World[name];
+                World[name] = () => {};
+            }
+            World.scene = new globalThis.THREE.Scene();
+            World.buildVladivostokNabka({ terrain: [{ id: 'ocean', type: 'ocean', x: -178, width: 320, depth: 440 }] });
+            const material = World.oceanMesh.material;
+            expect(material.normalMap.image.width).toBe(256);
+            expect(material.envMap.images).toHaveLength(6);
+            expect(material.normalScale.x).toBe(0.75);
+            expect(material.envMapIntensity).toBe(1.3);
+            expect(material.opacity).toBe(0.70);
+            expect(material.depthWrite).toBe(false);
+
+            World.ambientLight = new globalThis.THREE.AmbientLight(0xffffff, 0.4);
+            World.scene.background.setHex(0x87ceeb);
+            World.scene.fog.color.setHex(0x9fc5d1);
+            World.scene.fog.density = 0.003;
+            World.airAtmosphere = { skyColor: 0x87ceeb, fogColor: 0x9fc5d1, fogDensity: 0.003, ambientIntensity: 0.4 };
+            World.isUnderwater = false;
+            World.updateUnderwaterAtmosphere({ position: { x: -40, y: -2 } });
+            expect(World.scene.fog.color.getHex()).toBe(0x19748b);
+            expect(World.scene.fog.density).toBe(0.045);
+            expect(World.ambientLight.intensity).toBe(1.15);
+            World.updateUnderwaterAtmosphere({ position: { x: -40, y: 0 } });
+            expect(World.scene.background.getHex()).toBe(0x87ceeb);
+            expect(World.scene.fog.density).toBe(0.003);
+            expect(World.ambientLight.intensity).toBe(0.4);
+        } finally {
+            Object.assign(World, originals);
+            World.scene = originalScene;
+            World.ambientLight = originalAmbientLight;
+            World.airAtmosphere = originalAirAtmosphere;
+            World.isUnderwater = originalIsUnderwater;
+            World.oceanMesh = originalOceanMesh;
+            globalThis.document = originalDoc;
+        }
+    });
     test('round-trips a multi-node hierarchy with named children, transforms, and PBR materials through GLB binary format', async () => {
         const root = new THREE.Group();
         root.name = 'test_vehicle';
@@ -508,7 +653,7 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
         expect(parsedWheel.position.z).toBeCloseTo(1.4, 4);
     });
 
-    test('all 35 exported .glb files in static/models/ exist, have valid GLB headers, and parse cleanly', async () => {
+    test('exported .glb files in static/models/ have valid headers and parse cleanly', async () => {
         expect(existsSync(MODELS_DIR)).toBe(true);
         const files = readdirSync(MODELS_DIR).filter(f => f.endsWith('.glb')).sort();
         expect(files.length).toBeGreaterThanOrEqual(35);
@@ -536,6 +681,62 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
                 }
             });
             expect(meshCount).toBeGreaterThan(0);
+        }
+    });
+
+    test('underwater GLBs load with nodes needed for animation', async () => {
+        const required = {
+            fish_kambala: ['tailFin'],
+            fish_terpug: ['tailFin'],
+            fish_okun: ['tailFin'],
+            jellyfish: ['bell', 'tentacles'],
+            starfish_amur: [],
+            starfish_patiria: [],
+            laminaria: ['blade_0']
+        };
+        for (const [name, nodes] of Object.entries(required)) {
+            const file = `${name}.glb`;
+            expect(existsSync(join(MODELS_DIR, file))).toBe(true);
+            const buf = readFileSync(join(MODELS_DIR, file));
+            const model = await parseGLB(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+            expect(model).toBeTruthy();
+            for (const node of nodes) expect(model.getObjectByName(node)).toBeTruthy();
+        }
+    });
+
+    test('procedural underwater fallbacks preserve animation nodes', async () => {
+        const { ModelBuilders } = await import('../js/models.js');
+        for (const species of ['fish_kambala', 'fish_terpug', 'fish_okun']) {
+            expect(ModelBuilders[species]().getObjectByName('tailFin')).toBeTruthy();
+        }
+        const jellyfish = ModelBuilders.jellyfish();
+        expect(jellyfish.getObjectByName('bell')).toBeTruthy();
+        expect(jellyfish.getObjectByName('tentacles')).toBeTruthy();
+        expect(ModelBuilders.laminaria().getObjectByName('blade_0')).toBeTruthy();
+        expect(ModelBuilders.starfish_amur()).toBeTruthy();
+        expect(ModelBuilders.starfish_patiria()).toBeTruthy();
+    });
+
+    test('underwater ecosystem creates species at seabed-relative depths', async () => {
+        const { World, getUnderwaterEcosystem } = await import('../js/world.js');
+        const { getSeabedHeightAt, SEA_SURFACE_Y } = await import('../js/physics.js');
+        World.scene = new globalThis.THREE.Scene();
+        World.fishes = [];
+        World.jellyfish = [];
+        World.starfish = [];
+        World.laminaria = [];
+        World.buildUnderwaterEcosystem();
+        const ecosystem = getUnderwaterEcosystem();
+        expect(ecosystem.fishes.length).toBe(50);
+        expect(ecosystem.jellyfish.length).toBe(16);
+        expect(ecosystem.starfish.length).toBe(36);
+        expect(ecosystem.laminaria.length).toBe(24);
+        for (const fish of ecosystem.fishes) {
+            expect(fish.group.position.y).toBeGreaterThan(getSeabedHeightAt(fish.group.position.x, fish.group.position.z));
+            expect(fish.group.position.y).toBeLessThan(SEA_SURFACE_Y);
+        }
+        for (const star of ecosystem.starfish) {
+            expect(star.group.position.y).toBeCloseTo(getSeabedHeightAt(star.group.position.x, star.group.position.z) + 0.02, 3);
         }
     });
 
@@ -909,6 +1110,9 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
             expect(loadedUrls).toContain('models/berik.glb');
             expect(loadedUrls).toContain('models/dunya.glb');
             expect(loadedUrls).toContain('models/player.glb');
+            for (const name of ['fish_kambala', 'fish_terpug', 'fish_okun', 'jellyfish', 'starfish_amur', 'starfish_patiria', 'laminaria']) {
+                expect(loadedUrls).toContain(`models/${name}.glb`);
+            }
         } finally {
             ModelLoader.load = originalLoad;
         }

@@ -10,6 +10,7 @@ import { ModelLoader, ModelBuilders } from './models.js';
 import { triggerCameraShake } from './camera-effects.js';
 import { consumeAbility } from './quests.js';
 import { getVladivostokDateParts } from './noon-cannon.js';
+import { PhysicsEngine, SEA_SURFACE_Y, getWaterDepthAt } from './physics.js';
 
 export function hashUsernameColor(username) {
     const palette = ['#38bdf8', '#fbbf24', '#34d399', '#f472b6', '#a78bfa', '#fb7185', '#2dd4bf'];
@@ -1006,6 +1007,7 @@ export const MultiplayerClient = {
         if (typeof THREE !== 'undefined' && World.scene) {
             group = ModelLoader.instantiate('models/player.glb', () => ModelBuilders.player(username, accentHex));
             group.position.set(0, 0, 18);
+            group.rotation.order = 'YXZ';
 
             const shirtTex = TextureFactory.createCustomShirtTexture(username, accentHex);
             const torso = group.getObjectByName ? group.getObjectByName('torso') : null;
@@ -1034,6 +1036,7 @@ export const MultiplayerClient = {
             World.scene.add(group);
         } else {
             // Headless stub for unit tests without Three.js
+            head = { rotation: { x: 0, y: 0, z: 0 } };
             group = {
                 visible: true,
                 position: {
@@ -1087,7 +1090,10 @@ export const MultiplayerClient = {
             mode: 'pedestrian',
             carId: null,
             anim: 'idle',
+            swimBlend: 0,
+            swimCycle: 0,
             walkCycle: 0,
+            renderPosition: { x: 0, y: 0, z: 18 },
             target: {
                 x: 0,
                 y: 0,
@@ -1159,7 +1165,7 @@ export const MultiplayerClient = {
                     const wasHidden = !this.group.visible;
                     this.mode = 'pedestrian';
                     this.group.visible = true;
-                    this.anim = ['idle', 'walk', 'run', 'jump', 'emote'].includes(msg.anim) ? msg.anim : 'idle';
+                    this.anim = ['idle', 'walk', 'run', 'jump', 'swim', 'emote'].includes(msg.anim) ? msg.anim : 'idle';
                     this.target.x = Number(msg.x) || 0;
                     this.target.y = Number(msg.y) || 0;
                     this.target.z = Number(msg.z) || 0;
@@ -1170,6 +1176,7 @@ export const MultiplayerClient = {
 
                     if (wasHidden) {
                         this.group.position.set(this.target.x, this.target.y, this.target.z);
+                        this.renderPosition = { x: this.target.x, y: this.target.y, z: this.target.z };
                         this.group.rotation.y = this.target.yaw;
                     }
                 }
@@ -1198,38 +1205,82 @@ export const MultiplayerClient = {
                 const predX = this.target.x + this.target.vx * ageSec;
                 const predZ = this.target.z + this.target.vz * ageSec;
 
-                this.group.position.x += (predX - this.group.position.x) * Math.min(1, dt * 14);
-                this.group.position.y += (this.target.y - this.group.position.y) * Math.min(1, dt * 14);
-                this.group.position.z += (predZ - this.group.position.z) * Math.min(1, dt * 14);
+                this.renderPosition.x += (predX - this.renderPosition.x) * Math.min(1, dt * 14);
+                this.renderPosition.y += (this.target.y - this.renderPosition.y) * Math.min(1, dt * 14);
+                this.renderPosition.z += (predZ - this.renderPosition.z) * Math.min(1, dt * 14);
 
                 let yawDiff = this.target.yaw - this.group.rotation.y;
                 yawDiff = Math.atan2(Math.sin(yawDiff), Math.cos(yawDiff));
                 this.group.rotation.y += yawDiff * Math.min(1, dt * 14);
 
-                if (this.anim === 'emote') {
+                const supportY = PhysicsEngine.getSupportHeightAt(this.target.x, this.target.z, this.target.y, 0.42, vehicles);
+                const waterDepth = getWaterDepthAt(this.target.x, this.target.z);
+                const onPier = supportY > SEA_SURFACE_Y + 0.5 && this.target.y >= supportY - 0.15;
+                const inWater = !onPier && this.target.y <= SEA_SURFACE_Y + 0.35 && waterDepth > 0;
+                const targetSwim = !inWater || waterDepth <= 1.1 ? 0
+                    : waterDepth >= 1.6 ? 1 : (waterDepth - 1.1) / 0.5;
+                this.swimBlend += (targetSwim - this.swimBlend) * Math.min(1, dt * 5.0);
+                if (Math.abs(targetSwim - this.swimBlend) < 0.002) this.swimBlend = targetSwim;
+                const pronePitch = 1.35 * this.swimBlend;
+                const torsoY = 1.15;
+                const pitchCos = Math.cos(pronePitch);
+                const pitchSin = Math.sin(pronePitch);
+                const forwardX = Math.sin(this.group.rotation.y);
+                const forwardZ = Math.cos(this.group.rotation.y);
+                this.group.position.set(this.renderPosition.x - forwardX * (torsoY * pitchSin), this.renderPosition.y + torsoY * (1 - pitchCos), this.renderPosition.z - forwardZ * (torsoY * pitchSin));
+                this.group.rotation.x = pronePitch;
+                this.head.rotation.x = -0.42 * this.swimBlend;
+
+                if (this.anim === 'emote' && this.swimBlend === 0) {
                     const t = performance.now() * 0.012;
                     this.leftArm.rotation.x = Math.PI * 0.75 + Math.sin(t) * 0.5;
                     this.rightArm.rotation.x = Math.PI * 0.75 + Math.cos(t) * 0.5;
                     this.leftLeg.rotation.x = Math.sin(t) * 0.35;
                     this.rightLeg.rotation.x = -Math.sin(t) * 0.35;
-                } else if (this.anim === 'jump') {
+                } else if (this.anim === 'jump' && !inWater && this.swimBlend < 0.05) {
                     this.leftArm.rotation.x = -0.6;
                     this.rightArm.rotation.x = -0.6;
                     this.leftLeg.rotation.x = 0.4;
                     this.rightLeg.rotation.x = -0.3;
-                } else if (this.anim === 'run' || this.anim === 'walk') {
-                    const isRun = this.anim === 'run';
-                    this.walkCycle += dt * (isRun ? 15 : 9.5);
-                    const swing = Math.sin(this.walkCycle) * (isRun ? 0.85 : 0.55);
-                    this.leftLeg.rotation.x = swing;
-                    this.rightLeg.rotation.x = -swing;
-                    this.leftArm.rotation.x = -swing * 0.8;
-                    this.rightArm.rotation.x = swing * 0.8;
+                    this.leftArm.rotation.z = this.rightArm.rotation.z = 0;
+                    this.leftLeg.rotation.z = this.rightLeg.rotation.z = 0;
                 } else {
-                    this.leftLeg.rotation.x *= 0.85;
-                    this.rightLeg.rotation.x *= 0.85;
-                    this.leftArm.rotation.x *= 0.85;
-                    this.rightArm.rotation.x *= 0.85;
+                    let baseLegX = 0;
+                    let baseArmX = 0;
+                    if (this.anim === 'run' || this.anim === 'walk') {
+                        const isRun = this.anim === 'run';
+                        this.walkCycle += dt * (isRun ? 15 : 9.5);
+                        const swing = Math.sin(this.walkCycle) * (isRun ? 0.85 : 0.55);
+                        baseLegX = swing;
+                        baseArmX = -swing * 0.8;
+                    } else {
+                        baseArmX = Math.sin(performance.now() * 0.003) * 0.04;
+                        baseLegX = 0;
+                    }
+
+                    if (this.swimBlend > 0) {
+                        this.swimCycle += dt * (Math.hypot(this.target.vx, this.target.vz) > 0.01 ? 4.0 : 2.2);
+                        const sweep = Math.sin(this.swimCycle);
+                        const kick = Math.sin(this.swimCycle + Math.PI / 2);
+                        const blend = this.swimBlend;
+                        const swimArmX = -0.55 + sweep * 0.4;
+                        const swimLegX = 0.2 + kick * 0.3;
+                        this.leftArm.rotation.x = baseArmX * (1 - blend) + swimArmX * blend;
+                        this.rightArm.rotation.x = (-baseArmX) * (1 - blend) + swimArmX * blend;
+                        this.leftLeg.rotation.x = baseLegX * (1 - blend) + swimLegX * blend;
+                        this.rightLeg.rotation.x = (-baseLegX) * (1 - blend) + swimLegX * blend;
+                        this.leftArm.rotation.z = (0.35 + sweep * 0.35) * blend;
+                        this.rightArm.rotation.z = -this.leftArm.rotation.z;
+                        this.leftLeg.rotation.z = (0.2 + kick * 0.2) * blend;
+                        this.rightLeg.rotation.z = -this.leftLeg.rotation.z;
+                    } else {
+                        this.leftArm.rotation.x = baseArmX;
+                        this.rightArm.rotation.x = -baseArmX;
+                        this.leftLeg.rotation.x = baseLegX;
+                        this.rightLeg.rotation.x = -baseLegX;
+                        this.leftArm.rotation.z = this.rightArm.rotation.z = 0;
+                        this.leftLeg.rotation.z = this.rightLeg.rotation.z = 0;
+                    }
                 }
             }
         };
@@ -1429,6 +1480,7 @@ export const MultiplayerClient = {
         return computePedestrianAnim({
             emoteTimer: Player.emoteTimer,
             isGrounded: Player.isGrounded,
+            isSwimming: Boolean(Player.isSwimming),
             vx: Player.velocity ? Player.velocity.x : 0,
             vz: Player.velocity ? Player.velocity.z : 0
         });

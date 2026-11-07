@@ -111,6 +111,7 @@ describe('Game State & Pure Logic', () => {
     });
 
     test('computePedestrianAnim selects idle, walk, run, jump, and emote accurately', () => {
+        expect(computePedestrianAnim({ isSwimming: true, isGrounded: false, emoteTimer: 1 })).toBe('swim');
         expect(computePedestrianAnim({ emoteTimer: 0.5, isGrounded: true, vx: 0, vz: 0 })).toBe('emote');
         expect(computePedestrianAnim({ emoteTimer: 0, isGrounded: false, vx: 0, vz: 0 })).toBe('jump');
         expect(computePedestrianAnim({ emoteTimer: 0, isGrounded: true, vx: 10, vz: 0 })).toBe('run');
@@ -221,6 +222,41 @@ describe('MultiplayerClient state replication', () => {
         MultiplayerClient.handleServerMessage({ type: 'leave', user: 'vvo_racer', reason: 'left' });
         expect(MultiplayerClient.onlineUsers.has('vvo_racer')).toBe(false);
         expect(MultiplayerClient.remotePlayers.has('vvo_racer')).toBe(false);
+    });
+
+    test('remote swimmer returns to walking and can jump and emote after the blend reaches zero', () => {
+        MultiplayerClient.handleServerMessage({ type: 'join', user: 'swimmer' });
+        const rp = MultiplayerClient.remotePlayers.get('swimmer');
+        const move = (x, y, anim, vx = 0) => MultiplayerClient.handleServerMessage({
+            type: 'move', username: 'swimmer', mode: 'pedestrian',
+            x, y, z: 160, vx, vz: 0, yaw: 0, anim
+        });
+
+        move(-50, -2, 'swim', 2);
+        rp.update(0.1);
+        expect(rp.swimBlend).toBeGreaterThan(0);
+        expect(rp.swimCycle).toBeGreaterThan(0);
+        expect(rp.walkCycle).toBe(0);
+
+        move(-29, -1.5, 'walk');
+        for (let i = 0; i < 12; i++) rp.update(0.1);
+        expect(rp.swimBlend).toBeGreaterThan(0);
+        expect(rp.swimBlend).toBeLessThan(1);
+
+        move(-20, 0, 'walk', 2);
+        for (let i = 0; i < 12; i++) rp.update(0.1);
+        expect(rp.swimBlend).toBe(0);
+        expect(rp.walkCycle).toBeGreaterThan(0);
+
+        move(-20, 0, 'jump');
+        rp.update(0.1);
+        expect(rp.leftArm.rotation.x).toBe(-0.6);
+        expect(rp.leftLeg.rotation.x).toBe(0.4);
+
+        move(-20, 0, 'emote');
+        rp.update(0.1);
+        expect(rp.leftArm.rotation.x).toBeGreaterThan(1);
+        expect(rp.leftLeg.rotation.x).toBeGreaterThanOrEqual(-0.35);
     });
 
     test('getLabelDistanceMetrics scales opacity in 1.0-0.6 range, orders zIndex by distance, and culls beyond 50m', () => {
@@ -408,7 +444,7 @@ describe('MultiplayerClient state replication', () => {
         const createMockPart = () => ({ rotation: { x: 0, y: 0, z: 0 } });
         Player.position = new globalThis.THREE.Vector3(0, 0, 22);
         Player.velocity = new globalThis.THREE.Vector3(0, 0, 0);
-        Player.group = { visible: true, position: { copy(p) { this.x = p.x; this.y = p.y; this.z = p.z; } }, rotation: { y: 0 } };
+        Player.group = { visible: true, position: { set(x, y, z) { this.x = x; this.y = y; this.z = z; } }, rotation: { y: 0 } };
         Player.head = createMockPart();
         Player.leftArm = createMockPart();
         Player.rightArm = createMockPart();
@@ -432,6 +468,96 @@ describe('MultiplayerClient state replication', () => {
         } finally {
             clearMovementInput();
             globalThis.THREE = origTHREE;
+        }
+    });
+
+    test('Player swims toward seabed, cannot jump underwater, and stands again in shallow water', () => {
+        const originalTHREE = globalThis.THREE;
+        globalThis.THREE = {
+            Vector3: class {
+                constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+                copy(p) { this.x = p.x; this.y = p.y; this.z = p.z; return this; }
+            }
+        };
+        const part = () => ({ rotation: { x: 0, y: 0, z: 0 } });
+        Player.position = new globalThis.THREE.Vector3(-50, -2, 160);
+        Player.velocity = new globalThis.THREE.Vector3();
+        Player.group = { visible: true, position: { set(x, y, z) { this.x = x; this.y = y; this.z = z; } }, rotation: { x: 0, y: 0 } };
+        Player.head = part();
+        Player.leftArm = part();
+        Player.rightArm = part();
+        Player.leftLeg = part();
+        Player.rightLeg = part();
+        Player.isGrounded = false;
+        Player.isSwimming = false;
+        Player.swimBlend = 0;
+        clearMovementInput();
+        try {
+            Player.update(0.1, new Map());
+            expect(Player.isSwimming).toBe(true);
+            expect(Player.position.y).toBeLessThan(-2);
+            expect(Player.group.rotation.x).toBeGreaterThan(0);
+            expect(Player.group.rotation.x).toBeLessThan(1.35);
+            expect(Player.group.position.z).toBeGreaterThan(Player.position.z);
+            expect(Player.head.rotation.x).toBeLessThan(0);
+            const y = Player.velocity.y;
+            Player.jump();
+            expect(Player.velocity.y).toBe(y);
+
+            Player.position.x = -20;
+            Player.position.y = -1;
+            Player.update(0.1, new Map());
+            expect(Player.swimBlend).toBeGreaterThan(0);
+            for (let i = 0; i < 12; i++) Player.update(0.1, new Map());
+            expect(Player.isSwimming).toBe(false);
+            expect(Player.group.rotation.x).toBeLessThan(0.001);
+            expect(Player.leftArm.rotation.z).toBeLessThan(0.001);
+        } finally {
+            Player.isSwimming = false;
+            Player.swimBlend = 0;
+            globalThis.THREE = originalTHREE;
+        }
+    });
+
+    test('Player swim blend increases smoothly with water depth', () => {
+        const originalTHREE = globalThis.THREE;
+        globalThis.THREE = {
+            Vector3: class {
+                constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+            }
+        };
+        const part = () => ({ rotation: { x: 0, y: 0, z: 0 } });
+        Player.position = new globalThis.THREE.Vector3(-27, -1.5, 160);
+        Player.velocity = new globalThis.THREE.Vector3();
+        Player.group = { visible: true, position: { set(x, y, z) { this.x = x; this.y = y; this.z = z; } }, rotation: { x: 0, y: 0 } };
+        Player.head = part();
+        Player.leftArm = part();
+        Player.rightArm = part();
+        Player.leftLeg = part();
+        Player.rightLeg = part();
+        Player.rotationY = 0;
+        Player.isGrounded = true;
+        Player.isSwimming = false;
+        Player.swimBlend = 0;
+        clearMovementInput();
+        try {
+            Player.update(0.1, new Map());
+            expect(Player.swimBlend).toBe(0);
+            Player.position.x = -29;
+            Player.update(0.1, new Map());
+            const shallowBlend = Player.swimBlend;
+            expect(shallowBlend).toBeGreaterThan(0);
+            expect(shallowBlend).toBeLessThan(0.5);
+            Player.position.x = -32;
+            Player.update(0.1, new Map());
+            expect(Player.swimBlend).toBeGreaterThan(shallowBlend);
+            expect(Player.swimBlend).toBeLessThan(1);
+            expect(Player.group.position.z).toBeLessThan(Player.position.z);
+            expect(Player.head.rotation.x).toBeCloseTo(-0.42 * Player.swimBlend);
+        } finally {
+            Player.swimBlend = 0;
+            Player.isSwimming = false;
+            globalThis.THREE = originalTHREE;
         }
     });
 

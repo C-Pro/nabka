@@ -1,9 +1,9 @@
 import { GAME_STATE, DEFAULT_WALK_PITCH } from './state.js';
-import { PhysicsEngine } from './physics.js';
+import { PhysicsEngine, SEA_SURFACE_Y, SHORE_X, PIER_END_X, DEEP_SEA_X, MIN_SWIM_X, getSeabedHeightAt, getWaterDepthAt } from './physics.js';
 import { TextureFactory } from './textures.js';
 import { SoundManager } from './audio.js';
 import { completePOI, triggerPlayerSpeech, showToast } from './ui.js';
-import { updatePromenadeNPCs } from './entities.js';
+import { Player, updatePromenadeNPCs } from './entities.js';
 import { ModelLoader, ModelBuilders, DEFAULT_LANDMARKS, generateDefaultPromenadeProps, computeModelBoundingBox } from './models.js';
 
 export const World = {
@@ -16,6 +16,11 @@ export const World = {
     hemiLight: null,
     skyDomeMesh: null,
     oceanMesh: null,
+    seabedMesh: null,
+    fishes: [],
+    jellyfish: [],
+    starfish: [],
+    laminaria: [],
     ferrisWheelGroup: null,
     fountainParticles: null,
     driftSmokeParticles: null,
@@ -144,6 +149,12 @@ export const World = {
         this.interactables = [];
         this.seagulls = [];
         this.distantTankers = [];
+        this.fishes = [];
+        this.jellyfish = [];
+        this.starfish = [];
+        this.laminaria = [];
+        this.seabedMesh = null;
+        this.oceanMesh = null;
         this.worldLabels = [];
         if (typeof document !== 'undefined') {
             const labelContainer = document.getElementById('world-labels-container');
@@ -169,16 +180,28 @@ export const World = {
             let mesh;
 
             if (slab.type === 'ocean' || slab.id === 'ocean') {
-                const oceanGeo = new THREE.PlaneGeometry(w, d, 48, 48);
+                const westX = (slab.x || 0) - w / 2;
+                const oceanWidth = SHORE_X - westX;
+                const oceanGeo = new THREE.PlaneGeometry(oceanWidth, d, 64, 64);
                 oceanGeo.rotateX(-Math.PI / 2);
                 const oceanMat = new THREE.MeshStandardMaterial({
                     color: slab.color ?? 0x0369a1,
-                    roughness: 0.22,
-                    metalness: 0.75,
-                    flatShading: true
+                    normalMap: TextureFactory.createWaterNormalTexture(),
+                    normalScale: new THREE.Vector2(0.75, 0.75),
+                    envMap: TextureFactory.createSkyReflectionCubeTexture(),
+                    envMapIntensity: 1.3,
+                    transparent: true,
+                    opacity: 0.70,
+                    roughness: 0.12,
+                    metalness: 0.18,
+                    side: THREE.DoubleSide,
+                    depthWrite: false
                 });
                 mesh = new THREE.Mesh(oceanGeo, oceanMat);
                 this.oceanMesh = mesh;
+                mesh.position.set(westX + oceanWidth / 2, SEA_SURFACE_Y, slab.z || 0);
+            } else if (slab.type === 'beach' || slab.id === 'beach') {
+                continue;
             } else if (slab.type === 'promenade' || slab.id === 'promenade') {
                 const promTex = TextureFactory.createPromenadeTileTexture();
                 const promGeo = new THREE.BoxGeometry(w, h, d);
@@ -246,7 +269,7 @@ export const World = {
                 mesh = new THREE.Mesh(boxGeo, boxMat);
             }
 
-            mesh.position.set(slab.x || 0, slab.y ?? -0.5, slab.z || 0);
+            if (mesh !== this.oceanMesh) mesh.position.set(slab.x || 0, slab.y ?? -0.5, slab.z || 0);
             if (slab.rotY !== undefined) {
                 mesh.rotation.y = slab.rotY;
             }
@@ -260,14 +283,8 @@ export const World = {
             this.terrainMeshes.push(mesh);
         }
 
-        for (let i = 0; i < 4; i++) {
-            const stepGeo = new THREE.BoxGeometry(1.4, 0.4, 260);
-            const stepMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.75 });
-            const step = new THREE.Mesh(stepGeo, stepMat);
-            step.position.set(-15.5 - i * 1.3, -0.15 - i * 0.3, 0);
-            step.receiveShadow = true;
-            this.scene.add(step);
-        }
+        this.buildSeabed();
+        this.buildUnderwaterEcosystem();
 
         this.buildSeasideBalustrade();
         this.buildLandmarks(worldMap);
@@ -277,6 +294,92 @@ export const World = {
         this.registerPOIInteractables(worldMap);
         this.buildVladivostokSopkiAndBayHorizon(worldMap);
         this.initSeagullsAndDriftParticles();
+    },
+
+    buildSeabed() {
+        const westX = Math.min(MIN_SWIM_X - 30, this.oceanMesh
+            ? 2 * this.oceanMesh.position.x - SHORE_X
+            : -338);
+        const eastX = -15;
+        const width = eastX - westX;
+        const centerX = (westX + eastX) / 2;
+        const geometry = new THREE.PlaneGeometry(width, 440, 160, 8);
+        geometry.rotateX(-Math.PI / 2);
+        const positions = geometry.attributes.position;
+        for (let i = 0; i < positions.count; i++) {
+            positions.setY(i, getSeabedHeightAt(centerX + positions.getX(i), positions.getZ(i)));
+        }
+        positions.needsUpdate = true;
+        geometry.computeVertexNormals();
+        const material = new THREE.MeshStandardMaterial({ color: 0x8a846b, roughness: 0.95, side: THREE.DoubleSide });
+        this.seabedMesh = new THREE.Mesh(geometry, material);
+        this.seabedMesh.name = 'seabedMesh';
+        this.seabedMesh.position.x = centerX;
+        this.seabedMesh.receiveShadow = true;
+        this.scene.add(this.seabedMesh);
+        this.terrainMeshes.push(this.seabedMesh);
+    },
+
+    buildUnderwaterEcosystem() {
+        const unit = (i, salt) => {
+            const n = Math.sin((i + 1) * 127.1 + salt * 311.7) * 43758.5453;
+            return n - Math.floor(n);
+        };
+        const positionFor = (i, salt, minX = DEEP_SEA_X, maxX = -25) => {
+            const x = minX + unit(i, salt) * (maxX - minX);
+            const nearBeach = i % 4 !== 0 || x > PIER_END_X;
+            const z = nearBeach ? -40 + unit(i, salt + 1) * 120 : -110 + unit(i, salt + 1) * 265;
+            return { x, z };
+        };
+        const add = (url, builder, x, y, z) => {
+            const group = ModelLoader.instantiate(url, builder);
+            group.position.set(x, y, z);
+            this.scene.add(group);
+            return group;
+        };
+        for (const [species, count, salt, minOffset, maxOffset] of [
+            ['kambala', 14, 1, 0.18, 0.45],
+            ['terpug', 18, 2, 0.8, 2.6],
+            ['okun', 18, 3, 0.7, 3.0]
+        ]) {
+            for (let i = 0; i < count; i++) {
+                const { x, z } = positionFor(i, salt);
+                const offset = minOffset + unit(i, salt + 2) * (maxOffset - minOffset);
+                const y = Math.min(SEA_SURFACE_Y - 0.45, getSeabedHeightAt(x, z) + offset);
+                const group = add(`models/fish_${species}.glb`, () => ModelBuilders[`fish_${species}`](), x, y, z);
+                this.fishes.push({ group, species, x, z, offset, phase: unit(i, salt + 3) * Math.PI * 2, speed: 0.45 + unit(i, salt + 4) * 0.45, tailFin: group.getObjectByName('tailFin') });
+            }
+        }
+        for (let i = 0; i < 16; i++) {
+            const { x, z } = positionFor(i, 4, -68, -30);
+            const seabedY = getSeabedHeightAt(x, z);
+            const y = Math.min(SEA_SURFACE_Y - 0.6, seabedY + Math.max(1.0, getWaterDepthAt(x, z) * 0.5));
+            const group = add('models/jellyfish.glb', () => ModelBuilders.jellyfish(), x, y, z);
+            group.traverse(obj => {
+                if (obj.isMesh && obj.material) {
+                    obj.material = obj.material.clone();
+                    obj.material.transparent = true;
+                    obj.material.opacity = 0.82;
+                }
+            });
+            this.jellyfish.push({ group, x, z, y, phase: unit(i, 5) * Math.PI * 2, bell: group.getObjectByName('bell'), tentacles: group.getObjectByName('tentacles') });
+        }
+        for (const [species, salt] of [['amur', 6], ['patiria', 7]]) {
+            for (let i = 0; i < 18; i++) {
+                const { x, z } = positionFor(i, salt);
+                const group = add(`models/starfish_${species}.glb`, () => ModelBuilders[`starfish_${species}`](), x, getSeabedHeightAt(x, z) + 0.02, z);
+                group.rotation.z = Math.atan((getSeabedHeightAt(x + 0.1, z) - getSeabedHeightAt(x - 0.1, z)) / 0.2);
+                group.rotation.y = unit(i, salt + 2) * Math.PI * 2;
+                this.starfish.push({ group, species });
+            }
+        }
+        for (let i = 0; i < 24; i++) {
+            const { x, z } = positionFor(i, 8, -70, -31);
+            const group = add('models/laminaria.glb', () => ModelBuilders.laminaria(), x, getSeabedHeightAt(x, z), z);
+            const blades = [];
+            group.traverse(node => { if (node.name?.startsWith('blade_')) blades.push(node); });
+            this.laminaria.push({ group, phase: unit(i, 9) * Math.PI * 2, blades });
+        }
     },
 
     buildSeasideBalustrade() {
@@ -1417,6 +1520,12 @@ export const World = {
             });
         }
 
+        if (this.oceanMesh?.material) {
+            const oceanMaterial = this.oceanMesh.material;
+            oceanMaterial.envMapIntensity = { dawn: 0.9, day: 1.3, sunset: 0.9, dusk: 0.45, night: 0.15 }[phase] ?? 0.15;
+            oceanMaterial.color.setHex(phase === 'night' ? 0x022c44 : 0x0369a1);
+        }
+
         // Only turn on street lights when sun sets (sunset, dusk, night)
         const lightsOn = (phase === 'sunset' || phase === 'dusk' || phase === 'night');
         this.setStreetLights(lightsOn);
@@ -1445,6 +1554,41 @@ export const World = {
                 this.currentTimePhase = phase;
             }
         }
+        if (this.scene?.background?.getHex && this.scene?.fog?.color?.getHex) {
+            this.airAtmosphere = {
+                skyColor: this.scene.background.getHex(),
+                fogColor: this.scene.fog.color.getHex(),
+                fogDensity: this.scene.fog.density,
+                ambientIntensity: this.ambientLight?.intensity
+            };
+        }
+    },
+
+    updateUnderwaterAtmosphere(camera) {
+        if (!this.scene || !camera) return;
+        const wasUnderwater = Boolean(this.isUnderwater);
+        const underwater = camera.position.x < SHORE_X && camera.position.y < SEA_SURFACE_Y + (wasUnderwater ? 0.1 : -0.1);
+        this.isUnderwater = underwater;
+        if (underwater) {
+            if (!wasUnderwater && !this.airAtmosphere) {
+                this.airAtmosphere = {
+                    skyColor: this.scene.background?.getHex(),
+                    fogColor: this.scene.fog?.color?.getHex(),
+                    fogDensity: this.scene.fog?.density,
+                    ambientIntensity: this.ambientLight?.intensity
+                };
+            }
+            this.scene.fog?.color?.setHex(0x19748b);
+            if (this.scene.fog) this.scene.fog.density = 0.045;
+            this.scene.background?.setHex(0x19748b);
+            if (this.ambientLight) this.ambientLight.intensity = 1.15;
+        } else if (this.airAtmosphere) {
+            this.scene.background?.setHex(this.airAtmosphere.skyColor);
+            this.scene.fog?.color?.setHex(this.airAtmosphere.fogColor);
+            if (this.scene.fog) this.scene.fog.density = this.airAtmosphere.fogDensity;
+            if (this.ambientLight) this.ambientLight.intensity = this.airAtmosphere.ambientIntensity;
+        }
+        if (this.skyDomeMesh) this.skyDomeMesh.visible = !underwater;
     },
 
     updateVladivostokClockAndTimeOfDay() {
@@ -1534,17 +1678,60 @@ export const World = {
         }
 
         if (this.oceanMesh) {
+            if (this.oceanMesh.material?.normalMap) {
+                this.oceanMesh.material.normalMap.offset.x = (time * 0.02) % 1.0;
+                this.oceanMesh.material.normalMap.offset.y = (time * 0.015) % 1.0;
+            }
             const pos = this.oceanMesh.geometry.attributes.position;
             for (let i = 0; i < pos.count; i++) {
                 const vx = pos.getX(i);
                 const vz = pos.getZ(i);
-                const waveY = Math.sin(vx * 0.08 + time * 1.8) * 0.22 + Math.cos(vz * 0.06 + time * 1.4) * 0.18;
+                const worldX = this.oceanMesh.position.x + vx;
+                const shoreFade = Math.max(0, Math.min(1, (-24 - worldX) / 5));
+                const waveY = shoreFade * (Math.sin(vx * 0.08 + time * 1.8) * 0.22 + Math.cos(vz * 0.06 + time * 1.4) * 0.18);
                 pos.setY(i, waveY);
             }
             pos.needsUpdate = true;
         }
 
-        SoundManager.updateSpatialAmbience(playerPos);
+        const camera = this.camera;
+        const aboveWaterFarFromSea = camera && camera.position.y >= SEA_SURFACE_Y && camera.position.x > SHORE_X + 60;
+        const ecosystemVisible = (group, x = group.position.x, z = group.position.z, driftRadius = 0) => {
+            if (!camera || aboveWaterFarFromSea) return false;
+            const dx = x - camera.position.x;
+            const dy = group.position.y - camera.position.y;
+            const dz = z - camera.position.z;
+            return dx * dx + dy * dy + dz * dz <= (25 + driftRadius) ** 2;
+        };
+        this.fishes.forEach(fish => {
+            fish.group.visible = ecosystemVisible(fish.group, fish.x, fish.z, 3.6);
+            if (!fish.group.visible) return;
+            const phase = time * fish.speed + fish.phase;
+            const x = Math.max(MIN_SWIM_X + 2, Math.min(SHORE_X - 3, fish.x + Math.sin(phase) * 2.8));
+            const z = fish.z + Math.cos(phase * 0.7) * 2.2;
+            fish.group.position.set(x, Math.min(SEA_SURFACE_Y - 0.45, getSeabedHeightAt(x, z) + fish.offset + Math.sin(time * 2 + fish.phase) * 0.05), z);
+            const dx = Math.cos(phase) * fish.speed * 2.8;
+            const dz = -Math.sin(phase * 0.7) * fish.speed * 1.54;
+            fish.group.rotation.y = Math.atan2(dx, dz);
+            if (fish.tailFin) fish.tailFin.rotation.y = Math.sin(time * 8 + fish.phase) * 0.35;
+        });
+        this.jellyfish.forEach(jelly => {
+            jelly.group.visible = ecosystemVisible(jelly.group, jelly.x, jelly.z, 1.2);
+            if (!jelly.group.visible) return;
+            const x = jelly.x + Math.sin(time * 0.3 + jelly.phase) * 0.8;
+            const z = jelly.z + Math.cos(time * 0.25 + jelly.phase) * 0.8;
+            jelly.group.position.set(x, Math.min(SEA_SURFACE_Y - 0.5, Math.max(getSeabedHeightAt(x, z) + 0.5, jelly.y + Math.sin(time * 1.1 + jelly.phase) * 0.25)), z);
+            if (jelly.bell) jelly.bell.scale.set(1 + Math.sin(time * 2 + jelly.phase) * 0.1, 1 - Math.sin(time * 2 + jelly.phase) * 0.12, 1 + Math.sin(time * 2 + jelly.phase) * 0.1);
+            if (jelly.tentacles) jelly.tentacles.rotation.z = Math.sin(time * 1.5 + jelly.phase) * 0.12;
+        });
+        this.laminaria.forEach(kelp => {
+            kelp.group.visible = ecosystemVisible(kelp.group);
+            if (!kelp.group.visible) return;
+            kelp.blades.forEach((blade, index) => { blade.rotation.z = Math.sin(time * 1.1 + kelp.phase + index * 0.5) * 0.12; });
+        });
+        this.starfish.forEach(starfish => { starfish.group.visible = ecosystemVisible(starfish.group); });
+
+        SoundManager.updateSpatialAmbience(playerPos, Boolean(Player.isSwimming || Player.swimBlend > 0.45));
 
         this.seagulls.forEach((b, idx) => {
             b.angle += b.speed * dt;
@@ -1623,23 +1810,42 @@ export const World = {
 
         const dist = GAME_STATE.inVehicle ? GAME_STATE.cameraDistance * 1.25 : GAME_STATE.cameraDistance;
 
-        const lookTarget = new THREE.Vector3(
-            targetBase.x,
-            targetBase.y + (GAME_STATE.inVehicle ? 1.45 : mode.heightOffset),
-            targetBase.z
-        );
+        const swimBlend = (player && player.swimBlend !== undefined) ? player.swimBlend : (Player.swimBlend || 0);
+        const normalHeight = mode.heightOffset ?? 2.6;
+        const swimHeight = 0.35;
+        const effectiveHeightOffset = GAME_STATE.inVehicle ? 1.45 : (normalHeight * (1 - swimBlend) + swimHeight * swimBlend);
+        const lookTarget = new THREE.Vector3(targetBase.x, targetBase.y, targetBase.z);
+        lookTarget.y = targetBase.y + effectiveHeightOffset;
 
         const horizDist = dist * Math.cos(GAME_STATE.cameraPitch);
         const vertDist = dist * Math.sin(GAME_STATE.cameraPitch);
 
         const camX = lookTarget.x + Math.sin(GAME_STATE.cameraYaw) * horizDist;
         const camZ = lookTarget.z + Math.cos(GAME_STATE.cameraYaw) * horizDist;
-        const camY = Math.max(0.8, lookTarget.y + vertDist);
+        let desiredCamY = lookTarget.y + vertDist;
+        const submergedWeight = Math.max(0, Math.min(1, (swimBlend - 0.05) / 0.9));
+        if (!GAME_STATE.inVehicle && submergedWeight > 0) {
+            const submergedCamY = Math.min(SEA_SURFACE_Y - 0.45, lookTarget.y + vertDist * 0.25);
+            desiredCamY = (1 - submergedWeight) * desiredCamY + submergedWeight * submergedCamY;
+        }
+        const camY = Math.max(getSeabedHeightAt(camX, camZ) + 0.45, desiredCamY);
 
         this.camera.position.lerp(new THREE.Vector3(camX, camY, camZ), GAME_STATE.inVehicle ? 0.35 : 0.22);
+        this.camera.position.y = Math.max(this.camera.position.y, getSeabedHeightAt(this.camera.position.x, this.camera.position.z) + 0.45);
         this.camera.lookAt(lookTarget);
     }
 };
+
+export function getUnderwaterEcosystem() {
+    return {
+        fishes: World.fishes,
+        jellyfish: World.jellyfish,
+        starfish: World.starfish,
+        laminaria: World.laminaria,
+        seabedMesh: World.seabedMesh,
+        oceanMesh: World.oceanMesh
+    };
+}
 
 export function getVladivostokTime(date = new Date()) {
     try {

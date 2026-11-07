@@ -51,6 +51,7 @@ func TestStaticFS(t *testing.T) {
 		"audio/drift3.mp3",
 		"audio/drift4.mp3",
 		"audio/cannon.mp3",
+		"audio/dive.mp3",
 	}
 
 	for _, path := range requiredFiles {

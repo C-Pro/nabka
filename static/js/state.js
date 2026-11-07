@@ -195,7 +195,8 @@ export function advanceNpcDialogue(npc, optionIndex) {
 /**
  * Computes pedestrian animation name from velocity/state for network replication.
  */
-export function computePedestrianAnim({ emoteTimer = 0, isGrounded = true, vx = 0, vz = 0 }) {
+export function computePedestrianAnim({ emoteTimer = 0, isGrounded = true, isSwimming = false, vx = 0, vz = 0 }) {
+    if (isSwimming) return 'swim';
     if (emoteTimer > 0) return 'emote';
     if (!isGrounded) return 'jump';
     const speedSq = vx * vx + vz * vz;

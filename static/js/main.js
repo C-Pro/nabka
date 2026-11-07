@@ -1,6 +1,7 @@
 import { smoothingAlpha } from './vehicle-motion.js';
 import { GAME_STATE, DEFAULT_WALK_PITCH, loadGameData } from './state.js';
 import { World } from './world.js';
+import { getSeabedHeightAt, SEA_SURFACE_Y } from './physics.js';
 import { Player, Dunya, createJDMCar, toggleVehicleDrive, initPromenadeNPCs, selectValidSpawnPoint, updateWorldVehicles } from './entities.js';
 import { MultiplayerClient } from './network.js';
 import { bindInputControls } from './input.js';
@@ -90,20 +91,29 @@ export function updateThirdPersonCamera(dt = 0.016) {
 
     const dist = GAME_STATE.inVehicle ? GAME_STATE.cameraDistance * 1.25 : GAME_STATE.cameraDistance;
 
-    const lookTarget = new THREE.Vector3(
-        targetBase.x,
-        targetBase.y + (GAME_STATE.inVehicle ? 1.45 : mode.heightOffset),
-        targetBase.z
-    );
+    const player = Player;
+    const swimBlend = (player && player.swimBlend !== undefined) ? player.swimBlend : (Player.swimBlend || 0);
+    const normalHeight = mode.heightOffset ?? 2.6;
+    const swimHeight = 0.35;
+    const effectiveHeightOffset = GAME_STATE.inVehicle ? 1.45 : (normalHeight * (1 - swimBlend) + swimHeight * swimBlend);
+    const lookTarget = new THREE.Vector3(targetBase.x, targetBase.y, targetBase.z);
+    lookTarget.y = targetBase.y + effectiveHeightOffset;
 
     const horizDist = dist * Math.cos(GAME_STATE.cameraPitch);
     const vertDist = dist * Math.sin(GAME_STATE.cameraPitch);
 
     const camX = lookTarget.x + Math.sin(GAME_STATE.cameraYaw) * horizDist;
     const camZ = lookTarget.z + Math.cos(GAME_STATE.cameraYaw) * horizDist;
-    const camY = Math.max(0.8, lookTarget.y + vertDist);
+    let desiredCamY = lookTarget.y + vertDist;
+    const submergedWeight = Math.max(0, Math.min(1, (swimBlend - 0.05) / 0.9));
+    if (!GAME_STATE.inVehicle && submergedWeight > 0) {
+        const submergedCamY = Math.min(SEA_SURFACE_Y - 0.45, lookTarget.y + vertDist * 0.25);
+        desiredCamY = (1 - submergedWeight) * desiredCamY + submergedWeight * submergedCamY;
+    }
+    const camY = Math.max(getSeabedHeightAt(camX, camZ) + 0.45, desiredCamY);
 
     camera.position.lerp(new THREE.Vector3(camX, camY, camZ), smoothingAlpha(GAME_STATE.inVehicle ? 25.85 : 14.91, dt));
+    camera.position.y = Math.max(camera.position.y, getSeabedHeightAt(camera.position.x, camera.position.z) + 0.45);
     camera.lookAt(lookTarget);
     applyCameraShake(camera, dt);
 }
@@ -129,6 +139,7 @@ function gameLoop() {
 
     World.animateEnvironment(elapsed, dt, Player.position);
     updateThirdPersonCamera(dt);
+    World.updateUnderwaterAtmosphere(World.camera, Player);
     checkProximityInteractions({
         playerPos: Player.position,
         npcs: World.npcs,

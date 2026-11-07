@@ -66,6 +66,12 @@ export const SoundManager = {
     ambienceSource: null,
     ambienceGain: null,
     ambiencePlaying: false,
+    diveBuffer: null,
+    diveSource: null,
+    diveGain: null,
+    divePlaying: false,
+    isUnderwater: false,
+    surfaceSfxGain: null,
 
     cannonBuffer: null,
 
@@ -187,6 +193,12 @@ export const SoundManager = {
             if (this.initialized) {
                 this.startAmbienceLoop();
             }
+        });
+
+        this.loadAudioBuffer('audio/dive.mp3').then((buf) => {
+            if (!buf) return;
+            this.diveBuffer = buf;
+            if (this.isUnderwater && this.initialized) this.startDiveLoop();
         });
 
         // Vladivostok Fortress Cannon Shot
@@ -618,7 +630,7 @@ export const SoundManager = {
 
         const now = this.ctx.currentTime;
         // Fade in authentic Nabka ambient loop
-        this.ambienceGain.gain.setTargetAtTime(0.42, now, 0.4);
+        this.ambienceGain.gain.setTargetAtTime(this.isUnderwater ? 0.06 : 0.42, now, 0.4);
 
         // Fade out synthetic sea & street noise
         if (this.seaGain) {
@@ -626,6 +638,39 @@ export const SoundManager = {
         }
         if (this.streetGain) {
             this.streetGain.gain.setTargetAtTime(0, now, 0.5);
+        }
+    },
+
+    startDiveLoop() {
+        if (!this.ctx || !this.diveBuffer || !this.diveGain) return;
+        if (this.diveSource) {
+            try { this.diveSource.stop(); } catch (e) {}
+            try { this.diveSource.disconnect(); } catch (e) {}
+        }
+        const src = this.ctx.createBufferSource();
+        src.buffer = this.diveBuffer;
+        src.loop = true;
+        src.connect(this.diveGain);
+        src.start(0);
+        this.diveSource = src;
+        this.divePlaying = true;
+    },
+
+    setUnderwater(underwater) {
+        this.isUnderwater = Boolean(underwater);
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        if (this.isUnderwater) {
+            if (!this.divePlaying) this.startDiveLoop();
+            if (this.diveGain) this.diveGain.gain.setTargetAtTime(0.45, now, 0.25);
+            if (this.ambienceGain) this.ambienceGain.gain.setTargetAtTime(0.06, now, 0.3);
+            if (this.surfaceSfxGain) this.surfaceSfxGain.gain.setTargetAtTime(0, now, 0.2);
+            if (this.seaGain) this.seaGain.gain.setTargetAtTime(0, now, 0.3);
+            if (this.streetGain) this.streetGain.gain.setTargetAtTime(0, now, 0.3);
+        } else {
+            if (this.diveGain) this.diveGain.gain.setTargetAtTime(0, now, 0.35);
+            if (this.ambienceGain) this.ambienceGain.gain.setTargetAtTime(0.42, now, 0.3);
+            if (this.surfaceSfxGain) this.surfaceSfxGain.gain.setTargetAtTime(1.0, now, 0.3);
         }
     },
 
@@ -641,6 +686,7 @@ export const SoundManager = {
             if (this.ambienceBuffer && !this.ambienceSource) {
                 this.startAmbienceLoop();
             }
+            if (this.isUnderwater && this.diveBuffer && !this.divePlaying) this.startDiveLoop();
             return;
         }
         if (this._initPromise) return this._initPromise;
@@ -666,6 +712,14 @@ export const SoundManager = {
             this.ambienceGain = this.ctx.createGain();
             this.ambienceGain.gain.value = 0;
             this.ambienceGain.connect(this.masterGain);
+
+            this.diveGain = this.ctx.createGain();
+            this.diveGain.gain.value = 0;
+            this.diveGain.connect(this.masterGain);
+
+            this.surfaceSfxGain = this.ctx.createGain();
+            this.surfaceSfxGain.gain.value = 1.0;
+            this.surfaceSfxGain.connect(this.masterGain);
 
             // Pre-create vehicle gain node
             this.vehicleGain = this.ctx.createGain();
@@ -893,8 +947,12 @@ export const SoundManager = {
         }
     },
 
-    updateSpatialAmbience(playerPos) {
+    updateSpatialAmbience(playerPos, isUnderwater = null) {
         if (!this.initialized || !getGameState().sfxEnabled || !this.ctx) return;
+        if (isUnderwater === null) {
+            isUnderwater = typeof Player !== 'undefined' ? Boolean(Player.isSwimming || Player.swimBlend > 0.45) : false;
+        }
+        this.setUnderwater(isUnderwater);
         const now = this.ctx.currentTime;
         const timeMs = performance.now();
 
@@ -904,7 +962,7 @@ export const SoundManager = {
         }
 
         // If real ambience is still loading, adjust synthetic noise
-        if (!this.ambienceBuffer) {
+        if (!this.ambienceBuffer && !this.isUnderwater) {
             const seaFactor = Math.max(0.035, Math.min(0.18, (22 - playerPos.x) / 170));
             if (this.seaGain) this.seaGain.gain.setTargetAtTime(seaFactor, now, 0.15);
 
@@ -916,8 +974,10 @@ export const SoundManager = {
         if (this.fountainGain) {
             const distToFountain = Math.hypot(playerPos.x, playerPos.z);
             const fntVol = distToFountain < 32 ? Math.max(0, (1 - distToFountain / 32) * 0.18) : 0;
-            this.fountainGain.gain.setTargetAtTime(fntVol, now, 0.1);
+            this.fountainGain.gain.setTargetAtTime(this.isUnderwater ? 0 : fntVol, now, 0.1);
         }
+
+        if (this.isUnderwater) return;
 
         // Short seagull calls (ch1, ch2, ch3): rotate randomly every 6-12 seconds
         if (timeMs - this.lastSeagullTime > 6000 + Math.random() * 6000) {
@@ -1119,7 +1179,7 @@ export const SoundManager = {
     },
 
     playSeagullCry() {
-        if (!this.initialized || !getGameState().sfxEnabled || !this.ctx) return;
+        if (!this.initialized || !getGameState().sfxEnabled || !this.ctx || this.isUnderwater) return;
         const nowMs = performance.now();
         // Do not interrupt while a long seagull call is actively playing
         if (nowMs < this.longSeagullEndTime) return;
@@ -1140,7 +1200,7 @@ export const SoundManager = {
                     const gain = this.ctx.createGain();
                     gain.gain.value = 0.22 + Math.random() * 0.08;
                     src.connect(gain);
-                    gain.connect(this.masterGain);
+                    gain.connect(this.surfaceSfxGain || this.masterGain);
                     src.start();
                     return;
                 } catch (e) {}
@@ -1152,7 +1212,7 @@ export const SoundManager = {
     },
 
     playLongSeagullCry() {
-        if (!this.initialized || !getGameState().sfxEnabled || !this.ctx) return;
+        if (!this.initialized || !getGameState().sfxEnabled || !this.ctx || this.isUnderwater) return;
         if (!this.longSeagullBuffers || this.longSeagullBuffers.length === 0) return;
 
         let nextIndex = Math.floor(Math.random() * this.longSeagullBuffers.length);
@@ -1170,7 +1230,7 @@ export const SoundManager = {
             const gain = this.ctx.createGain();
             gain.gain.value = 0.24 + Math.random() * 0.06;
             src.connect(gain);
-            gain.connect(this.masterGain);
+            gain.connect(this.surfaceSfxGain || this.masterGain);
             src.start();
             const dur = buffer.duration || 12;
             this.longSeagullEndTime = performance.now() + (dur * 1000);
@@ -1178,7 +1238,7 @@ export const SoundManager = {
     },
 
     playSyntheticSeagullCry() {
-        if (!this.initialized || !getGameState().sfxEnabled || !this.ctx) return;
+        if (!this.initialized || !getGameState().sfxEnabled || !this.ctx || this.isUnderwater) return;
         try {
             const now = this.ctx.currentTime;
             [0, 0.32].forEach((offset, idx) => {
@@ -1207,7 +1267,7 @@ export const SoundManager = {
 
                 osc.connect(filter);
                 filter.connect(gain);
-                gain.connect(this.masterGain);
+                gain.connect(this.surfaceSfxGain || this.masterGain);
 
                 osc.start(t);
                 osc.stop(t + dur + 0.02);
@@ -1216,7 +1276,7 @@ export const SoundManager = {
     },
 
     playDistantShipHorn() {
-        if (!this.initialized || !getGameState().sfxEnabled || !this.ctx) return;
+        if (!this.initialized || !getGameState().sfxEnabled || !this.ctx || this.isUnderwater) return;
         try {
             const now = this.ctx.currentTime;
             [65.4, 98.0].forEach(freq => {
@@ -1236,7 +1296,7 @@ export const SoundManager = {
 
                 osc.connect(filter);
                 filter.connect(gain);
-                gain.connect(this.masterGain);
+                gain.connect(this.surfaceSfxGain || this.masterGain);
 
                 osc.start(now);
                 osc.stop(now + 3.0);

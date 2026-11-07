@@ -66,6 +66,13 @@ func TestPedestrianMoveValidation(t *testing.T) {
 		t.Fatalf("unexpected output: %+v", out)
 	}
 
+	valid["anim"] = AnimSwim
+	b, _ = msgpack.Marshal(valid)
+	out, err = ParsePedestrianMove(b, "vasya")
+	if err != nil || out.Anim != AnimSwim {
+		t.Fatalf("swim animation should be accepted: %+v, %v", out, err)
+	}
+
 	// Missing anim
 	missingAnim := map[string]any{
 		"type": "move",

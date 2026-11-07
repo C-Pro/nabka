@@ -1,6 +1,6 @@
 import { renderVehiclePose, resetVehiclePose } from './vehicle-motion.js';
 import { GAME_STATE, isGameplayInputSuspended } from './state.js';
-import { PhysicsEngine, WorldVehiclePhysics, stepWorldVehiclePhysics, getVehicleCollisionCircles } from './physics.js';
+import { PhysicsEngine, WorldVehiclePhysics, stepWorldVehiclePhysics, getVehicleCollisionCircles, SEA_SURFACE_Y, getWaterDepthAt, getTargetSwimY, MIN_SWIM_X, SHORE_X } from './physics.js';
 import { TextureFactory } from './textures.js';
 import { SoundManager } from './audio.js';
 import { World } from './world.js';
@@ -18,6 +18,9 @@ export const Player = {
     velocity: null,
     rotationY: Math.PI,
     isGrounded: true,
+    isSwimming: false,
+    swimBlend: 0,
+    swimCycle: 0,
     walkCycle: 0,
     emoteTimer: 0,
 
@@ -28,10 +31,14 @@ export const Player = {
         this.position = new THREE.Vector3(sx, sy, sz);
         this.velocity = new THREE.Vector3(0, 0, 0);
         this.rotationY = (spawnPos && spawnPos.yaw !== undefined) ? spawnPos.yaw : Math.PI;
+        this.isSwimming = false;
+        this.swimBlend = 0;
+        this.swimCycle = 0;
 
         const username = GAME_STATE.username || 'Игрок';
         this.group = ModelLoader.instantiate('models/player.glb', () => ModelBuilders.player(username, '#38bdf8'));
         this.group.position.copy(this.position);
+        this.group.rotation.order = 'YXZ';
         this.group.rotation.y = this.rotationY;
 
         const torso = this.group.getObjectByName ? this.group.getObjectByName('torso') : null;
@@ -56,6 +63,10 @@ export const Player = {
 
     update(dt, remotePlayersMap) {
         if (GAME_STATE.inVehicle) {
+            this.isSwimming = false;
+            this.swimBlend = 0;
+            this.group.rotation.x = 0;
+            this.head.rotation.x = 0;
             this.position.copy(GAME_STATE.inVehicle.group.position);
             this.group.visible = false;
             return;
@@ -102,6 +113,7 @@ export const Player = {
             this.velocity.x *= 0.8;
             this.velocity.z *= 0.8;
         }
+        this.rotationY = Math.atan2(Math.sin(this.rotationY), Math.cos(this.rotationY));
 
         if (!this.isGrounded) {
             this.velocity.y -= 26 * dt;
@@ -109,10 +121,10 @@ export const Player = {
 
         const pBounds = (World.worldMap && World.worldMap.bounds && World.worldMap.bounds.player)
             ? World.worldMap.bounds.player
-            : { minX: -46, maxX: 294, minZ: -170, maxZ: 170 };
+            : { minX: MIN_SWIM_X, maxX: 294, minZ: -170, maxZ: 170 };
 
         const candidatePos = new THREE.Vector3(
-            Math.max(pBounds.minX, Math.min(pBounds.maxX, this.position.x + this.velocity.x * dt)),
+            Math.max(pBounds.minX ?? MIN_SWIM_X, Math.min(pBounds.maxX, this.position.x + this.velocity.x * dt)),
             this.position.y,
             Math.max(pBounds.minZ, Math.min(pBounds.maxZ, this.position.z + this.velocity.z * dt))
         );
@@ -165,21 +177,57 @@ export const Player = {
         this.position.x = candidatePos.x;
         this.position.z = candidatePos.z;
 
-        const supportY = PhysicsEngine.getSupportHeightAt(this.position.x, this.position.z, this.position.y, 0.52, World.vehicles, GAME_STATE.inVehicle);
+        const supportY = PhysicsEngine.getSupportHeightAt(this.position.x, this.position.z, this.position.y, 0.42, World.vehicles, GAME_STATE.inVehicle);
+        const waterDepth = getWaterDepthAt(this.position.x, this.position.z);
+        const onPier = supportY > SEA_SURFACE_Y + 0.5 && this.position.y >= supportY - 0.15;
+        const inWater = !onPier && this.position.y <= SEA_SURFACE_Y + 0.35 && waterDepth > 0;
+        const targetSwimBlend = !inWater || waterDepth <= 1.1 ? 0
+            : waterDepth >= 1.6 ? 1 : (waterDepth - 1.1) / 0.5;
+        this.swimBlend += (targetSwimBlend - this.swimBlend) * Math.min(1, dt * 5.0);
+        if (Math.abs(targetSwimBlend - this.swimBlend) < 0.002) this.swimBlend = targetSwimBlend;
+        this.isSwimming = this.swimBlend > 0.45;
 
-        this.position.y += this.velocity.y * dt;
-        if (this.position.y <= supportY) {
-            this.position.y = supportY;
+        if (inWater) {
+            const idealSwimY = Math.min(getTargetSwimY(this.position.x, this.position.z), SEA_SURFACE_Y - 1.4);
+            const desiredY = supportY + (idealSwimY - supportY) * this.swimBlend;
+            this.position.y += (desiredY - this.position.y) * Math.min(1, dt * 5.0);
             this.velocity.y = 0;
-            this.isGrounded = true;
+            this.isGrounded = !this.isSwimming;
         } else {
-            this.isGrounded = false;
+            const hSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+            const maxStepDown = Math.max(0.38, hSpeed * dt * 1.5 + 0.15);
+            if (this.isGrounded && this.position.y > supportY + maxStepDown && !this.isSwimming) {
+                this.isGrounded = false;
+                this.velocity.y = 0;
+            }
+            this.position.y += this.velocity.y * dt;
+            if (this.position.y <= supportY) {
+                this.position.y = supportY;
+                this.velocity.y = 0;
+                this.isGrounded = true;
+            } else if (this.isGrounded && (this.position.y - supportY) <= maxStepDown && this.velocity.y <= 0) {
+                this.position.y = supportY;
+                this.velocity.y = 0;
+                this.isGrounded = true;
+            } else {
+                this.isGrounded = false;
+            }
         }
 
-        this.group.position.copy(this.position);
+        const pronePitch = 1.35 * this.swimBlend;
+        const torsoY = 1.15;
+        const pitchCos = Math.cos(pronePitch);
+        const pitchSin = Math.sin(pronePitch);
+        const forwardX = Math.sin(this.rotationY);
+        const forwardZ = Math.cos(this.rotationY);
+        this.group.position.set(this.position.x - forwardX * (torsoY * pitchSin), this.position.y + torsoY * (1 - pitchCos), this.position.z - forwardZ * (torsoY * pitchSin));
         this.group.rotation.y = this.rotationY;
+        this.group.rotation.x = pronePitch;
+        this.head.rotation.x = -0.42 * this.swimBlend;
 
-        if (this.emoteTimer > 0) {
+        const inAir = !this.isGrounded && !inWater && this.swimBlend < 0.05;
+        if (this.isSwimming) this.emoteTimer = 0;
+        if (this.emoteTimer > 0 && !this.isSwimming) {
             this.emoteTimer -= dt;
             const t = performance.now() * 0.012;
             this.leftArm.rotation.x = Math.PI * 0.75 + Math.sin(t) * 0.5;
@@ -187,30 +235,56 @@ export const Player = {
             this.leftLeg.rotation.x = Math.sin(t) * 0.35;
             this.rightLeg.rotation.x = -Math.sin(t) * 0.35;
             this.head.rotation.y = Math.sin(t * 0.5) * 0.3;
-        } else if (!this.isGrounded) {
+        } else if (inAir) {
             this.leftArm.rotation.x = -0.6;
             this.rightArm.rotation.x = -0.6;
             this.leftLeg.rotation.x = 0.4;
             this.rightLeg.rotation.x = -0.3;
-        } else if (isMoving) {
-            this.walkCycle += dt * (isSprinting ? 15 : 9.5);
-            const swing = Math.sin(this.walkCycle) * (isSprinting ? 0.85 : 0.55);
-            this.leftLeg.rotation.x = swing;
-            this.rightLeg.rotation.x = -swing;
-            this.leftArm.rotation.x = -swing * 0.8;
-            this.rightArm.rotation.x = swing * 0.8;
+            this.leftArm.rotation.z = this.rightArm.rotation.z = 0;
+            this.leftLeg.rotation.z = this.rightLeg.rotation.z = 0;
             this.head.rotation.y = 0;
         } else {
-            const idle = Math.sin(performance.now() * 0.003) * 0.04;
-            this.leftLeg.rotation.x *= 0.85;
-            this.rightLeg.rotation.x *= 0.85;
-            this.leftArm.rotation.x = idle;
-            this.rightArm.rotation.x = -idle;
+            let baseLegX = 0;
+            let baseArmX = 0;
+            if (isMoving) {
+                this.walkCycle += dt * (isSprinting ? 15 : 9.5);
+                const swing = Math.sin(this.walkCycle) * (isSprinting ? 0.85 : 0.55);
+                baseLegX = swing;
+                baseArmX = -swing * 0.8;
+            } else {
+                baseArmX = Math.sin(performance.now() * 0.003) * 0.04;
+                baseLegX = 0;
+            }
+            this.head.rotation.y = 0;
+
+            if (this.swimBlend > 0) {
+                this.swimCycle += dt * (isMoving ? (isSprinting ? 5.5 : 4.0) : 2.2);
+                const sweep = Math.sin(this.swimCycle);
+                const kick = Math.sin(this.swimCycle + Math.PI / 2);
+                const blend = this.swimBlend;
+                const swimArmX = -0.55 + sweep * 0.4;
+                const swimLegX = 0.2 + kick * 0.3;
+                this.leftArm.rotation.x = baseArmX * (1 - blend) + swimArmX * blend;
+                this.rightArm.rotation.x = (-baseArmX) * (1 - blend) + swimArmX * blend;
+                this.leftLeg.rotation.x = baseLegX * (1 - blend) + swimLegX * blend;
+                this.rightLeg.rotation.x = (-baseLegX) * (1 - blend) + swimLegX * blend;
+                this.leftArm.rotation.z = (0.35 + sweep * 0.35) * blend;
+                this.rightArm.rotation.z = -this.leftArm.rotation.z;
+                this.leftLeg.rotation.z = (0.2 + kick * 0.2) * blend;
+                this.rightLeg.rotation.z = -this.leftLeg.rotation.z;
+            } else {
+                this.leftArm.rotation.x = baseArmX;
+                this.rightArm.rotation.x = -baseArmX;
+                this.leftLeg.rotation.x = baseLegX;
+                this.rightLeg.rotation.x = -baseLegX;
+                this.leftArm.rotation.z = this.rightArm.rotation.z = 0;
+                this.leftLeg.rotation.z = this.rightLeg.rotation.z = 0;
+            }
         }
     },
 
     jump() {
-        if (GAME_STATE.inVehicle || isGameplayInputSuspended()) return;
+        if (GAME_STATE.inVehicle || this.isSwimming || isGameplayInputSuspended()) return;
         if (this.isGrounded) {
             this.velocity.y = 9.8;
             this.isGrounded = false;
@@ -428,7 +502,10 @@ export const Dunya = {
 
         const followAngle = Player.rotationY - 0.65;
         const orbitShift = isCat ? 0 : Math.sin(time * 1.4) * 0.35;
-        const targetX = Player.position.x + Math.sin(followAngle + orbitShift) * 1.65;
+        const waitOnShore = Player.isSwimming || Player.position.x < SHORE_X;
+        const targetX = waitOnShore
+            ? Math.max(SHORE_X + 1, Player.position.x)
+            : Player.position.x + Math.sin(followAngle + orbitShift) * 1.65;
         const targetZ = Player.position.z + Math.cos(followAngle + orbitShift) * 1.65;
 
         const dx = targetX - this.position.x;
@@ -437,7 +514,7 @@ export const Dunya = {
         const distToPlayer = Math.hypot(Player.position.x - this.position.x, Player.position.z - this.position.z);
 
         if (distToPlayer > 26) {
-            this.position.set(Player.position.x + 1.4, Player.position.y + 0.2, Player.position.z + 1.2);
+            this.position.set(waitOnShore ? SHORE_X + 1 : Player.position.x + 1.4, waitOnShore ? 0 : Player.position.y + 0.2, Player.position.z + 1.2);
             this.velocity.set(0, 0, 0);
             this.idleTimer = 0;
             this.lieDownProgress = 0;
@@ -548,7 +625,7 @@ export const Dunya = {
         );
 
         PhysicsEngine.resolveWorldCollision(nextPos, 0.28, this.position.y);
-        this.position.x = nextPos.x;
+        this.position.x = waitOnShore ? Math.max(SHORE_X + 1, nextPos.x) : nextPos.x;
         this.position.z = nextPos.z;
 
         const supportY = PhysicsEngine.getSupportHeightAt(this.position.x, this.position.z, this.position.y, 0.28, World.vehicles, GAME_STATE.inVehicle);

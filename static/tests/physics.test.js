@@ -1,8 +1,30 @@
 import { describe, test, expect } from 'bun:test';
-import { createColliderStore, computeWorldColliderFromEntity } from '../js/physics.js';
+import { createColliderStore, computeWorldColliderFromEntity, getWaterDepthAt, getSeabedHeightAt, getTargetSwimY, MIN_SWIM_X, SEA_SURFACE_Y } from '../js/physics.js';
 import worldMap from '../data/world_map.json';
 
 describe('PhysicsEngine & model-computed world_map.json colliders', () => {
+    test('sea floor slopes through shore, pier end, and deep water', () => {
+        expect(worldMap.bounds.player.minX).toBe(MIN_SWIM_X);
+        expect(getWaterDepthAt(-22)).toBe(0);
+        expect(getWaterDepthAt(-36)).toBeCloseTo(3);
+        expect(getWaterDepthAt(-50)).toBe(6);
+        expect(getWaterDepthAt(-70)).toBe(10);
+        expect(getWaterDepthAt(-72)).toBe(10);
+        expect(getSeabedHeightAt(-15)).toBe(0);
+        expect(getSeabedHeightAt(-22)).toBe(SEA_SURFACE_Y);
+        expect(getSeabedHeightAt(-50)).toBeCloseTo(-7.2);
+        expect(getTargetSwimY(-50)).toBeCloseTo(-5.7);
+        const physics = createColliderStore();
+        expect(physics.getSeabedHeightAt(-70)).toBeCloseTo(-11.2);
+        expect(physics.getSupportHeightAt(-70, 0, -10)).toBeCloseTo(-11.2);
+    });
+
+    test('swimmers pass under pier decks while walkers stand on them', () => {
+        const physics = createColliderStore();
+        physics.addCollider({ type: 'box', id: 'pier', x: -35, z: 0, width: 10, depth: 8, minY: -0.2, height: 0.4 });
+        expect(physics.getSupportHeightAt(-35, 0, 0.4)).toBe(0.4);
+        expect(physics.resolveWorldCollision({ x: -39.8, z: 0 }, 0.42, -2)).toBe(false);
+    });
     test('computes colliders from world_map.json models (landmarks, stalls, props, hills) without staticColliders', () => {
         expect(worldMap.staticColliders).toBeUndefined();
         const physics = createColliderStore();

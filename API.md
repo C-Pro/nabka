@@ -185,7 +185,7 @@ Sent by clients to synchronize character position, velocity, orientation, and an
 | `vx` | `float64` | No | Velocity along X axis (for dead-reckoning) |
 | `vz` | `float64` | No | Velocity along Z axis (for dead-reckoning) |
 | `yaw` | `float64` | Yes | Heading/rotation angle in radians (finite number) |
-| `anim` | `string` | Yes | Animation state: `"idle"`, `"walk"`, `"run"`, `"jump"`, or `"emote"` |
+| `anim` | `string` | Yes | Animation state: `"idle"`, `"walk"`, `"run"`, `"jump"`, `"swim"`, or `"emote"` |
 
 ---
 

@@ -3,6 +3,71 @@
  */
 
 export const TextureFactory = {
+    createWaterNormalTexture() {
+        const size = 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const pixels = ctx.createImageData(size, size);
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                const u = x / size * Math.PI * 2;
+                const v = y / size * Math.PI * 2;
+                const nx = 0.13 * Math.cos(5 * u + 3 * v)
+                    + 0.08 * Math.cos(9 * u - 4 * v)
+                    + 0.05 * Math.cos(2 * u + 11 * v);
+                const ny = 0.11 * Math.sin(5 * u + 3 * v)
+                    - 0.07 * Math.sin(9 * u - 4 * v)
+                    + 0.05 * Math.sin(2 * u + 11 * v);
+                const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+                const i = (y * size + x) * 4;
+                pixels.data[i] = nx * 127 + 128;
+                pixels.data[i + 1] = ny * 127 + 128;
+                pixels.data[i + 2] = nz * 127 + 128;
+                pixels.data[i + 3] = 255;
+            }
+        }
+        ctx.putImageData(pixels, 0, 0);
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(24, 96);
+        return texture;
+    },
+
+    createSkyReflectionCubeTexture() {
+        const faces = Array.from({ length: 6 }, (_, face) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createLinearGradient(0, 0, 0, 64);
+            if (face === 2) {
+                gradient.addColorStop(0, '#0284c7');
+                gradient.addColorStop(1, '#bae6fd');
+            } else if (face === 3) {
+                gradient.addColorStop(0, '#bae6fd');
+                gradient.addColorStop(1, '#0369a1');
+            } else {
+                gradient.addColorStop(0, '#0284c7');
+                gradient.addColorStop(0.52, '#bae6fd');
+                gradient.addColorStop(1, '#0369a1');
+            }
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            if (face === 4) {
+                const glint = ctx.createRadialGradient(43, 30, 0, 43, 30, 18);
+                glint.addColorStop(0, 'rgba(255,255,240,0.85)');
+                glint.addColorStop(1, 'rgba(255,255,240,0)');
+                ctx.fillStyle = glint;
+                ctx.fillRect(25, 12, 36, 36);
+            }
+            return canvas;
+        });
+        const texture = new THREE.CubeTexture(faces);
+        texture.needsUpdate = true;
+        return texture;
+    },
+
     createPromenadeTileTexture() {
         const canvas = document.createElement('canvas');
         canvas.width = 512;

@@ -623,7 +623,86 @@ export function generateDefaultPromenadeProps() {
  * Used as synchronous fallbacks when GLB files are not preloaded (e.g. in unit tests)
  * and by the standalone GLB exporter to generate initial .glb files.
  */
+function buildFallbackFish(name, color, flat = false) {
+    const group = new THREE.Group();
+    group.name = name;
+    const material = new THREE.MeshStandardMaterial({ color, roughness: 0.7, side: THREE.DoubleSide });
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8), material);
+    body.name = 'body';
+    body.scale.set(flat ? 1.4 : 0.85, flat ? 0.23 : 0.75, 1.55);
+    body.position.y = flat ? 0.07 : 0.18;
+    group.add(body);
+    const tail = new THREE.Group();
+    tail.name = 'tailFin';
+    tail.position.set(0, body.position.y, -0.3);
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.2, flat ? 0.025 : 0.24, 0.2), material);
+    fin.position.z = -0.08;
+    tail.add(fin);
+    group.add(tail);
+    return group;
+}
+
+function buildFallbackStarfish(name, color) {
+    const group = new THREE.Group();
+    group.name = name;
+    const material = new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
+    const center = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), material);
+    center.scale.y = 0.2;
+    center.position.y = 0.04;
+    group.add(center);
+    for (let i = 0; i < 5; i++) {
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.035, 0.22), material);
+        const angle = i * Math.PI * 2 / 5;
+        arm.position.set(Math.sin(angle) * 0.18, 0.04, Math.cos(angle) * 0.18);
+        arm.rotation.y = angle;
+        group.add(arm);
+    }
+    return group;
+}
+
 export const ModelBuilders = {
+    fish_kambala() { return buildFallbackFish('fish_kambala', 0x9a785c, true); },
+    fish_terpug() { return buildFallbackFish('fish_terpug', 0x688b58); },
+    fish_okun() { return buildFallbackFish('fish_okun', 0xb8a66d); },
+    jellyfish() {
+        const group = new THREE.Group();
+        group.name = 'jellyfish';
+        const material = new THREE.MeshStandardMaterial({ color: 0xb9e6ec, transparent: true, opacity: 0.82, side: THREE.DoubleSide });
+        const bell = new THREE.Group();
+        bell.name = 'bell';
+        const cap = new THREE.Mesh(new THREE.SphereGeometry(0.23, 12, 8), material);
+        cap.scale.y = 0.55;
+        bell.add(cap);
+        bell.position.y = 0.3;
+        group.add(bell);
+        const tentacles = new THREE.Group();
+        tentacles.name = 'tentacles';
+        for (let i = 0; i < 6; i++) {
+            const strand = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.005, 0.25, 5), material);
+            const angle = i * Math.PI / 3;
+            strand.position.set(Math.cos(angle) * 0.1, 0.12, Math.sin(angle) * 0.1);
+            tentacles.add(strand);
+        }
+        group.add(tentacles);
+        return group;
+    },
+    starfish_amur() { return buildFallbackStarfish('starfish_amur', 0xc85e49); },
+    starfish_patiria() { return buildFallbackStarfish('starfish_patiria', 0x9679ae); },
+    laminaria() {
+        const group = new THREE.Group();
+        group.name = 'laminaria';
+        const material = new THREE.MeshStandardMaterial({ color: 0x567c3b, side: THREE.DoubleSide, roughness: 0.9 });
+        for (let i = 0; i < 4; i++) {
+            const blade = new THREE.Group();
+            blade.name = `blade_${i}`;
+            blade.rotation.y = i * Math.PI / 2;
+            const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.3 + i * 0.1, 0.025), material);
+            leaf.position.y = 0.65 + i * 0.05;
+            blade.add(leaf);
+            group.add(blade);
+        }
+        return group;
+    },
     fountain() {
         const group = new THREE.Group();
         group.name = 'fountain';
@@ -1554,9 +1633,10 @@ export const ModelBuilders = {
         const makeLimb = (limbName, w, h, d, mat, shoe = null) => {
             const pivot = new THREE.Group();
             pivot.name = limbName;
-            const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+            const legH = shoe ? h - 0.12 : h;
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, legH, d), mat);
             mesh.name = `${limbName}_mesh`;
-            mesh.position.y = -h / 2;
+            mesh.position.y = -legH / 2;
             mesh.castShadow = true;
             pivot.add(mesh);
 
@@ -2022,7 +2102,14 @@ export const ModelLoader = {
             'models/sopka.glb',
             'models/street_lamp.glb',
             'models/road_lamp.glb',
-            'models/bench.glb'
+            'models/bench.glb',
+            'models/fish_kambala.glb',
+            'models/fish_terpug.glb',
+            'models/fish_okun.glb',
+            'models/jellyfish.glb',
+            'models/starfish_amur.glb',
+            'models/starfish_patiria.glb',
+            'models/laminaria.glb'
         ]);
 
         const landmarks = Array.isArray(worldMap.landmarks) ? worldMap.landmarks : DEFAULT_LANDMARKS;

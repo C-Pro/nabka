@@ -731,7 +731,7 @@
   ],
   "bounds": {
     "player": {
-      "minX": -46,
+      "minX": -72,
       "maxX": 294,
       "minZ": -170,
       "maxZ": 170

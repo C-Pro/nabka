@@ -124,6 +124,12 @@ describe('SoundManager MP3 Audio Engine', () => {
         SoundManager.ambienceBuffer = null;
         SoundManager.ambienceSource = null;
         SoundManager.ambiencePlaying = false;
+        SoundManager.diveBuffer = null;
+        SoundManager.diveSource = null;
+        SoundManager.diveGain = createMockGainNode(0);
+        SoundManager.surfaceSfxGain = createMockGainNode(1.0);
+        SoundManager.divePlaying = false;
+        SoundManager.isUnderwater = false;
 
         SoundManager.shortSeagullBuffers = [];
         SoundManager.lastShortSeagullIndex = -1;
@@ -168,6 +174,84 @@ describe('SoundManager MP3 Audio Engine', () => {
         expect(SoundManager.ambienceGain.gain.setTargetAtTime).toHaveBeenCalledWith(0.42, 10.0, 0.4);
         expect(SoundManager.seaGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 10.0, 0.5);
         expect(SoundManager.streetGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 10.0, 0.5);
+    });
+
+    test('loadAllSoundAssets loads dive.mp3 and starts it when already underwater', async () => {
+        const originalLoad = SoundManager.loadAudioBuffer;
+        const diveBuffer = { duration: 10 };
+        SoundManager.loadAudioBuffer = mock((url) => Promise.resolve(url === 'audio/dive.mp3' ? diveBuffer : null));
+        try {
+            SoundManager.isUnderwater = true;
+            SoundManager.loadAllSoundAssets();
+            await Promise.resolve();
+            expect(SoundManager.loadAudioBuffer).toHaveBeenCalledWith('audio/dive.mp3');
+            expect(SoundManager.diveBuffer).toBe(diveBuffer);
+            expect(SoundManager.diveSource.buffer).toBe(diveBuffer);
+            expect(SoundManager.diveSource.loop).toBe(true);
+        } finally {
+            SoundManager.loadAudioBuffer = originalLoad;
+        }
+    });
+
+    test('setUnderwater crossfades dive and surface ambience and ducks surface sfx', () => {
+        SoundManager.diveBuffer = { duration: 10 };
+        SoundManager.setUnderwater(true);
+        const source = SoundManager.diveSource;
+        expect(source.loop).toBe(true);
+        expect(source.start).toHaveBeenCalledWith(0);
+        expect(source.connect).toHaveBeenCalledWith(SoundManager.diveGain);
+        expect(SoundManager.diveGain.gain.setTargetAtTime).toHaveBeenCalledWith(0.45, 10, 0.25);
+        expect(SoundManager.ambienceGain.gain.setTargetAtTime).toHaveBeenCalledWith(0.06, 10, 0.3);
+        expect(SoundManager.surfaceSfxGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 10, 0.2);
+        expect(SoundManager.seaGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 10, 0.3);
+        expect(SoundManager.streetGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 10, 0.3);
+        SoundManager.setUnderwater(true);
+        expect(SoundManager.diveSource).toBe(source);
+
+        SoundManager.setUnderwater(false);
+        expect(SoundManager.diveGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 10, 0.35);
+        expect(SoundManager.ambienceGain.gain.setTargetAtTime).toHaveBeenCalledWith(0.42, 10, 0.3);
+        expect(SoundManager.surfaceSfxGain.gain.setTargetAtTime).toHaveBeenCalledWith(1.0, 10, 0.3);
+    });
+
+    test('startAmbienceLoop ducks ambience when decoding finishes while underwater', () => {
+        SoundManager.isUnderwater = true;
+        SoundManager.ambienceBuffer = { duration: 30 };
+        SoundManager.startAmbienceLoop();
+        expect(SoundManager.ambienceGain.gain.setTargetAtTime).toHaveBeenCalledWith(0.06, 10.0, 0.4);
+    });
+
+    test('updateSpatialAmbience suppresses seagulls, horn, and fountain underwater', () => {
+        const origGull = SoundManager.playSeagullCry;
+        const origLongGull = SoundManager.playLongSeagullCry;
+        const origHorn = SoundManager.playDistantShipHorn;
+        const gullSpy = mock(() => {});
+        const longGullSpy = mock(() => {});
+        const hornSpy = mock(() => {});
+        SoundManager.playSeagullCry = gullSpy;
+        SoundManager.playLongSeagullCry = longGullSpy;
+        SoundManager.playDistantShipHorn = hornSpy;
+
+        try {
+            SoundManager.lastSeagullTime = performance.now() - 20000;
+            SoundManager.lastLongSeagullTime = performance.now() - 300000;
+            SoundManager.lastHornTime = performance.now() - 50000;
+            SoundManager.shortSeagullBuffers = [{ duration: 1 }];
+            SoundManager.longSeagullBuffers = [{ duration: 12 }];
+
+            SoundManager.updateSpatialAmbience({ x: 2, z: 3 }, true);
+            expect(gullSpy).not.toHaveBeenCalled();
+            expect(longGullSpy).not.toHaveBeenCalled();
+            expect(hornSpy).not.toHaveBeenCalled();
+            expect(SoundManager.fountainGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 10, 0.1);
+            expect(SoundManager.seaGain.gain.value).toBe(0);
+            expect(SoundManager.streetGain.gain.value).toBe(0);
+        } finally {
+            SoundManager.playSeagullCry = origGull;
+            SoundManager.playLongSeagullCry = origLongGull;
+            SoundManager.playDistantShipHorn = origHorn;
+            SoundManager.isUnderwater = false;
+        }
     });
 
     test('playSeagullCry rotates randomly through shortSeagullBuffers without immediate repeating', () => {

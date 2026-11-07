@@ -17,6 +17,7 @@ const (
 	AnimWalk  = "walk"
 	AnimRun   = "run"
 	AnimJump  = "jump"
+	AnimSwim  = "swim"
 	AnimEmote = "emote"
 )
 
@@ -257,7 +258,7 @@ func ValidateUsername(name string) (string, error) {
 
 func ValidateAnim(anim string) bool {
 	switch anim {
-	case AnimIdle, AnimWalk, AnimRun, AnimJump, AnimEmote:
+	case AnimIdle, AnimWalk, AnimRun, AnimJump, AnimSwim, AnimEmote:
 		return true
 	default:
 		return false
@@ -332,7 +333,7 @@ func ParsePedestrianMove(data []byte, verifiedUsername string) (*OutboundPedestr
 
 	anim := strings.TrimSpace(*in.Anim)
 	if !ValidateAnim(anim) {
-		return nil, fmt.Errorf("invalid anim %q: must be idle, walk, run, jump, or emote", anim)
+		return nil, fmt.Errorf("invalid anim %q: must be idle, walk, run, jump, swim, or emote", anim)
 	}
 
 	return &OutboundPedestrianMoveMsg{
