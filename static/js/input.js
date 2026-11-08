@@ -17,7 +17,63 @@ export function triggerCurrentInteraction() {
     }
 }
 
+export const inputSources = {
+    keyboard: { w: false, a: false, s: false, d: false, shift: false, space: false },
+    dpad: { w: false, a: false, s: false, d: false },
+    pedals: { gas: false, brake: false },
+    touchButtons: { shift: false, space: false }
+};
+
+let isTurboToggled = false;
+
+export function setTurboToggle(active) {
+    isTurboToggled = Boolean(active);
+    inputSources.touchButtons.shift = isTurboToggled;
+    syncGameStateKeys();
+    if (typeof document !== 'undefined') {
+        const btn = document.getElementById('btn-action-sprint');
+        if (btn) {
+            btn.classList.toggle('turbo-active', isTurboToggled);
+            btn.setAttribute('aria-pressed', isTurboToggled ? 'true' : 'false');
+            const label = document.getElementById('turbo-label');
+            if (label) {
+                label.textContent = isTurboToggled ? 'Турбо: ВКЛ' : 'Турбо';
+            }
+        }
+    }
+}
+
+export function isTurboActive() {
+    return isTurboToggled;
+}
+
+export function syncGameStateKeys() {
+    GAME_STATE.keys.w = Boolean(inputSources.keyboard.w || inputSources.dpad.w || inputSources.pedals.gas);
+    GAME_STATE.keys.s = Boolean(inputSources.keyboard.s || inputSources.dpad.s || inputSources.pedals.brake);
+    GAME_STATE.keys.a = Boolean(inputSources.keyboard.a || inputSources.dpad.a);
+    GAME_STATE.keys.d = Boolean(inputSources.keyboard.d || inputSources.dpad.d);
+    GAME_STATE.keys.shift = Boolean(inputSources.keyboard.shift || inputSources.touchButtons.shift);
+    GAME_STATE.keys.space = Boolean(inputSources.keyboard.space || inputSources.touchButtons.space);
+}
+
+let dpadResetFn = null;
+
 export function clearMovementInput() {
+    inputSources.keyboard.w = false;
+    inputSources.keyboard.a = false;
+    inputSources.keyboard.s = false;
+    inputSources.keyboard.d = false;
+    inputSources.keyboard.shift = false;
+    inputSources.keyboard.space = false;
+    inputSources.dpad.w = false;
+    inputSources.dpad.a = false;
+    inputSources.dpad.s = false;
+    inputSources.dpad.d = false;
+    inputSources.pedals.gas = false;
+    inputSources.pedals.brake = false;
+    inputSources.touchButtons.shift = false;
+    inputSources.touchButtons.space = false;
+    setTurboToggle(false);
     GAME_STATE.keys.w = false;
     GAME_STATE.keys.a = false;
     GAME_STATE.keys.s = false;
@@ -27,6 +83,13 @@ export function clearMovementInput() {
     GAME_STATE.joystickVector.x = 0;
     GAME_STATE.joystickVector.y = 0;
     GAME_STATE.joystickSprint = false;
+    if (typeof dpadResetFn === 'function') {
+        dpadResetFn();
+    }
+    if (typeof document !== 'undefined') {
+        const activeTouchEls = document.querySelectorAll('.dpad-btn.touch-active, .car-pedal.touch-active, .touch-active');
+        activeTouchEls.forEach(el => el.classList.remove('touch-active'));
+    }
 }
 
 export function bindInputControls(worldMap = {}) {
@@ -154,15 +217,18 @@ export function bindInputControls(worldMap = {}) {
         }
 
         const code = e.code;
-        if (code === 'KeyW' || code === 'ArrowUp') GAME_STATE.keys.w = true;
-        if (code === 'KeyS' || code === 'ArrowDown') GAME_STATE.keys.s = true;
-        if (code === 'KeyA' || code === 'ArrowLeft') GAME_STATE.keys.a = true;
-        if (code === 'KeyD' || code === 'ArrowRight') GAME_STATE.keys.d = true;
-        if (code === 'ShiftLeft' || code === 'ShiftRight') GAME_STATE.keys.shift = true;
+        if (code === 'KeyW' || code === 'ArrowUp') inputSources.keyboard.w = true;
+        if (code === 'KeyS' || code === 'ArrowDown') inputSources.keyboard.s = true;
+        if (code === 'KeyA' || code === 'ArrowLeft') inputSources.keyboard.a = true;
+        if (code === 'KeyD' || code === 'ArrowRight') inputSources.keyboard.d = true;
+        if (code === 'ShiftLeft' || code === 'ShiftRight') inputSources.keyboard.shift = true;
         if (code === 'Space') {
             e.preventDefault();
-            GAME_STATE.keys.space = true;
+            inputSources.keyboard.space = true;
+            syncGameStateKeys();
             Player.jump(MultiplayerClient);
+        } else {
+            syncGameStateKeys();
         }
         if (code === 'KeyE') {
             if (e.repeat) return;
@@ -175,12 +241,13 @@ export function bindInputControls(worldMap = {}) {
 
     window.addEventListener('keyup', (e) => {
         const code = e.code;
-        if (code === 'KeyW' || code === 'ArrowUp') GAME_STATE.keys.w = false;
-        if (code === 'KeyS' || code === 'ArrowDown') GAME_STATE.keys.s = false;
-        if (code === 'KeyA' || code === 'ArrowLeft') GAME_STATE.keys.a = false;
-        if (code === 'KeyD' || code === 'ArrowRight') GAME_STATE.keys.d = false;
-        if (code === 'ShiftLeft' || code === 'ShiftRight') GAME_STATE.keys.shift = false;
-        if (code === 'Space') GAME_STATE.keys.space = false;
+        if (code === 'KeyW' || code === 'ArrowUp') inputSources.keyboard.w = false;
+        if (code === 'KeyS' || code === 'ArrowDown') inputSources.keyboard.s = false;
+        if (code === 'KeyA' || code === 'ArrowLeft') inputSources.keyboard.a = false;
+        if (code === 'KeyD' || code === 'ArrowRight') inputSources.keyboard.d = false;
+        if (code === 'ShiftLeft' || code === 'ShiftRight') inputSources.keyboard.shift = false;
+        if (code === 'Space') inputSources.keyboard.space = false;
+        syncGameStateKeys();
     });
 
     if (canvas) {
@@ -274,74 +341,219 @@ export function bindInputControls(worldMap = {}) {
         canvas.addEventListener('touchcancel', releaseCameraTouch, { passive: true });
     }
 
-    const joyZone = document.getElementById('touch-joystick-zone');
-    const joyKnob = document.getElementById('joystick-knob');
-    if (joyZone && joyKnob) {
-        let joystickTouchId = null;
+    const arrowsZone = document.getElementById('touch-arrows-zone');
+    const btnUp = document.getElementById('btn-arrow-up');
+    const btnDown = document.getElementById('btn-arrow-down');
+    const btnLeft = document.getElementById('btn-arrow-left');
+    const btnRight = document.getElementById('btn-arrow-right');
 
-        const updateJoystickFromTouch = (touch) => {
-            const rect = joyZone.getBoundingClientRect();
-            const cx = rect.left + rect.width / 2;
-            const cy = rect.top + rect.height / 2;
-            const maxR = rect.width / 2 - 14;
-            let dx = touch.clientX - cx;
-            let dy = touch.clientY - cy;
-            const dist = Math.hypot(dx, dy);
-            const clampedDist = Math.min(dist, maxR);
-            if (dist > 0.001) {
-                dx = (dx / dist) * clampedDist;
-                dy = (dy / dist) * clampedDist;
+    if (arrowsZone) {
+        const touchMap = new Map();
+        const mouseActive = new Set();
+
+        const updateDpadState = () => {
+            if (isGameplayInputSuspended()) {
+                touchMap.clear();
+                mouseActive.clear();
+                inputSources.dpad.w = false;
+                inputSources.dpad.s = false;
+                inputSources.dpad.a = false;
+                inputSources.dpad.d = false;
+                syncGameStateKeys();
+                btnUp?.classList.remove('touch-active');
+                btnDown?.classList.remove('touch-active');
+                btnLeft?.classList.remove('touch-active');
+                btnRight?.classList.remove('touch-active');
+                return;
             }
-            joyKnob.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
-            GAME_STATE.joystickVector.x = dx / maxR;
-            GAME_STATE.joystickVector.y = dy / maxR;
-            GAME_STATE.joystickSprint = (clampedDist / maxR) > 0.85;
+
+            const activeDirs = new Set(mouseActive);
+            for (const dirs of touchMap.values()) {
+                for (const d of dirs) activeDirs.add(d);
+            }
+
+            const isUp = activeDirs.has('up');
+            const isDown = activeDirs.has('down');
+            const isLeft = activeDirs.has('left');
+            const isRight = activeDirs.has('right');
+
+            inputSources.dpad.w = isUp;
+            inputSources.dpad.s = isDown;
+            inputSources.dpad.a = isLeft;
+            inputSources.dpad.d = isRight;
+            syncGameStateKeys();
+
+            btnUp?.classList.toggle('touch-active', isUp);
+            btnDown?.classList.toggle('touch-active', isDown);
+            btnLeft?.classList.toggle('touch-active', isLeft);
+            btnRight?.classList.toggle('touch-active', isRight);
         };
 
-        const resetJoystick = () => {
-            joystickTouchId = null;
-            joyKnob.style.transform = 'translate3d(0px, 0px, 0)';
-            GAME_STATE.joystickVector.x = 0;
-            GAME_STATE.joystickVector.y = 0;
-            GAME_STATE.joystickSprint = false;
+        dpadResetFn = () => {
+            touchMap.clear();
+            mouseActive.clear();
+            inputSources.dpad.w = false;
+            inputSources.dpad.s = false;
+            inputSources.dpad.a = false;
+            inputSources.dpad.d = false;
+            btnUp?.classList.remove('touch-active');
+            btnDown?.classList.remove('touch-active');
+            btnLeft?.classList.remove('touch-active');
+            btnRight?.classList.remove('touch-active');
         };
 
-        joyZone.addEventListener('touchstart', (e) => {
+        const getDirectionsForTouch = (touch) => {
+            const dirs = new Set();
+            if (!arrowsZone) return dirs;
+            const rect = arrowsZone.getBoundingClientRect();
+            if (touch.clientX < rect.left - 20 || touch.clientX > rect.right + 20 ||
+                touch.clientY < rect.top - 20 || touch.clientY > rect.bottom + 20) {
+                return dirs;
+            }
+
+            const inBox = (el, x, y, margin = 8) => {
+                if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+                const r = el.getBoundingClientRect();
+                return x >= r.left - margin && x <= r.right + margin &&
+                       y >= r.top - margin && y <= r.bottom + margin;
+            };
+
+            if (inBox(btnLeft, touch.clientX, touch.clientY)) dirs.add('left');
+            if (inBox(btnRight, touch.clientX, touch.clientY)) dirs.add('right');
+            if (inBox(btnUp, touch.clientX, touch.clientY)) dirs.add('up');
+            if (inBox(btnDown, touch.clientX, touch.clientY)) dirs.add('down');
+
+            if (dirs.size === 0 && rect.width > 0 && rect.height > 0) {
+                const cx = rect.left + rect.width / 2;
+                const cy = rect.top + rect.height / 2;
+                const dx = touch.clientX - cx;
+                const dy = touch.clientY - cy;
+
+                if (dx < -rect.width * 0.15) dirs.add('left');
+                else if (dx > rect.width * 0.15) dirs.add('right');
+
+                if (dy < -rect.height * 0.15) dirs.add('up');
+                else if (dy > rect.height * 0.15) dirs.add('down');
+            }
+
+            return dirs;
+        };
+
+        let lastDpadTouchTime = 0;
+
+        arrowsZone.addEventListener('touchstart', (e) => {
+            lastDpadTouchTime = performance.now();
+            if (isGameplayInputSuspended()) return;
             e.stopPropagation();
-            e.preventDefault();
+            if (e.cancelable) e.preventDefault();
             SoundManager.ensureInit();
-            if (joystickTouchId === null && e.changedTouches.length > 0) {
-                const t = e.changedTouches[0];
-                joystickTouchId = t.identifier;
-                updateJoystickFromTouch(t);
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const t = e.changedTouches[i];
+                touchMap.set(t.identifier, getDirectionsForTouch(t));
             }
+            updateDpadState();
         }, { passive: false });
 
-        joyZone.addEventListener('touchmove', (e) => {
+        arrowsZone.addEventListener('touchmove', (e) => {
+            lastDpadTouchTime = performance.now();
+            if (isGameplayInputSuspended()) return;
             e.stopPropagation();
-            e.preventDefault();
-            if (joystickTouchId === null) return;
+            if (e.cancelable) e.preventDefault();
             for (let i = 0; i < e.changedTouches.length; i++) {
-                if (e.changedTouches[i].identifier === joystickTouchId) {
-                    updateJoystickFromTouch(e.changedTouches[i]);
-                    break;
-                }
+                const t = e.changedTouches[i];
+                touchMap.set(t.identifier, getDirectionsForTouch(t));
             }
+            updateDpadState();
         }, { passive: false });
 
-        const endJoystickTouch = (e) => {
+        const endArrowTouch = (e) => {
+            lastDpadTouchTime = performance.now();
             e.stopPropagation();
             SoundManager.ensureInit();
-            if (joystickTouchId === null) return;
             for (let i = 0; i < e.changedTouches.length; i++) {
-                if (e.changedTouches[i].identifier === joystickTouchId) {
-                    resetJoystick();
-                    break;
+                touchMap.delete(e.changedTouches[i].identifier);
+            }
+            updateDpadState();
+        };
+
+        arrowsZone.addEventListener('touchend', endArrowTouch, { passive: true });
+        arrowsZone.addEventListener('touchcancel', endArrowTouch, { passive: true });
+
+        // Global touch reconciliation so no finger ID or directional key can EVER be stuck
+        const reconcileActiveTouches = (e) => {
+            lastDpadTouchTime = performance.now();
+            if (!e.touches || e.touches.length === 0) {
+                touchMap.clear();
+                mouseActive.clear();
+                inputSources.dpad.w = false;
+                inputSources.dpad.s = false;
+                inputSources.dpad.a = false;
+                inputSources.dpad.d = false;
+                inputSources.pedals.gas = false;
+                inputSources.pedals.brake = false;
+                inputSources.touchButtons.space = false;
+                syncGameStateKeys();
+                btnUp?.classList.remove('touch-active');
+                btnDown?.classList.remove('touch-active');
+                btnLeft?.classList.remove('touch-active');
+                btnRight?.classList.remove('touch-active');
+                document.getElementById('btn-car-gas')?.classList.remove('touch-active');
+                document.getElementById('btn-car-brake')?.classList.remove('touch-active');
+                document.getElementById('btn-action-jump')?.classList.remove('touch-active');
+                return;
+            }
+            const liveIds = new Set();
+            for (let i = 0; i < e.touches.length; i++) {
+                liveIds.add(e.touches[i].identifier);
+            }
+            let changed = false;
+            for (const id of touchMap.keys()) {
+                if (!liveIds.has(id)) {
+                    touchMap.delete(id);
+                    changed = true;
                 }
             }
+            if (changed) {
+                updateDpadState();
+            }
         };
-        joyZone.addEventListener('touchend', endJoystickTouch, { passive: true });
-        joyZone.addEventListener('touchcancel', endJoystickTouch, { passive: true });
+
+        window.addEventListener('touchend', reconcileActiveTouches, { passive: true });
+        window.addEventListener('touchcancel', reconcileActiveTouches, { passive: true });
+
+        const bindMouseButton = (btn, dir) => {
+            if (!btn) return;
+            btn.addEventListener('mousedown', (e) => {
+                // Ignore synthetic mouse events generated from touch
+                if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
+                if (performance.now() - lastDpadTouchTime < 600) return;
+                if (isGameplayInputSuspended()) return;
+                e.stopPropagation();
+                SoundManager.ensureInit();
+                mouseActive.add(dir);
+                updateDpadState();
+            });
+            const handleMouseRelease = (e) => {
+                e.stopPropagation();
+                SoundManager.ensureInit();
+                mouseActive.delete(dir);
+                updateDpadState();
+            };
+            btn.addEventListener('mouseup', handleMouseRelease);
+            btn.addEventListener('mouseleave', handleMouseRelease);
+        };
+
+        window.addEventListener('mouseup', () => {
+            if (mouseActive.size > 0) {
+                mouseActive.clear();
+                updateDpadState();
+            }
+        });
+
+        bindMouseButton(btnUp, 'up');
+        bindMouseButton(btnDown, 'down');
+        bindMouseButton(btnLeft, 'left');
+        bindMouseButton(btnRight, 'right');
     }
 
     const bindHoldButton = (btnId, onDown, onUp) => {
@@ -372,29 +584,59 @@ export function bindInputControls(worldMap = {}) {
     bindHoldButton(
         'btn-action-jump',
         () => {
-            GAME_STATE.keys.space = true;
+            inputSources.touchButtons.space = true;
+            syncGameStateKeys();
             Player.jump(MultiplayerClient);
         },
         () => {
-            GAME_STATE.keys.space = false;
+            inputSources.touchButtons.space = false;
+            syncGameStateKeys();
         }
     );
 
-    bindHoldButton(
-        'btn-action-sprint',
-        () => { GAME_STATE.keys.shift = true; },
-        () => { GAME_STATE.keys.shift = false; }
-    );
+    // Nitro / Turbo toggle button for mobile mode (tap to toggle ON/OFF)
+    const btnSprint = document.getElementById('btn-action-sprint');
+    if (btnSprint) {
+        let lastSprintTouch = 0;
+        btnSprint.addEventListener('touchstart', (e) => {
+            if (isGameplayInputSuspended()) return;
+            if (e.cancelable) e.preventDefault();
+            e.stopPropagation();
+            lastSprintTouch = performance.now();
+            SoundManager.ensureInit();
+            setTurboToggle(!isTurboToggled);
+        }, { passive: false });
+
+        btnSprint.addEventListener('click', (e) => {
+            if (isGameplayInputSuspended()) return;
+            if (performance.now() - lastSprintTouch < 500) return;
+            e.stopPropagation();
+            SoundManager.ensureInit();
+            setTurboToggle(!isTurboToggled);
+        });
+    }
 
     bindHoldButton(
         'btn-car-gas',
-        () => { GAME_STATE.keys.w = true; },
-        () => { GAME_STATE.keys.w = false; }
+        () => {
+            inputSources.pedals.gas = true;
+            syncGameStateKeys();
+        },
+        () => {
+            inputSources.pedals.gas = false;
+            syncGameStateKeys();
+        }
     );
     bindHoldButton(
         'btn-car-brake',
-        () => { GAME_STATE.keys.s = true; },
-        () => { GAME_STATE.keys.s = false; }
+        () => {
+            inputSources.pedals.brake = true;
+            syncGameStateKeys();
+        },
+        () => {
+            inputSources.pedals.brake = false;
+            syncGameStateKeys();
+        }
     );
 
     const btnCam = document.getElementById('btn-cam-mode');

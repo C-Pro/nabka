@@ -272,8 +272,8 @@
         <!-- Toast Notification Area -->
         <div id="toast-container" class="pointer-events-none absolute top-16 sm:top-24 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 w-full max-w-md px-4"></div>
 
-        <!-- Bottom-Left GTA Radar Minimap & Virtual Thumb Joystick -->
-        <div class="mobile-bottom-bar-left absolute left-2.5 sm:left-3 z-20 flex flex-col sm:flex-row items-start sm:items-end gap-2 sm:gap-3 pointer-events-auto">
+        <!-- Bottom-Left GTA Radar Minimap & Directional Arrow Buttons -->
+        <div class="mobile-bottom-bar-left absolute left-2 sm:left-3 z-20 flex flex-col sm:flex-row items-start sm:items-end gap-2 sm:gap-3 pointer-events-auto">
             <!-- Radar Minimap (Hidden on small screens, full size on desktop sm:) -->
             <div class="hidden sm:block relative w-40 h-40 rounded-2xl overflow-hidden border-2 border-slate-300/40 shadow-2xl bg-slate-950/90 shrink-0">
                 <canvas id="radar-canvas" width="180" height="180" class="w-full h-full block"></canvas>
@@ -286,52 +286,82 @@
                 </div>
             </div>
 
-            <!-- Mobile / Tablet Virtual Thumb Joystick -->
-            <div id="touch-joystick-zone" class="lg:hidden relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-slate-900/65 border-2 border-sky-400/40 shadow-2xl flex items-center justify-center touch-none">
-                <div class="pointer-events-none absolute inset-2 rounded-full border border-dashed border-slate-500/40"></div>
-                <span class="pointer-events-none absolute top-1.5 text-[8px] font-mono-code text-sky-300/70 uppercase tracking-widest">Спринт ▲</span>
-                <div id="joystick-knob" class="w-12 h-12 rounded-full bg-gradient-to-br from-sky-400 to-blue-600 border-2 border-white shadow-lg pointer-events-none transition-transform duration-75 flex items-center justify-center">
-                    <i class="fa-solid fa-arrows-up-down-left-right text-white/90 text-xs"></i>
+            <!-- Mobile / Tablet Directional Arrow Buttons -->
+            <div id="touch-arrows-zone" class="lg:hidden relative flex items-center gap-1 sm:gap-2 bg-slate-900/80 backdrop-blur-md border border-sky-400/35 p-1 sm:p-2 rounded-2xl shadow-2xl touch-none select-none">
+                <!-- Large Left Steer Button -->
+                <button id="btn-arrow-left" type="button" class="dpad-btn dpad-btn-steer w-14 sm:w-20 h-24 sm:h-28 rounded-xl flex flex-col items-center justify-center gap-1 touch-none" title="Влево (A)">
+                    <i class="fa-solid fa-arrow-left text-2xl sm:text-3xl text-sky-200 pointer-events-none"></i>
+                    <span class="text-[9px] font-gta text-sky-300/80 pointer-events-none tracking-wider uppercase">Влево</span>
+                </button>
+
+                <!-- Center Column: Up & Down Stacked -->
+                <div class="flex flex-col gap-1 sm:gap-2 h-24 sm:h-28 justify-between">
+                    <button id="btn-arrow-up" type="button" class="dpad-btn w-11 sm:w-16 h-11 sm:h-13 rounded-xl flex items-center justify-center touch-none" title="Вперёд (W)">
+                        <i class="fa-solid fa-arrow-up text-xl text-sky-200 pointer-events-none"></i>
+                    </button>
+                    <button id="btn-arrow-down" type="button" class="dpad-btn w-11 sm:w-16 h-11 sm:h-13 rounded-xl flex items-center justify-center touch-none" title="Назад (S)">
+                        <i class="fa-solid fa-arrow-down text-xl text-sky-200 pointer-events-none"></i>
+                    </button>
                 </div>
+
+                <!-- Large Right Steer Button -->
+                <button id="btn-arrow-right" type="button" class="dpad-btn dpad-btn-steer w-14 sm:w-20 h-24 sm:h-28 rounded-xl flex flex-col items-center justify-center gap-1 touch-none" title="Вправо (D)">
+                    <i class="fa-solid fa-arrow-right text-2xl sm:text-3xl text-sky-200 pointer-events-none"></i>
+                    <span class="text-[9px] font-gta text-sky-300/80 pointer-events-none tracking-wider uppercase">Вправо</span>
+                </button>
             </div>
         </div>
 
         <!-- Bottom-Right Ergonomic Action Cluster & Mobile Car Pedals -->
-        <div class="mobile-bottom-bar-right absolute right-2.5 sm:right-3 z-20 flex flex-col items-end gap-2 pointer-events-auto touch-none">
+        <div class="mobile-bottom-bar-right absolute right-2 sm:right-3 z-20 flex flex-col items-end gap-1.5 sm:gap-2 pointer-events-auto touch-none">
             <!-- Mobile Driving Pedals (Automatically shown when in a JDM car on touch/mobile) -->
-            <div id="mobile-car-pedals" class="hidden flex items-center gap-2">
-                <button id="btn-headlights-mobile" type="button" class="btn-game hud-glass text-amber-300 w-10 h-10 rounded-xl flex items-center justify-center border border-amber-400/40 shadow-lg" title="Фары / Сигнал (H)">
+            <div id="mobile-car-pedals" class="hidden flex items-end gap-2.5 touch-none">
+                <button id="btn-headlights-mobile" type="button" class="btn-game hud-glass text-amber-300 w-10 h-10 rounded-xl flex items-center justify-center border border-amber-400/40 shadow-lg mb-1 touch-none" title="Фары / Сигнал (H)">
                     <i class="fa-solid fa-lightbulb"></i>
                 </button>
-                <button id="btn-car-brake" type="button" class="btn-game bg-rose-600/90 active:bg-rose-500 text-white font-gta px-3.5 py-3 rounded-xl text-xs border border-rose-400/50 shadow-xl flex items-center gap-1.5 touch-none">
-                    <i class="fa-solid fa-angles-down"></i>
-                    <span>ТОРМОЗ</span>
+                <button id="btn-car-brake" type="button" class="car-pedal car-pedal-brake touch-none" title="Тормоз / Задний ход (S)">
+                    <div class="pedal-treads-horizontal">
+                        <div class="pedal-tread-h"></div>
+                        <div class="pedal-tread-h"></div>
+                        <div class="pedal-tread-h"></div>
+                    </div>
+                    <div class="flex flex-col items-center gap-0.5 pb-2 pointer-events-none">
+                        <i class="fa-solid fa-angles-down text-rose-400 text-xs"></i>
+                        <span class="font-gta text-[10px] font-bold text-rose-200 tracking-wider">ТОРМОЗ</span>
+                    </div>
                 </button>
-                <button id="btn-car-gas" type="button" class="btn-game bg-emerald-600/95 active:bg-emerald-500 text-white font-gta px-4 py-3 rounded-xl text-xs border border-emerald-400/50 shadow-xl flex items-center gap-1.5 touch-none">
-                    <i class="fa-solid fa-gauge-high"></i>
-                    <span>ГАЗ</span>
+                <button id="btn-car-gas" type="button" class="car-pedal car-pedal-gas touch-none" title="Газ / Ускорение (W)">
+                    <div class="pedal-treads-vertical">
+                        <div class="pedal-tread-v"></div>
+                        <div class="pedal-tread-v"></div>
+                        <div class="pedal-tread-v"></div>
+                    </div>
+                    <div class="flex flex-col items-center gap-0.5 pb-2 pointer-events-none">
+                        <i class="fa-solid fa-gauge-high text-emerald-400 text-xs"></i>
+                        <span class="font-gta text-[10px] font-bold text-emerald-200 tracking-wider">ГАЗ</span>
+                    </div>
                 </button>
             </div>
 
-            <!-- Secondary Touch Row: Sprint/Nitro & Flex Emote -->
+            <!-- Upper Row: Sprint/Nitro Toggle & Jump Button -->
             <div class="flex items-center gap-1.5 sm:gap-2">
-                <button id="btn-action-emote" type="button" class="btn-game hud-glass hover:bg-slate-800/90 text-white px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl flex items-center gap-1.5 text-xs font-bold touch-none">
-                    <i class="fa-solid fa-bolt text-amber-400"></i>
-                    <span class="hidden sm:inline">Флекс (F)</span>
+                <button id="btn-action-sprint" type="button" class="lg:hidden btn-game hud-glass text-sky-300 border border-sky-400/40 px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl flex items-center gap-1.5 text-xs font-bold touch-none" aria-pressed="false" title="Нитро / Турбо (переключатель)">
+                    <i class="fa-solid fa-fire-flame-curved text-amber-400" id="turbo-icon"></i>
+                    <span id="turbo-label">Турбо</span>
                 </button>
-                <button id="btn-action-sprint" type="button" class="lg:hidden btn-game hud-glass active:bg-sky-600/60 text-sky-300 border border-sky-400/40 px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl flex items-center gap-1.5 text-xs font-bold touch-none">
-                    <i class="fa-solid fa-fire-flame-curved text-sky-400"></i>
-                    <span>Турбо</span>
-                </button>
-            </div>
-
-            <!-- Primary Row: Jump / Handbrake Drift & Main Context Action (E) -->
-            <div class="flex items-center gap-2">
-                <button id="btn-action-jump" type="button" class="btn-game hud-glass hover:bg-slate-800/90 active:bg-indigo-600/60 text-white px-3.5 py-3 sm:py-2.5 rounded-2xl sm:rounded-xl flex items-center gap-2 text-xs font-bold border border-sky-400/30 shadow-lg touch-none">
+                <button id="btn-action-jump" type="button" class="btn-game hud-glass hover:bg-slate-800/90 active:bg-indigo-600/60 text-white px-3.5 py-2 sm:py-2.5 rounded-xl flex items-center gap-1.5 text-xs font-bold border border-sky-400/30 shadow-lg touch-none" title="Прыжок (Пробел)">
                     <i class="fa-solid fa-arrow-up text-sky-400" id="jump-btn-icon"></i>
                     <span id="jump-btn-label">Прыжок</span>
                 </button>
-                <button id="btn-action-interact" type="button" class="btn-game bg-amber-500 hover:bg-amber-400 text-slate-950 px-4 py-3 sm:py-2.5 rounded-2xl sm:rounded-xl flex items-center gap-2 text-xs font-extrabold shadow-xl border border-amber-300 touch-none">
+            </div>
+
+            <!-- Primary Bottom Row: Flex Emote & Main Context Action (E) -->
+            <div class="flex items-center gap-1.5 sm:gap-2">
+                <button id="btn-action-emote" type="button" class="btn-game hud-glass hover:bg-slate-800/90 text-white w-9 h-9 sm:w-auto px-2.5 py-2 sm:px-3 sm:py-2.5 rounded-xl flex items-center justify-center gap-1 text-xs font-bold touch-none" title="Флекс (F)">
+                    <i class="fa-solid fa-bolt text-amber-400"></i>
+                    <span class="hidden sm:inline">Флекс</span>
+                </button>
+                <button id="btn-action-interact" type="button" class="btn-game bg-amber-500 hover:bg-amber-400 text-slate-950 px-3.5 py-2 sm:py-2.5 rounded-xl flex items-center gap-1.5 text-xs font-extrabold shadow-xl border border-amber-300 touch-none">
                     <i class="fa-solid fa-hand-pointer"></i>
                     <span id="action-btn-label">Действие (E)</span>
                 </button>

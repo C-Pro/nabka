@@ -94,3 +94,145 @@
         #npc-dialogue-modal {
             bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
         }
+
+        /* Mobile Directional Arrow Buttons (D-Pad) */
+        .dpad-btn {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 23, 42, 0.78);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            color: #bae6fd;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+            transition: transform 0.08s ease, background 0.08s ease, box-shadow 0.08s ease, color 0.08s ease;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .dpad-btn:active, .dpad-btn.touch-active {
+            background: rgba(14, 165, 233, 0.65);
+            border-color: rgba(186, 230, 253, 0.9);
+            color: #ffffff;
+            box-shadow: 0 0 14px rgba(56, 189, 248, 0.75), inset 0 2px 4px rgba(0, 0, 0, 0.3);
+            transform: scale(0.92);
+        }
+
+        /* Steering Buttons (Enlarged Left & Right paddles) */
+        .dpad-btn-steer {
+            background: linear-gradient(180deg, rgba(30, 41, 59, 0.88) 0%, rgba(15, 23, 42, 0.95) 100%);
+            border: 1.5px solid rgba(56, 189, 248, 0.45);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        }
+        .dpad-btn-steer:active, .dpad-btn-steer.touch-active {
+            background: linear-gradient(180deg, rgba(14, 165, 233, 0.75) 0%, rgba(2, 132, 199, 0.88) 100%);
+            border-color: rgba(186, 230, 253, 0.95);
+            box-shadow: 0 0 18px rgba(56, 189, 248, 0.85), inset 0 2px 4px rgba(0, 0, 0, 0.3);
+            transform: scale(0.96);
+        }
+
+        /* Automotive Pedals */
+        .car-pedal {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            border-radius: 0.75rem;
+            cursor: pointer;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            transform-origin: bottom center;
+            transition: transform 0.08s ease-out, box-shadow 0.08s ease-out, filter 0.08s ease-out, border-color 0.08s ease-out;
+        }
+
+        /* Brake Pedal: smaller, wider proportion, to the left of gas */
+        .car-pedal-brake {
+            width: 3.75rem;
+            height: 4rem;
+            border: 2px solid rgba(244, 63, 94, 0.45);
+            background: linear-gradient(180deg, #3f1d24 0%, #261217 50%, #160a0d 100%);
+            box-shadow: 0 6px 14px rgba(0, 0, 0, 0.7), inset 0 1px 1px rgba(255, 255, 255, 0.2), inset 0 -2px 4px rgba(0, 0, 0, 0.7);
+        }
+        .car-pedal-brake:active, .car-pedal-brake.touch-active {
+            transform: perspective(300px) rotateX(15deg) translateY(4px);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.8), 0 0 18px rgba(244, 63, 94, 0.7);
+            border-color: rgba(251, 113, 133, 0.9);
+            filter: brightness(1.2);
+        }
+
+        /* Gas Pedal: taller, narrower, to the right of brake */
+        .car-pedal-gas {
+            width: 2.75rem;
+            height: 6.25rem;
+            border: 2px solid rgba(16, 185, 129, 0.45);
+            background: linear-gradient(180deg, #132e22 0%, #0c2017 50%, #06130e 100%);
+            box-shadow: 0 6px 14px rgba(0, 0, 0, 0.7), inset 0 1px 1px rgba(255, 255, 255, 0.2), inset 0 -2px 4px rgba(0, 0, 0, 0.7);
+        }
+        .car-pedal-gas:active, .car-pedal-gas.touch-active {
+            transform: perspective(300px) rotateX(15deg) translateY(5px);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.8), 0 0 18px rgba(16, 185, 129, 0.7);
+            border-color: rgba(52, 211, 153, 0.9);
+            filter: brightness(1.2);
+        }
+
+        /* Pedal Treads */
+        .pedal-treads-horizontal {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            width: 78%;
+            margin-top: 6px;
+            pointer-events: none;
+        }
+        .pedal-tread-h {
+            height: 3px;
+            width: 100%;
+            background: rgba(15, 23, 42, 0.85);
+            border-top: 1px solid rgba(255, 255, 255, 0.15);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.8);
+            border-radius: 2px;
+        }
+
+        .pedal-treads-vertical {
+            display: flex;
+            flex-direction: row;
+            gap: 4px;
+            height: 52%;
+            margin-top: 8px;
+            pointer-events: none;
+        }
+        .pedal-tread-v {
+            width: 3px;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.85);
+            border-left: 1px solid rgba(255, 255, 255, 0.15);
+            border-right: 1px solid rgba(0, 0, 0, 0.8);
+            border-radius: 2px;
+        }
+
+        /* Nitro / Turbo Toggle Active State */
+        .turbo-active {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.92) 0%, rgba(234, 88, 12, 0.98) 100%) !important;
+            border-color: #fde047 !important;
+            color: #ffffff !important;
+            box-shadow: 0 0 16px rgba(245, 158, 11, 0.85), inset 0 1px 2px rgba(255, 255, 255, 0.4) !important;
+            transform: scale(0.96);
+        }
+        .turbo-active #turbo-icon {
+            color: #fef08a !important;
+            animation: flamePulse 0.8s ease-in-out infinite alternate;
+        }
+        @keyframes flamePulse {
+            from {
+                transform: scale(1);
+                filter: drop-shadow(0 0 2px #f59e0b);
+            }
+            to {
+                transform: scale(1.25);
+                filter: drop-shadow(0 0 8px #ef4444);
+            }
+        }
