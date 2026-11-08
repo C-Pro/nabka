@@ -33,13 +33,23 @@ export function bindInputControls(worldMap = {}) {
     if (typeof document === 'undefined' || typeof window === 'undefined') return;
     const canvas = document.getElementById('three-canvas');
 
-    const unlockAudioOnce = () => {
+    const unlockAudio = () => {
         SoundManager.ensureInit();
+        if (SoundManager.ctx && SoundManager.ctx.state === 'running') {
+            window.removeEventListener('mousedown', unlockAudio);
+            window.removeEventListener('keydown', unlockAudio);
+            window.removeEventListener('touchstart', unlockAudio);
+            window.removeEventListener('touchend', unlockAudio);
+            window.removeEventListener('pointerup', unlockAudio);
+            window.removeEventListener('click', unlockAudio);
+        }
     };
-    window.addEventListener('mousedown', unlockAudioOnce, { once: true });
-    window.addEventListener('keydown', unlockAudioOnce, { once: true });
-    window.addEventListener('touchstart', unlockAudioOnce, { once: true, passive: true });
-    window.addEventListener('touchend', unlockAudioOnce, { once: true, passive: true });
+    window.addEventListener('mousedown', unlockAudio);
+    window.addEventListener('keydown', unlockAudio);
+    window.addEventListener('touchstart', unlockAudio, { passive: true });
+    window.addEventListener('touchend', unlockAudio, { passive: true });
+    window.addEventListener('pointerup', unlockAudio, { passive: true });
+    window.addEventListener('click', unlockAudio, { passive: true });
 
     const questBody = document.getElementById('quest-details-body');
     const questIcon = document.getElementById('quest-toggle-icon');
@@ -256,7 +266,11 @@ export function bindInputControls(worldMap = {}) {
                 }
             }
         };
-        canvas.addEventListener('touchend', releaseCameraTouch, { passive: true });
+        const handleCameraTouchEnd = (e) => {
+            SoundManager.ensureInit();
+            releaseCameraTouch(e);
+        };
+        canvas.addEventListener('touchend', handleCameraTouchEnd, { passive: true });
         canvas.addEventListener('touchcancel', releaseCameraTouch, { passive: true });
     }
 
@@ -317,6 +331,7 @@ export function bindInputControls(worldMap = {}) {
 
         const endJoystickTouch = (e) => {
             e.stopPropagation();
+            SoundManager.ensureInit();
             if (joystickTouchId === null) return;
             for (let i = 0; i < e.changedTouches.length; i++) {
                 if (e.changedTouches[i].identifier === joystickTouchId) {
@@ -342,6 +357,7 @@ export function bindInputControls(worldMap = {}) {
         };
         const handleUp = (e) => {
             e.stopPropagation();
+            SoundManager.ensureInit();
             el.classList.remove('touch-active');
             onUp();
         };

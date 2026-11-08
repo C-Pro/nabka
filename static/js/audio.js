@@ -614,6 +614,15 @@ export const SoundManager = {
         const src = this.ctx.createBufferSource();
         src.buffer = this.ambienceBuffer;
         src.loop = true;
+        src.onended = () => {
+            if (this.ambienceSource === src) {
+                this.ambienceSource = null;
+                this.ambiencePlaying = false;
+                if (this.ctx && this.ctx.state === 'running' && this.ambienceBuffer) {
+                    this.startAmbienceLoop();
+                }
+            }
+        };
 
         if (!this.ambienceGain) {
             this.ambienceGain = this.ctx.createGain();
@@ -642,16 +651,33 @@ export const SoundManager = {
     },
 
     startDiveLoop() {
-        if (!this.ctx || !this.diveBuffer || !this.diveGain) return;
+        if (!this.ctx || !this.diveBuffer) return;
         if (this.diveSource) {
             try { this.diveSource.stop(); } catch (e) {}
             try { this.diveSource.disconnect(); } catch (e) {}
+            this.diveSource = null;
         }
         const src = this.ctx.createBufferSource();
         src.buffer = this.diveBuffer;
         src.loop = true;
+        src.onended = () => {
+            if (this.diveSource === src) {
+                this.diveSource = null;
+                this.divePlaying = false;
+                if (this.isUnderwater && this.ctx && this.ctx.state === 'running' && this.diveBuffer) {
+                    this.startDiveLoop();
+                }
+            }
+        };
+        if (!this.diveGain) {
+            this.diveGain = this.ctx.createGain();
+            this.diveGain.gain.value = 0;
+            this.diveGain.connect(this.masterGain);
+        }
         src.connect(this.diveGain);
-        src.start(0);
+        try {
+            src.start(0);
+        } catch (e) {}
         this.diveSource = src;
         this.divePlaying = true;
     },
@@ -683,13 +709,24 @@ export const SoundManager = {
                     console.warn('Audio resume error:', e);
                 }
             }
-            if (this.ambienceBuffer && !this.ambienceSource) {
-                this.startAmbienceLoop();
+            if (this.ctx && this.ctx.state === 'running') {
+                if (this.ambienceBuffer && (!this.ambienceSource || !this.ambiencePlaying)) {
+                    this.startAmbienceLoop();
+                }
+                if (this.isUnderwater && this.diveBuffer && (!this.diveSource || !this.divePlaying)) {
+                    this.startDiveLoop();
+                }
             }
-            if (this.isUnderwater && this.diveBuffer && !this.divePlaying) this.startDiveLoop();
             return;
         }
-        if (this._initPromise) return this._initPromise;
+        if (this._initPromise) {
+            if (this.ctx && this.ctx.state === 'suspended') {
+                try {
+                    this.ctx.resume();
+                } catch (e) {}
+            }
+            return this._initPromise;
+        }
         this._initPromise = (async () => {
             if (typeof window === 'undefined') return;
             try {
@@ -1364,7 +1401,7 @@ export const SoundManager = {
         if (res && (res.status === 'played' || res.status === 'played_fallback' || res.status === 'muted')) {
             return res;
         }
-        if (typeof document === 'undefined') return res;
+        if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return res;
 
         const deadline = Date.now() + maxWaitMs;
         const retry = () => {
@@ -1392,12 +1429,18 @@ export const SoundManager = {
                 document.removeEventListener('pointerdown', retry);
                 document.removeEventListener('keydown', retry);
                 document.removeEventListener('touchstart', retry);
+                document.removeEventListener('touchend', retry);
+                document.removeEventListener('pointerup', retry);
+                document.removeEventListener('click', retry);
             }
         };
 
         document.addEventListener('pointerdown', retry, { passive: true });
         document.addEventListener('keydown', retry, { passive: true });
         document.addEventListener('touchstart', retry, { passive: true });
+        document.addEventListener('touchend', retry, { passive: true });
+        document.addEventListener('pointerup', retry, { passive: true });
+        document.addEventListener('click', retry, { passive: true });
 
         setTimeout(cleanup, maxWaitMs);
         return res;
@@ -1408,6 +1451,9 @@ export const SoundManager = {
             return this.playCannonShot();
         }
         if (!this.initialized || !getGameState().sfxEnabled || !this.ctx) return;
+        if (this.ctx.state === 'suspended') {
+            try { this.ctx.resume(); } catch (e) {}
+        }
         try {
             const now = this.ctx.currentTime;
             if (type === 'jump') {

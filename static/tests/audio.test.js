@@ -666,5 +666,55 @@ describe('SoundManager MP3 Audio Engine', () => {
         // turboGain must be suppressed to 0, never set to synthetic whistling levels
         expect(SoundManager.turboGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 10.0, 0.06);
     });
+
+    test('ensureInit resumes suspended context and restarts ambience loop when running', async () => {
+        mockCtx.state = 'suspended';
+        mockCtx.resume = mock(async () => {
+            mockCtx.state = 'running';
+        });
+
+        SoundManager.ambienceBuffer = { duration: 25.0 };
+        SoundManager.ambienceSource = null;
+        SoundManager.ambiencePlaying = false;
+
+        await SoundManager.ensureInit();
+
+        expect(mockCtx.resume).toHaveBeenCalled();
+        expect(SoundManager.ambiencePlaying).toBe(true);
+        expect(SoundManager.ambienceSource).not.toBeNull();
+    });
+
+    test('playActionSound triggers context resume when context is suspended', () => {
+        mockCtx.state = 'suspended';
+        mockCtx.resume = mock(async () => {
+            mockCtx.state = 'running';
+        });
+
+        SoundManager.playActionSound('jump');
+
+        expect(mockCtx.resume).toHaveBeenCalled();
+    });
+
+    test('playCannonShotWithRetry binds touchend and pointerup for mobile activation', () => {
+        mockCtx.state = 'suspended';
+        const listeners = [];
+        const origDoc = globalThis.document;
+        globalThis.document = {
+            addEventListener: mock((ev, fn) => { listeners.push(ev); }),
+            removeEventListener: mock((ev, fn) => {
+                const idx = listeners.indexOf(ev);
+                if (idx !== -1) listeners.splice(idx, 1);
+            })
+        };
+
+        try {
+            SoundManager.playCannonShotWithRetry(1000);
+            expect(listeners).toContain('touchend');
+            expect(listeners).toContain('pointerup');
+            expect(listeners).toContain('click');
+        } finally {
+            globalThis.document = origDoc;
+        }
+    });
 });
 

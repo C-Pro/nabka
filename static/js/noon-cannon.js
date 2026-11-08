@@ -204,6 +204,8 @@ export class NoonCannonScheduler {
             document.addEventListener('visibilitychange', this.boundCheck);
             document.addEventListener('click', this.boundAudioRetry, { passive: true });
             document.addEventListener('keydown', this.boundAudioRetry, { passive: true });
+            document.addEventListener('touchend', this.boundAudioRetry, { passive: true });
+            document.addEventListener('pointerup', this.boundAudioRetry, { passive: true });
         }
         if (typeof window !== 'undefined' && window.addEventListener) {
             window.addEventListener('focus', this.boundCheck);
@@ -226,6 +228,8 @@ export class NoonCannonScheduler {
             document.removeEventListener('visibilitychange', this.boundCheck);
             document.removeEventListener('click', this.boundAudioRetry);
             document.removeEventListener('keydown', this.boundAudioRetry);
+            document.removeEventListener('touchend', this.boundAudioRetry);
+            document.removeEventListener('pointerup', this.boundAudioRetry);
         }
         if (typeof window !== 'undefined' && window.removeEventListener) {
             window.removeEventListener('focus', this.boundCheck);

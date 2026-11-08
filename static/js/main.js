@@ -39,6 +39,8 @@ if (typeof window !== 'undefined') {
     };
     window.addEventListener('click', handleGestureAudioUnlock, { passive: true });
     window.addEventListener('keydown', handleGestureAudioUnlock, { passive: true });
+    window.addEventListener('touchend', handleGestureAudioUnlock, { passive: true });
+    window.addEventListener('pointerup', handleGestureAudioUnlock, { passive: true });
 }
 
 export function updateThirdPersonCamera(dt = 0.016) {

@@ -220,6 +220,16 @@ export const MultiplayerClient = {
             });
         }
 
+        const connectBtn = document.getElementById('mp-connect-btn');
+        if (connectBtn) {
+            const unlockOnConnect = () => {
+                SoundManager.ensureInit();
+            };
+            connectBtn.addEventListener('click', unlockOnConnect);
+            connectBtn.addEventListener('touchend', unlockOnConnect);
+            connectBtn.addEventListener('pointerup', unlockOnConnect);
+        }
+
         if (loginForm) {
             loginForm.addEventListener('submit', (e) => {
                 e.preventDefault();
