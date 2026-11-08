@@ -415,18 +415,91 @@ export function isLocalLabelsVisible() {
     return now < localLabelsVisibleUntil;
 }
 
+let _scratchVec = null;
+function getScratchVec() {
+    if (!_scratchVec && typeof THREE !== 'undefined' && THREE.Vector3) {
+        _scratchVec = new THREE.Vector3();
+    }
+    return _scratchVec;
+}
+
+let _cachedDoc = null;
+let _cachedContainer = null;
+let _cachedContainerWidth = 0;
+let _cachedContainerHeight = 0;
+let _cachedNametag = null;
+let _cachedNametagPill = null;
+let _cachedPlayerBubble = null;
+let _cachedDunyaTag = null;
+let _cachedPetPill = null;
+let _cachedDunyaBubble = null;
+let _cachedZoneEl = null;
+let _cachedCoordsEl = null;
+let _lastCoordsText = '';
+let _lastZoneText = '';
+
+let _cachedRadarCanvas = null;
+let _cachedRadarCtx = null;
+let _lastRadarDrawTime = 0;
+let _lastRadarPx = 999999;
+let _lastRadarPz = 999999;
+let _lastRadarYaw = 999999;
+
 export function updateScreenProjections({ camera, playerPos, dunya, worldLabels, npcs, remotePlayers }) {
-    const container = document.getElementById('game-canvas-container');
+    if (typeof document !== 'undefined' && _cachedDoc !== document) {
+        _cachedDoc = document;
+        _cachedContainer = null;
+        _cachedContainerWidth = 0;
+        _cachedContainerHeight = 0;
+        _cachedNametag = null;
+        _cachedNametagPill = null;
+        _cachedPlayerBubble = null;
+        _cachedDunyaTag = null;
+        _cachedPetPill = null;
+        _cachedDunyaBubble = null;
+        _cachedZoneEl = null;
+        _cachedCoordsEl = null;
+    }
+
+    if (!_cachedContainer && typeof document !== 'undefined') {
+        _cachedContainer = document.getElementById('game-canvas-container');
+    }
+    const container = _cachedContainer;
     if (!container || !camera) return;
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+
+    // Refresh dimensions on initial read or when resized
+    if (_cachedContainerWidth === 0 || _cachedContainerHeight === 0) {
+        const winW = (typeof window !== 'undefined' && window.innerWidth) || 1280;
+        const winH = (typeof window !== 'undefined' && window.innerHeight) || 720;
+        _cachedContainerWidth = container.clientWidth || winW;
+        _cachedContainerHeight = container.clientHeight || winH;
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+            window.addEventListener('resize', () => {
+                if (_cachedContainer) {
+                    _cachedContainerWidth = _cachedContainer.clientWidth || window.innerWidth;
+                    _cachedContainerHeight = _cachedContainer.clientHeight || window.innerHeight;
+                }
+            }, { passive: true });
+        }
+    }
+    const width = _cachedContainerWidth;
+    const height = _cachedContainerHeight;
 
     const showLocal = isLocalLabelsVisible() && !GAME_STATE.inVehicle;
 
-    const nametag = document.getElementById('player-nametag');
-    const nametagPill = document.getElementById('player-nametag-pill');
-    const playerBubble = document.getElementById('player-speech-bubble');
+    if (!_cachedNametag && typeof document !== 'undefined') {
+        _cachedNametag = document.getElementById('player-nametag');
+        _cachedNametagPill = document.getElementById('player-nametag-pill');
+        _cachedPlayerBubble = document.getElementById('player-speech-bubble');
+    }
+    const nametag = _cachedNametag;
+    const nametagPill = _cachedNametagPill;
+    const playerBubble = _cachedPlayerBubble;
     const hasPlayerBubble = Boolean(playerBubble && !playerBubble.classList.contains('hidden'));
+
+    const scratch = getScratchVec();
+    const hasFullScratch = Boolean(scratch && typeof scratch.set === 'function' && typeof scratch.project === 'function');
+    const hasCopyScratch = Boolean(scratch && typeof scratch.copy === 'function' && typeof scratch.project === 'function');
 
     if (nametag) {
         if (!GAME_STATE.isConnected || (!showLocal && !hasPlayerBubble)) {
@@ -435,8 +508,13 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
         } else {
             const playerDist = camera.position.distanceTo(playerPos);
             const pMetrics = getLabelDistanceMetrics(playerDist);
-            const headWorldPos = playerPos.clone().add(new THREE.Vector3(0, GAME_STATE.inVehicle ? 2.4 : 2.95, 0));
-            headWorldPos.project(camera);
+            const headY = (playerPos.y || 0) + (GAME_STATE.inVehicle ? 2.4 : 2.95);
+            let headWorldPos;
+            if (hasFullScratch) {
+                headWorldPos = scratch.set(playerPos.x, headY, playerPos.z).project(camera);
+            } else {
+                headWorldPos = playerPos.clone().add(new THREE.Vector3(0, GAME_STATE.inVehicle ? 2.4 : 2.95, 0)).project(camera);
+            }
 
             if (pMetrics.visible && headWorldPos.z < 1) {
                 const sx = (headWorldPos.x * 0.5 + 0.5) * width;
@@ -455,9 +533,14 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
         }
     }
 
-    const dunyaTag = document.getElementById('dunya-nametag');
-    const petPill = document.getElementById('pet-nametag-pill');
-    const dunyaBubble = document.getElementById('dunya-speech-bubble');
+    if (!_cachedDunyaTag && typeof document !== 'undefined') {
+        _cachedDunyaTag = document.getElementById('dunya-nametag');
+        _cachedPetPill = document.getElementById('pet-nametag-pill');
+        _cachedDunyaBubble = document.getElementById('dunya-speech-bubble');
+    }
+    const dunyaTag = _cachedDunyaTag;
+    const petPill = _cachedPetPill;
+    const dunyaBubble = _cachedDunyaBubble;
     const hasDunyaBubble = Boolean(dunyaBubble && !dunyaBubble.classList.contains('hidden'));
 
     if (dunyaTag && dunya && dunya.group) {
@@ -468,8 +551,12 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
             const dunyaDist = camera.position.distanceTo(dunya.position);
             const dMetrics = getLabelDistanceMetrics(dunyaDist);
             const headYOffset = 1.05 - (dunya.lieDownProgress || 0) * 0.22;
-            const dunyaHeadPos = dunya.position.clone().add(new THREE.Vector3(0, headYOffset, 0));
-            dunyaHeadPos.project(camera);
+            let dunyaHeadPos;
+            if (hasFullScratch) {
+                dunyaHeadPos = scratch.set(dunya.position.x, dunya.position.y + headYOffset, dunya.position.z).project(camera);
+            } else {
+                dunyaHeadPos = dunya.position.clone().add(new THREE.Vector3(0, headYOffset, 0)).project(camera);
+            }
             if (dMetrics.visible && dunyaHeadPos.z < 1 && GAME_STATE.cameraMode !== 3) {
                 const dxScreen = (dunyaHeadPos.x * 0.5 + 0.5) * width;
                 const dyScreen = (-dunyaHeadPos.y * 0.5 + 0.5) * height;
@@ -495,7 +582,12 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
             item.el.style.display = 'none';
             return;
         }
-        const p = item.pos.clone().project(camera);
+        let p;
+        if (hasCopyScratch) {
+            p = scratch.copy(item.pos).project(camera);
+        } else {
+            p = item.pos.clone().project(camera);
+        }
         if (p.z < 1) {
             const lx = (p.x * 0.5 + 0.5) * width;
             const ly = (-p.y * 0.5 + 0.5) * height;
@@ -518,8 +610,12 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
             npc.labelEl.style.display = 'none';
             return;
         }
-        const npcHead = npc.group.position.clone().add(new THREE.Vector3(0, 2.35, 0));
-        npcHead.project(camera);
+        let npcHead;
+        if (hasFullScratch) {
+            npcHead = scratch.set(npc.group.position.x, npc.group.position.y + 2.35, npc.group.position.z).project(camera);
+        } else {
+            npcHead = npc.group.position.clone().add(new THREE.Vector3(0, 2.35, 0)).project(camera);
+        }
         if (npcHead.z < 1) {
             const nx = (npcHead.x * 0.5 + 0.5) * width;
             const ny = (-npcHead.y * 0.5 + 0.5) * height;
@@ -542,8 +638,13 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
             rp.tagWrapper.style.display = 'none';
             return;
         }
-        const worldAnchor = rp.group.position.clone().add(new THREE.Vector3(0, rp.mode === 'driving' ? 2.45 : 2.95, 0));
-        worldAnchor.project(camera);
+        const anchorY = (rp.group.position.y || 0) + (rp.mode === 'driving' ? 2.45 : 2.95);
+        let worldAnchor;
+        if (hasFullScratch) {
+            worldAnchor = scratch.set(rp.group.position.x, anchorY, rp.group.position.z).project(camera);
+        } else {
+            worldAnchor = rp.group.position.clone().add(new THREE.Vector3(0, rp.mode === 'driving' ? 2.45 : 2.95, 0)).project(camera);
+        }
         if (worldAnchor.z < 1) {
             const rx = (worldAnchor.x * 0.5 + 0.5) * width;
             const ry = (-worldAnchor.y * 0.5 + 0.5) * height;
@@ -559,9 +660,32 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
 }
 
 export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlayers }) {
-    const canvas = document.getElementById('radar-canvas');
+    if (!_cachedRadarCanvas && typeof document !== 'undefined') {
+        _cachedRadarCanvas = document.getElementById('radar-canvas');
+        if (_cachedRadarCanvas) {
+            _cachedRadarCtx = _cachedRadarCanvas.getContext('2d');
+        }
+    }
+    const canvas = _cachedRadarCanvas;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+
+    // Skip drawing when radar container or canvas is hidden (e.g. mobile breakpoint)
+    if (canvas.offsetParent === null || canvas.clientWidth === 0) return;
+
+    const px = playerPos.x;
+    const pz = playerPos.z;
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
+    // Throttle radar redrawing when player and camera are stationary (up to 20fps or on motion)
+    const moved = Math.abs(px - _lastRadarPx) > 0.08 || Math.abs(pz - _lastRadarPz) > 0.08 || Math.abs(GAME_STATE.cameraYaw - _lastRadarYaw) > 0.015;
+    if (!moved && now - _lastRadarDrawTime < 50) return;
+    _lastRadarDrawTime = now;
+    _lastRadarPx = px;
+    _lastRadarPz = pz;
+    _lastRadarYaw = GAME_STATE.cameraYaw;
+
+    const ctx = _cachedRadarCtx || canvas.getContext('2d');
+    if (!ctx) return;
     const w = canvas.width;
     const h = canvas.height;
     const cx = w / 2;
@@ -573,9 +697,6 @@ export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlay
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(GAME_STATE.cameraYaw);
-
-    const px = playerPos.x;
-    const pz = playerPos.z;
 
     ctx.fillStyle = '#0369a1';
     ctx.fillRect((-220 - px) * scale, (-220 - pz) * scale, 205 * scale, 440 * scale);
@@ -779,12 +900,28 @@ export function checkProximityInteractions({ playerPos, npcs, interactables, dun
             }
         }
 
+        if (typeof document !== 'undefined' && _cachedDoc !== document) {
+            _cachedDoc = document;
+            _cachedZoneEl = null;
+            _cachedCoordsEl = null;
+        }
+
         const x = playerPos.x;
         const z = playerPos.z;
+        const roundX = Math.round(x);
+        const roundZ = Math.round(z);
+        const coordsText = `X: ${roundX} | Z: ${roundZ}`;
+        if (coordsText !== _lastCoordsText) {
+            _lastCoordsText = coordsText;
+            if (!_cachedCoordsEl) _cachedCoordsEl = document.getElementById('coords-display');
+            if (_cachedCoordsEl) _cachedCoordsEl.textContent = coordsText;
+        }
+
         const zone = resolveZoneName(x, z, worldMap);
-        const zoneEl = document.getElementById('location-zone-label');
-        if (zoneEl) zoneEl.textContent = zone;
-        const coordsEl = document.getElementById('coords-display');
-        if (coordsEl) coordsEl.textContent = `X: ${Math.round(x)} | Z: ${Math.round(z)}`;
+        if (zone !== _lastZoneText) {
+            _lastZoneText = zone;
+            if (!_cachedZoneEl) _cachedZoneEl = document.getElementById('location-zone-label');
+            if (_cachedZoneEl) _cachedZoneEl.textContent = zone;
+        }
     }
 }

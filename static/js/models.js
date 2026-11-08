@@ -2193,6 +2193,24 @@ export const ModelLoader = {
                     if (url) registerModelBoundingBox(url, bbox);
                 }
             }
+            if (url && (
+                url.includes('sopka') ||
+                url.includes('fish_') ||
+                url.includes('jellyfish') ||
+                url.includes('starfish_') ||
+                url.includes('laminaria') ||
+                url.includes('seagull') ||
+                url.includes('tanker') ||
+                url.includes('yacht_club_pier')
+            )) {
+                if (typeof instance.traverse === 'function') {
+                    instance.traverse(c => {
+                        if (c.isMesh) {
+                            c.castShadow = false;
+                        }
+                    });
+                }
+            }
         }
         return instance;
     }

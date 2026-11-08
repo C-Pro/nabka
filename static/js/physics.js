@@ -944,12 +944,17 @@ export function resolveVehicleToVehicleCollisions(cars, dt) {
 
             if (invMassA + invMassB === 0) continue;
 
+            const cdx = (Number(carB.x) || 0) - (Number(carA.x) || 0);
+            const cdz = (Number(carB.z) || 0) - (Number(carA.z) || 0);
+            const maxRadiusA = (carA.axleOffset || CAR_SPECS.axleOffset) + (carA.collisionRadius || CAR_SPECS.collisionRadius);
+            const maxRadiusB = (carB.axleOffset || CAR_SPECS.axleOffset) + (carB.collisionRadius || CAR_SPECS.collisionRadius);
+            const maxSeparation = maxRadiusA + maxRadiusB;
+            if (cdx * cdx + cdz * cdz > maxSeparation * maxSeparation) continue;
+
             // Re-evaluate circles on demand so prior pair displacement is not stale
             const circlesA = getVehicleCollisionCircles(carA, carA.axleOffset, carA.collisionRadius);
             const circlesB = getVehicleCollisionCircles(carB, carB.axleOffset, carB.collisionRadius);
 
-            const cdx = (Number(carB.x) || 0) - (Number(carA.x) || 0);
-            const cdz = (Number(carB.z) || 0) - (Number(carA.z) || 0);
             const cdist = Math.hypot(cdx, cdz);
             const fallbackNx = cdist > 0.0001 ? cdx / cdist : 1;
             const fallbackNz = cdist > 0.0001 ? cdz / cdist : 0;
@@ -1115,15 +1120,20 @@ export function resolveVehicleWorldCollision(car, colliders, bounds = null) {
             const offset = circleName === 'front' ? (car.axleOffset || CAR_SPECS.axleOffset) : (circleName === 'rear' ? -(car.axleOffset || CAR_SPECS.axleOffset) : 0);
             const circleRadius = car.collisionRadius || CAR_SPECS.collisionRadius;
 
-            // Static world colliders (recompute circleX/Z dynamically inside collider loop)
+            // Static world colliders
             const carY = Number(car.y) || 0;
+            const yaw = Number(car.yaw) || 0;
+            const circleX = (Number(car.x) || 0) + offset * Math.sin(yaw);
+            const circleZ = (Number(car.z) || 0) + offset * Math.cos(yaw);
+
             for (const col of colliderList) {
                 if (col.minY !== undefined && carY + 2.0 < col.minY) continue;
                 if (col.height !== undefined && carY >= col.height - 0.52) continue;
 
-                const yaw = Number(car.yaw) || 0;
-                const circleX = (Number(car.x) || 0) + offset * Math.sin(yaw);
-                const circleZ = (Number(car.z) || 0) + offset * Math.cos(yaw);
+                const maxDim = col.type === 'circle' ? (col.radius || 0) : Math.max(col.halfW || 0, col.halfD || 0) * 1.42;
+                const maxExtent = maxDim + circleRadius;
+                if (Math.abs(circleX - col.x) > maxExtent || Math.abs(circleZ - col.z) > maxExtent) continue;
+
                 let nx = 0, nz = 0, overlap = 0;
 
                 if (col.type === 'circle') {
@@ -1296,6 +1306,7 @@ export function createVehiclePhysicsWorld(options = {}) {
                         allEvents.push(...events);
                     }
                     for (const v of vehicles) {
+                        if (v.isAwake === false && !v.remoteDriver) continue;
                         resolveVehicleWorldCollision(v, colliders, bounds);
                     }
                 }

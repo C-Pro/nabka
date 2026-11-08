@@ -64,7 +64,7 @@ export const World = {
 
         this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
         this.renderer.setSize(container.clientWidth, container.clientHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 1.5));
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -91,8 +91,9 @@ export const World = {
         this.sunLight = new THREE.DirectionalLight(0xff9e5e, 1.15);
         this.sunLight.position.set(-140, 85, -40);
         this.sunLight.castShadow = true;
-        this.sunLight.shadow.mapSize.width = 2048;
-        this.sunLight.shadow.mapSize.height = 2048;
+        this.sunLight.shadow.mapSize.width = 1024;
+        this.sunLight.shadow.mapSize.height = 1024;
+        this.sunLight.shadow.bias = -0.0004;
         this.sunLight.shadow.camera.near = 10;
         this.sunLight.shadow.camera.far = 350;
         const d = 110;
@@ -182,7 +183,7 @@ export const World = {
             if (slab.type === 'ocean' || slab.id === 'ocean') {
                 const westX = (slab.x || 0) - w / 2;
                 const oceanWidth = SHORE_X - westX;
-                const oceanGeo = new THREE.PlaneGeometry(oceanWidth, d, 64, 64);
+                const oceanGeo = new THREE.PlaneGeometry(oceanWidth, d, 32, 32);
                 oceanGeo.rotateX(-Math.PI / 2);
                 const oceanMat = new THREE.MeshStandardMaterial({
                     color: slab.color ?? 0x0369a1,
@@ -197,6 +198,27 @@ export const World = {
                     side: THREE.DoubleSide,
                     depthWrite: false
                 });
+                oceanMat.userData = oceanMat.userData || {};
+                oceanMat.userData.uWaveTime = { value: 0 };
+                oceanMat.userData.uOceanMeshPosX = { value: westX + oceanWidth / 2 };
+                oceanMat.onBeforeCompile = (shader) => {
+                    shader.uniforms.uWaveTime = oceanMat.userData.uWaveTime;
+                    shader.uniforms.uOceanMeshPosX = oceanMat.userData.uOceanMeshPosX;
+                    shader.vertexShader = `
+                        uniform float uWaveTime;
+                        uniform float uOceanMeshPosX;
+                    ` + shader.vertexShader;
+                    shader.vertexShader = shader.vertexShader.replace(
+                        '#include <begin_vertex>',
+                        `#include <begin_vertex>
+                        float vx = position.x;
+                        float vz = position.z;
+                        float worldX = uOceanMeshPosX + vx;
+                        float shoreFade = clamp((-24.0 - worldX) / 5.0, 0.0, 1.0);
+                        float waveY = shoreFade * (sin(vx * 0.08 + uWaveTime * 1.8) * 0.22 + cos(vz * 0.06 + uWaveTime * 1.4) * 0.18);
+                        transformed.y += waveY;`
+                    );
+                };
                 mesh = new THREE.Mesh(oceanGeo, oceanMat);
                 this.oceanMesh = mesh;
                 mesh.position.set(westX + oceanWidth / 2, SEA_SURFACE_Y, slab.z || 0);
@@ -281,6 +303,10 @@ export const World = {
             };
             this.scene.add(mesh);
             this.terrainMeshes.push(mesh);
+            if (mesh !== this.oceanMesh) {
+                if (typeof mesh.updateMatrix === 'function') mesh.updateMatrix();
+                mesh.matrixAutoUpdate = false;
+            }
         }
 
         this.buildSeabed();
@@ -316,6 +342,9 @@ export const World = {
         this.seabedMesh.name = 'seabedMesh';
         this.seabedMesh.position.x = centerX;
         this.seabedMesh.receiveShadow = true;
+        this.seabedMesh.castShadow = false;
+        if (typeof this.seabedMesh.updateMatrix === 'function') this.seabedMesh.updateMatrix();
+        this.seabedMesh.matrixAutoUpdate = false;
         this.scene.add(this.seabedMesh);
         this.terrainMeshes.push(this.seabedMesh);
     },
@@ -334,6 +363,13 @@ export const World = {
         const add = (url, builder, x, y, z) => {
             const group = ModelLoader.instantiate(url, builder);
             group.position.set(x, y, z);
+            if (typeof group.traverse === 'function') {
+                group.traverse(c => {
+                    if (c.isMesh) {
+                        c.castShadow = false;
+                    }
+                });
+            }
             this.scene.add(group);
             return group;
         };
@@ -370,6 +406,8 @@ export const World = {
                 const group = add(`models/starfish_${species}.glb`, () => ModelBuilders[`starfish_${species}`](), x, getSeabedHeightAt(x, z) + 0.02, z);
                 group.rotation.z = Math.atan((getSeabedHeightAt(x + 0.1, z) - getSeabedHeightAt(x - 0.1, z)) / 0.2);
                 group.rotation.y = unit(i, salt + 2) * Math.PI * 2;
+                if (typeof group.updateMatrix === 'function') group.updateMatrix();
+                group.matrixAutoUpdate = false;
                 this.starfish.push({ group, species });
             }
         }
@@ -390,15 +428,23 @@ export const World = {
             const post = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.3, 0.7), pillarMat);
             post.position.set(-14.6, 0.65, z);
             post.castShadow = true;
+            if (typeof post.updateMatrix === 'function') post.updateMatrix();
+            post.matrixAutoUpdate = false;
             this.scene.add(post);
 
             const cap = new THREE.Mesh(new THREE.SphereGeometry(0.38, 10, 10), pillarMat);
             cap.position.set(-14.6, 1.4, z);
+            cap.castShadow = false;
+            if (typeof cap.updateMatrix === 'function') cap.updateMatrix();
+            cap.matrixAutoUpdate = false;
             this.scene.add(cap);
 
             if (z + 10 <= 140 && !(Math.abs(z + 5) < 12) && !(z + 5 > 40 && z + 5 < 56)) {
                 const rail = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.2, 10), pillarMat);
                 rail.position.set(-14.6, 1.05, z + 5);
+                rail.castShadow = false;
+                if (typeof rail.updateMatrix === 'function') rail.updateMatrix();
+                rail.matrixAutoUpdate = false;
                 this.scene.add(rail);
             }
         }
@@ -559,6 +605,18 @@ export const World = {
             cordon.add(buildRibbonQuad(localBottomY));
         }
 
+        cordon.matrixAutoUpdate = false;
+        if (typeof cordon.traverse === 'function') {
+            cordon.traverse(child => {
+                if (child.isMesh) {
+                    child.castShadow = false;
+                    child.receiveShadow = false;
+                }
+                if (typeof child.updateMatrix === 'function') child.updateMatrix();
+                child.matrixAutoUpdate = false;
+            });
+        }
+
         group.add(cordon);
         return cordon;
     },
@@ -703,6 +761,18 @@ export const World = {
             }
         }
 
+        fence.matrixAutoUpdate = false;
+        if (typeof fence.traverse === 'function') {
+            fence.traverse(child => {
+                if (child.isMesh) {
+                    child.castShadow = false;
+                    child.receiveShadow = false;
+                }
+                if (typeof child.updateMatrix === 'function') child.updateMatrix();
+                child.matrixAutoUpdate = false;
+            });
+        }
+
         group.add(fence);
         return fence;
     },
@@ -836,6 +906,10 @@ export const World = {
                 this.registerWorldLabel(lm.label.text, lm.label.x, lm.label.y, lm.label.z);
             }
 
+            if (!lm.isFerrisWheel && lm.id !== 'ferris_wheel' && !lm.hasFountainParticles && lm.id !== 'fountain') {
+                if (typeof group.updateMatrix === 'function') group.updateMatrix();
+                group.matrixAutoUpdate = false;
+            }
             this.scene.add(group);
             this.landmarkGroups.push(group);
         }
@@ -852,6 +926,8 @@ export const World = {
     buildBronzeTigerStatue(x, z) {
         const group = ModelLoader.instantiate('models/tiger_statue.glb', () => ModelBuilders.tiger_statue());
         group.position.set(x, 0, z);
+        if (typeof group.updateMatrix === 'function') group.updateMatrix();
+        group.matrixAutoUpdate = false;
         this.scene.add(group);
         return group;
     },
@@ -875,6 +951,8 @@ export const World = {
                 editorId: s.id,
                 configRef: s
             };
+            if (typeof group.updateMatrix === 'function') group.updateMatrix();
+            group.matrixAutoUpdate = false;
             this.scene.add(group);
             this.stallGroups.push(group);
 
@@ -921,6 +999,8 @@ export const World = {
                 editorIndex: idx,
                 configRef: entry
             };
+            if (typeof boat.updateMatrix === 'function') boat.updateMatrix();
+            boat.matrixAutoUpdate = false;
             this.scene.add(boat);
         });
     },
@@ -937,6 +1017,8 @@ export const World = {
     buildDynamoStadium(x, z) {
         const group = ModelLoader.instantiate('models/dynamo_stadium.glb', () => ModelBuilders.dynamo_stadium());
         group.position.set(x, 0, z);
+        if (typeof group.updateMatrix === 'function') group.updateMatrix();
+        group.matrixAutoUpdate = false;
         this.scene.add(group);
         this.registerWorldLabel('🏟️ Стадион «Динамо» (Фокина, 1 • ★ 4.1)', x - 8, 14.5, z);
         return group;
@@ -945,6 +1027,8 @@ export const World = {
     buildOceanCinema(x, z) {
         const group = ModelLoader.instantiate('models/ocean_cinema.glb', () => ModelBuilders.ocean_cinema());
         group.position.set(x, 0, z);
+        if (typeof group.updateMatrix === 'function') group.updateMatrix();
+        group.matrixAutoUpdate = false;
         this.scene.add(group);
         this.registerWorldLabel('🎬 К/Т «Океан IMAX» (Набережная, 3 • ★ 4.7)', x - 10, 18.5, z);
         return group;
@@ -1052,6 +1136,8 @@ export const World = {
                 editorId: p.id,
                 configRef: p
             };
+            if (typeof obj.updateMatrix === 'function') obj.updateMatrix();
+            obj.matrixAutoUpdate = false;
             this.scene.add(obj);
             this.propGroups.push(obj);
         }
@@ -1065,6 +1151,8 @@ export const World = {
         const localBox = (group.userData && group.userData.boundingBox) || computeModelBoundingBox(group);
         this.attachBoundingBoxFence(group, localBox, 1);
         group.position.set(x, 0, z);
+        if (typeof group.updateMatrix === 'function') group.updateMatrix();
+        group.matrixAutoUpdate = false;
         this.scene.add(group);
         return group;
     },
@@ -1104,6 +1192,15 @@ export const World = {
                 editorId: `${categoryKey}_${idx}`,
                 configRef: h
             };
+            if (typeof hillGroup.updateMatrix === 'function') hillGroup.updateMatrix();
+            hillGroup.matrixAutoUpdate = false;
+            if (typeof hillGroup.traverse === 'function') {
+                hillGroup.traverse(c => {
+                    if (c.isMesh) c.castShadow = false;
+                    if (typeof c.updateMatrix === 'function') c.updateMatrix();
+                    c.matrixAutoUpdate = false;
+                });
+            }
             this.scene.add(hillGroup);
             this.hillGroups.push(hillGroup);
 
@@ -1327,6 +1424,9 @@ export const World = {
         let glowColorHex = 0xfef08a;
         let sunGlow = 1.0;
         let starIntensity = 0.0;
+        if (this.sunLight) {
+            this.sunLight.castShadow = (phase !== 'night');
+        }
 
         if (phase === 'dawn') {
             // Dawn mode: Red sky on the east (+X), blue sky on the west (-X), sun rising in east
@@ -1617,6 +1717,7 @@ export const World = {
         const car = GAME_STATE.inVehicle;
         if (car.headBeam) {
             car.headBeam.intensity = GAME_STATE.headlightsOn ? 1.8 : 0;
+            car.headBeam.visible = GAME_STATE.headlightsOn;
         }
         SoundManager.playActionSound('car');
         showToast(GAME_STATE.headlightsOn ? '💡 Фары JDM включены' : '🌑 Фары выключены', 'amber');
@@ -1626,6 +1727,20 @@ export const World = {
         if (!this.forcedPhase && (!this.lastClockUpdateTime || performance.now() - this.lastClockUpdateTime > 1000)) {
             this.lastClockUpdateTime = performance.now();
             this.updateVladivostokClockAndTimeOfDay();
+        }
+
+        if (this.streetLightsActive && playerPos && Array.isArray(this.propGroups)) {
+            const px = playerPos.x;
+            const pz = playerPos.z;
+            for (const obj of this.propGroups) {
+                if (!obj) continue;
+                const ptLight = obj.getObjectByName('lamp_point_light') || obj.getObjectByName('road_lamp_point_light');
+                if (ptLight) {
+                    const dx = obj.position.x - px;
+                    const dz = obj.position.z - pz;
+                    ptLight.visible = (dx * dx + dz * dz < 2025);
+                }
+            }
         }
 
         if (this.fountainParticles) {
@@ -1678,20 +1793,25 @@ export const World = {
         }
 
         if (this.oceanMesh) {
+            if (this.oceanMesh.material?.userData?.uWaveTime) {
+                this.oceanMesh.material.userData.uWaveTime.value = time;
+            }
             if (this.oceanMesh.material?.normalMap) {
                 this.oceanMesh.material.normalMap.offset.x = (time * 0.02) % 1.0;
                 this.oceanMesh.material.normalMap.offset.y = (time * 0.015) % 1.0;
             }
-            const pos = this.oceanMesh.geometry.attributes.position;
-            for (let i = 0; i < pos.count; i++) {
-                const vx = pos.getX(i);
-                const vz = pos.getZ(i);
-                const worldX = this.oceanMesh.position.x + vx;
-                const shoreFade = Math.max(0, Math.min(1, (-24 - worldX) / 5));
-                const waveY = shoreFade * (Math.sin(vx * 0.08 + time * 1.8) * 0.22 + Math.cos(vz * 0.06 + time * 1.4) * 0.18);
-                pos.setY(i, waveY);
+            if (!this.oceanMesh.material?.userData?.uWaveTime && this.oceanMesh.geometry?.attributes?.position) {
+                const pos = this.oceanMesh.geometry.attributes.position;
+                for (let i = 0; i < pos.count; i++) {
+                    const vx = pos.getX(i);
+                    const vz = pos.getZ(i);
+                    const worldX = this.oceanMesh.position.x + vx;
+                    const shoreFade = Math.max(0, Math.min(1, (-24 - worldX) / 5));
+                    const waveY = shoreFade * (Math.sin(vx * 0.08 + time * 1.8) * 0.22 + Math.cos(vz * 0.06 + time * 1.4) * 0.18);
+                    pos.setY(i, waveY);
+                }
+                pos.needsUpdate = true;
             }
-            pos.needsUpdate = true;
         }
 
         const camera = this.camera;
