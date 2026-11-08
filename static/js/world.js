@@ -36,6 +36,8 @@ export const World = {
     propGroups: [],
     streetLightsActive: false,
     stadiumLightsActive: false,
+    streetLightPoolSlots: [],
+    streetLightSources: [],
     worldMap: null,
     sunMesh: null,
     currentTimePhase: null,
@@ -320,6 +322,7 @@ export const World = {
         this.registerPOIInteractables(worldMap);
         this.buildVladivostokSopkiAndBayHorizon(worldMap);
         this.initSeagullsAndDriftParticles();
+        this.initStreetLightPool(8);
     },
 
     buildSeabed() {
@@ -1334,6 +1337,120 @@ export const World = {
         posAttr.needsUpdate = true;
     },
 
+    initStreetLightPool(capacity = 8) {
+        if (!this.scene || !Array.isArray(this.propGroups) || typeof THREE === 'undefined') return;
+
+        // Clean up previous pool if re-initializing
+        if (Array.isArray(this.streetLightPoolSlots)) {
+            for (const slot of this.streetLightPoolSlots) {
+                if (slot && slot.parent && typeof slot.parent.remove === 'function') {
+                    slot.parent.remove(slot);
+                }
+            }
+        }
+        this.streetLightPoolSlots = [];
+        this.streetLightSources = [];
+
+        if (typeof this.scene.updateMatrixWorld === 'function') {
+            this.scene.updateMatrixWorld(true);
+        }
+
+        for (const obj of this.propGroups) {
+            if (!obj) continue;
+            const ptLight = (typeof obj.getObjectByName === 'function')
+                ? (obj.getObjectByName('lamp_point_light') || obj.getObjectByName('road_lamp_point_light'))
+                : null;
+            if (!ptLight) continue;
+
+            const worldPos = new THREE.Vector3();
+            if (typeof ptLight.getWorldPosition === 'function') {
+                ptLight.getWorldPosition(worldPos);
+            } else {
+                worldPos.set(obj.position.x, (obj.position.y || 0) + 5.2, obj.position.z);
+            }
+
+            const origColor = (ptLight.color && typeof ptLight.color.clone === 'function')
+                ? ptLight.color.clone()
+                : (ptLight.color || new THREE.Color(0xfef08a));
+
+            this.streetLightSources.push({
+                light: ptLight,
+                parent: ptLight.parent,
+                worldPos,
+                x: obj.position.x,
+                z: obj.position.z,
+                color: origColor,
+                intensity: ptLight.intensity || 1.4,
+                distance: ptLight.distance || 22,
+                decay: ptLight.decay || 1.8,
+                distanceSq: 0,
+                selected: false
+            });
+
+            // Remove individual point light from lamp group so it does not count in forward light list
+            if (ptLight.parent && typeof ptLight.parent.remove === 'function') {
+                ptLight.parent.remove(ptLight);
+            }
+        }
+
+        // Create a fixed capacity of permanent PointLight instances
+        // Their visible flag stays true forever so NUM_POINT_LIGHTS is strictly constant in WebGL shaders!
+        for (let i = 0; i < capacity; i++) {
+            const slotLight = new THREE.PointLight(0xfffbeb, 0, 36, 1.4);
+            slotLight.castShadow = false;
+            slotLight.visible = true;
+            this.scene.add(slotLight);
+            this.streetLightPoolSlots.push(slotLight);
+        }
+    },
+
+    updateStreetLightPool(enabled, playerPos) {
+        if (!Array.isArray(this.streetLightPoolSlots)) return;
+
+        // If streetlights are off or no player position, mute all slots to intensity 0
+        if (!enabled || !playerPos) {
+            for (const slot of this.streetLightPoolSlots) {
+                if (slot) slot.intensity = 0;
+            }
+            return;
+        }
+
+        const px = playerPos.x;
+        const pz = playerPos.z;
+        const maxDistSq = 45 * 45; // 45m radius
+
+        for (const src of this.streetLightSources) {
+            const dx = src.x - px;
+            const dz = src.z - pz;
+            src.distanceSq = dx * dx + dz * dz;
+            src.selected = false;
+        }
+
+        for (const slot of this.streetLightPoolSlots) {
+            let nearest = null;
+            let nearestDistSq = maxDistSq;
+
+            for (const src of this.streetLightSources) {
+                if (!src.selected && src.distanceSq < nearestDistSq) {
+                    nearest = src;
+                    nearestDistSq = src.distanceSq;
+                }
+            }
+
+            if (!nearest) {
+                slot.intensity = 0;
+                continue;
+            }
+
+            nearest.selected = true;
+            slot.position.copy(nearest.worldPos);
+            slot.color.copy(nearest.color);
+            slot.distance = nearest.distance;
+            slot.decay = nearest.decay;
+            slot.intensity = nearest.intensity;
+        }
+    },
+
     setStreetLights(enabled) {
         this.streetLightsActive = Boolean(enabled);
         if (!Array.isArray(this.propGroups)) return;
@@ -1363,6 +1480,10 @@ export const World = {
                     }
                 }
             });
+        }
+
+        if (typeof this.updateStreetLightPool === 'function') {
+            this.updateStreetLightPool(this.streetLightsActive, this.player?.position || null);
         }
 
         this.setStadiumFloodlights(this.streetLightsActive);
@@ -1425,7 +1546,14 @@ export const World = {
         let sunGlow = 1.0;
         let starIntensity = 0.0;
         if (this.sunLight) {
-            this.sunLight.castShadow = (phase !== 'night');
+            this.sunLight.castShadow = true;
+            if (this.sunLight.shadow) {
+                const isNight = (phase === 'night');
+                this.sunLight.shadow.autoUpdate = !isNight;
+                if (!isNight) {
+                    this.sunLight.shadow.needsUpdate = true;
+                }
+            }
         }
 
         if (phase === 'dawn') {
@@ -1717,7 +1845,7 @@ export const World = {
         const car = GAME_STATE.inVehicle;
         if (car.headBeam) {
             car.headBeam.intensity = GAME_STATE.headlightsOn ? 1.8 : 0;
-            car.headBeam.visible = GAME_STATE.headlightsOn;
+            car.headBeam.visible = true;
         }
         SoundManager.playActionSound('car');
         showToast(GAME_STATE.headlightsOn ? '💡 Фары JDM включены' : '🌑 Фары выключены', 'amber');
@@ -1729,18 +1857,8 @@ export const World = {
             this.updateVladivostokClockAndTimeOfDay();
         }
 
-        if (this.streetLightsActive && playerPos && Array.isArray(this.propGroups)) {
-            const px = playerPos.x;
-            const pz = playerPos.z;
-            for (const obj of this.propGroups) {
-                if (!obj) continue;
-                const ptLight = obj.getObjectByName('lamp_point_light') || obj.getObjectByName('road_lamp_point_light');
-                if (ptLight) {
-                    const dx = obj.position.x - px;
-                    const dz = obj.position.z - pz;
-                    ptLight.visible = (dx * dx + dz * dz < 2025);
-                }
-            }
+        if (typeof this.updateStreetLightPool === 'function') {
+            this.updateStreetLightPool(this.streetLightsActive, playerPos);
         }
 
         if (this.fountainParticles) {

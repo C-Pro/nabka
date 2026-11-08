@@ -659,7 +659,20 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
     });
 }
 
+const _radarMedia = (typeof window !== 'undefined' && typeof window.matchMedia === 'function')
+    ? window.matchMedia('(min-width: 640px)')
+    : null;
+
 export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlayers }) {
+    if (typeof document !== 'undefined' && _cachedDoc !== document) {
+        _cachedDoc = document;
+        _cachedRadarCanvas = null;
+        _cachedRadarCtx = null;
+    }
+
+    // Skip drawing when radar container is hidden (screen width < 640px)
+    if (_radarMedia && !_radarMedia.matches) return;
+
     if (!_cachedRadarCanvas && typeof document !== 'undefined') {
         _cachedRadarCanvas = document.getElementById('radar-canvas');
         if (_cachedRadarCanvas) {
@@ -668,9 +681,6 @@ export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlay
     }
     const canvas = _cachedRadarCanvas;
     if (!canvas) return;
-
-    // Skip drawing when radar container or canvas is hidden (e.g. mobile breakpoint)
-    if (canvas.offsetParent === null || canvas.clientWidth === 0) return;
 
     const px = playerPos.x;
     const pz = playerPos.z;

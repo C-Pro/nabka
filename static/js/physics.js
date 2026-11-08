@@ -1123,12 +1123,15 @@ export function resolveVehicleWorldCollision(car, colliders, bounds = null) {
             // Static world colliders
             const carY = Number(car.y) || 0;
             const yaw = Number(car.yaw) || 0;
-            const circleX = (Number(car.x) || 0) + offset * Math.sin(yaw);
-            const circleZ = (Number(car.z) || 0) + offset * Math.cos(yaw);
+            const offsetX = offset * Math.sin(yaw);
+            const offsetZ = offset * Math.cos(yaw);
 
             for (const col of colliderList) {
                 if (col.minY !== undefined && carY + 2.0 < col.minY) continue;
                 if (col.height !== undefined && carY >= col.height - 0.52) continue;
+
+                const circleX = (Number(car.x) || 0) + offsetX;
+                const circleZ = (Number(car.z) || 0) + offsetZ;
 
                 const maxDim = col.type === 'circle' ? (col.radius || 0) : Math.max(col.halfW || 0, col.halfD || 0) * 1.42;
                 const maxExtent = maxDim + circleRadius;
