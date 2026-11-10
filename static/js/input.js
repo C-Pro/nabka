@@ -58,7 +58,16 @@ export function syncGameStateKeys() {
 
 let dpadResetFn = null;
 
+let activeBrakeKeys = new Set();
+const HANDBRAKE_CODES = ['Space', 'ControlRight', 'ControlLeft', 'Numpad0', 'KeyB'];
+const PREVENTED_GAMEPLAY_CODES = [
+    'KeyW', 'KeyA', 'KeyS', 'KeyD',
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+    'Space', 'ControlRight', 'Numpad0', 'KeyB'
+];
+
 export function clearMovementInput() {
+    activeBrakeKeys.clear();
     inputSources.keyboard.w = false;
     inputSources.keyboard.a = false;
     inputSources.keyboard.s = false;
@@ -217,13 +226,16 @@ export function bindInputControls(worldMap = {}) {
         }
 
         const code = e.code;
+        if (PREVENTED_GAMEPLAY_CODES.includes(code)) {
+            e.preventDefault();
+        }
         if (code === 'KeyW' || code === 'ArrowUp') inputSources.keyboard.w = true;
         if (code === 'KeyS' || code === 'ArrowDown') inputSources.keyboard.s = true;
         if (code === 'KeyA' || code === 'ArrowLeft') inputSources.keyboard.a = true;
         if (code === 'KeyD' || code === 'ArrowRight') inputSources.keyboard.d = true;
         if (code === 'ShiftLeft' || code === 'ShiftRight') inputSources.keyboard.shift = true;
-        if (code === 'Space') {
-            e.preventDefault();
+        if (HANDBRAKE_CODES.includes(code)) {
+            activeBrakeKeys.add(code);
             inputSources.keyboard.space = true;
             syncGameStateKeys();
             Player.jump(MultiplayerClient);
@@ -241,13 +253,21 @@ export function bindInputControls(worldMap = {}) {
 
     window.addEventListener('keyup', (e) => {
         const code = e.code;
+        if (PREVENTED_GAMEPLAY_CODES.includes(code)) {
+            e.preventDefault();
+        }
         if (code === 'KeyW' || code === 'ArrowUp') inputSources.keyboard.w = false;
         if (code === 'KeyS' || code === 'ArrowDown') inputSources.keyboard.s = false;
         if (code === 'KeyA' || code === 'ArrowLeft') inputSources.keyboard.a = false;
         if (code === 'KeyD' || code === 'ArrowRight') inputSources.keyboard.d = false;
         if (code === 'ShiftLeft' || code === 'ShiftRight') inputSources.keyboard.shift = false;
-        if (code === 'Space') inputSources.keyboard.space = false;
-        syncGameStateKeys();
+        if (HANDBRAKE_CODES.includes(code)) {
+            activeBrakeKeys.delete(code);
+            inputSources.keyboard.space = activeBrakeKeys.size > 0;
+            syncGameStateKeys();
+        } else {
+            syncGameStateKeys();
+        }
     });
 
     if (canvas) {

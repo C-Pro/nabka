@@ -847,12 +847,20 @@ export function stepSingleVehicleDynamics(car, input, dt) {
         const steerSign = vLong >= 0 ? 1 : -1;
 
         const speedGain = 1.0 / (1.0 + Math.pow(speedMag / 26.0, 2));
-        const targetYawRate = steer * (vLong / CAR_SPECS.wheelbase) * CAR_SPECS.steerGain * speedGain;
+        let targetYawRate = steer * (vLong / CAR_SPECS.wheelbase) * CAR_SPECS.steerGain * speedGain;
+
+        // Handbrake oversteer moment: when off-throttle or braking, locking rear wheels breaks lateral traction and whips the car around
+        if (handbrake && throttle <= 0 && Math.abs(steer) > 0.05 && totalSpeed > 0.4) {
+            const handbrakeTurnScale = Math.min(1.0, (totalSpeed - 0.4) / 2.0);
+            const handbrakeYawBonus = steer * (vLong >= 0 ? 1 : -1) * handbrakeTurnScale * 2.8;
+            targetYawRate += handbrakeYawBonus;
+        }
+
         const demandedLatAcc = Math.abs(vLong * targetYawRate);
         const maxGripAcc = CAR_SPECS.muGrip * 9.81;
 
         const isSharpTurn = Math.abs(steer) > 0.35 && totalSpeed > 4.0;
-        const canDriftAtSpeed = (handbrake && throttle > 0) ? totalSpeed > 0.8 : totalSpeed > 2.0;
+        const canDriftAtSpeed = (handbrake && (throttle > 0 || Math.abs(steer) > 0.1)) ? totalSpeed > 0.8 : totalSpeed > 2.0;
         const enterDrift = canDriftAtSpeed && (
             (car.isBraking && isSharpTurn) ||
             (handbrake && (Math.abs(steer) > 0.1 || Math.abs(vLat) > 0.4)) ||

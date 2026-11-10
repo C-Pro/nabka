@@ -301,6 +301,27 @@ describe('Vehicle Dynamics & Inertia', () => {
         const vLat = car.vx * uRightX + car.vz * uRightZ;
         expect(Math.abs(vLat)).toBeGreaterThan(0.5);
     });
+
+    test('handbrake while moving with steering rotates vehicle into responsive handbrake turn', () => {
+        const carRight = createTestCar({ yaw: 0, vz: 12.0, speed: 12.0 });
+        const carLeft = createTestCar({ yaw: 0, vz: 12.0, speed: 12.0 });
+
+        // User driving at 12 m/s presses handbrake (Space) and steers right (D / ArrowRight) with throttle 0
+        const inputRight = { throttle: 0, steer: 1.0, handbrake: true, boost: false };
+        const inputLeft = { throttle: 0, steer: -1.0, handbrake: true, boost: false };
+
+        for (let i = 0; i < 40; i++) {
+            stepVehicleDynamics(carRight, inputRight, 0.02);
+            stepVehicleDynamics(carLeft, inputLeft, 0.02);
+        }
+
+        // Must produce significant yaw rotation (at least 60 degrees / > 1.0 rad) instead of ignoring steering
+        expect(carRight.yaw).toBeGreaterThan(1.0);
+        expect(carLeft.yaw).toBeLessThan(-1.0);
+        // Vehicle comes to a complete halt
+        expect(carRight.speed).toBeLessThan(0.5);
+        expect(carLeft.speed).toBeLessThan(0.5);
+    });
 });
 
 describe('Rigid Body Impulse Collisions', () => {
