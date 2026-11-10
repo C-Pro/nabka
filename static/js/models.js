@@ -1594,7 +1594,12 @@ export const ModelBuilders = {
         const jeansMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7 });
         const shoeMat = new THREE.MeshStandardMaterial({ color: accentColorInt, roughness: 0.4 });
 
-        const torso = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.15, 0.52), torsoMat);
+        const torsoGeo = new THREE.BoxGeometry(0.92, 1.15, 0.52);
+        const torsoUvs = torsoGeo.attributes.uv;
+        for (let i = 0; i < torsoUvs.count; i++) {
+            torsoUvs.setY(i, 1.0 - torsoUvs.getY(i));
+        }
+        const torso = new THREE.Mesh(torsoGeo, torsoMat);
         torso.name = 'torso';
         torso.position.y = 1.48;
         torso.castShadow = true;

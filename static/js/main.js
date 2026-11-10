@@ -250,6 +250,7 @@ export async function startApp() {
     });
     activeNoonScheduler.start();
 
+    World.warmupShaders();
     gameLoop();
 }
 

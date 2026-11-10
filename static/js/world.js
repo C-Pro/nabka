@@ -183,9 +183,11 @@ export const World = {
             let mesh;
 
             if (slab.type === 'ocean' || slab.id === 'ocean') {
-                const westX = (slab.x || 0) - w / 2;
-                const oceanWidth = SHORE_X - westX;
-                const oceanGeo = new THREE.PlaneGeometry(oceanWidth, d, 32, 32);
+                const westX = Math.min(-1800, (slab.x || 0) - (w || 320) / 2);
+                const eastX = -15;
+                const oceanWidth = eastX - westX;
+                const oceanDepth = Math.max(3600, (d || 1200) * 3);
+                const oceanGeo = new THREE.PlaneGeometry(oceanWidth, oceanDepth, 96, 96);
                 oceanGeo.rotateX(-Math.PI / 2);
                 const oceanMat = new THREE.MeshStandardMaterial({
                     color: slab.color ?? 0x0369a1,
@@ -203,12 +205,18 @@ export const World = {
                 oceanMat.userData = oceanMat.userData || {};
                 oceanMat.userData.uWaveTime = { value: 0 };
                 oceanMat.userData.uOceanMeshPosX = { value: westX + oceanWidth / 2 };
+                oceanMat.userData.uOceanDepth = { value: oceanDepth };
+                oceanMat.userData.uWestX = { value: westX };
                 oceanMat.onBeforeCompile = (shader) => {
                     shader.uniforms.uWaveTime = oceanMat.userData.uWaveTime;
                     shader.uniforms.uOceanMeshPosX = oceanMat.userData.uOceanMeshPosX;
+                    shader.uniforms.uOceanDepth = oceanMat.userData.uOceanDepth;
+                    shader.uniforms.uWestX = oceanMat.userData.uWestX;
                     shader.vertexShader = `
                         uniform float uWaveTime;
                         uniform float uOceanMeshPosX;
+                        uniform float uOceanDepth;
+                        uniform float uWestX;
                     ` + shader.vertexShader;
                     shader.vertexShader = shader.vertexShader.replace(
                         '#include <begin_vertex>',
@@ -217,7 +225,11 @@ export const World = {
                         float vz = position.z;
                         float worldX = uOceanMeshPosX + vx;
                         float shoreFade = clamp((-24.0 - worldX) / 5.0, 0.0, 1.0);
-                        float waveY = shoreFade * (sin(vx * 0.08 + uWaveTime * 1.8) * 0.22 + cos(vz * 0.06 + uWaveTime * 1.4) * 0.18);
+                        float halfDepth = uOceanDepth * 0.5;
+                        float farFadeZ = clamp((halfDepth - abs(vz)) / 150.0, 0.0, 1.0);
+                        float farFadeX = clamp((worldX - uWestX) / 150.0, 0.0, 1.0);
+                        float waveFade = shoreFade * farFadeX * farFadeZ;
+                        float waveY = waveFade * (sin(vx * 0.08 + uWaveTime * 1.8) * 0.22 + cos(vz * 0.06 + uWaveTime * 1.4) * 0.18);
                         transformed.y += waveY;`
                     );
                 };
@@ -323,16 +335,16 @@ export const World = {
         this.buildVladivostokSopkiAndBayHorizon(worldMap);
         this.initSeagullsAndDriftParticles();
         this.initStreetLightPool(8);
+        this.warmupShaders();
     },
 
     buildSeabed() {
-        const westX = Math.min(MIN_SWIM_X - 30, this.oceanMesh
-            ? 2 * this.oceanMesh.position.x - SHORE_X
-            : -338);
+        const westX = -800;
         const eastX = -15;
         const width = eastX - westX;
         const centerX = (westX + eastX) / 2;
-        const geometry = new THREE.PlaneGeometry(width, 440, 160, 8);
+        const seabedDepth = 2400;
+        const geometry = new THREE.PlaneGeometry(width, seabedDepth, 96, 24);
         geometry.rotateX(-Math.PI / 2);
         const positions = geometry.attributes.position;
         for (let i = 0; i < positions.count; i++) {
@@ -1483,7 +1495,8 @@ export const World = {
         }
 
         if (typeof this.updateStreetLightPool === 'function') {
-            this.updateStreetLightPool(this.streetLightsActive, this.player?.position || null);
+            const playerPos = (typeof Player !== 'undefined' && Player?.position) ? Player.position : (this.player?.position || null);
+            this.updateStreetLightPool(this.streetLightsActive, playerPos);
         }
 
         this.setStadiumFloodlights(this.streetLightsActive);
@@ -1508,6 +1521,27 @@ export const World = {
                 }
             }
         });
+    },
+
+    warmupShaders() {
+        if (!this.renderer || typeof this.renderer.compile !== 'function' || !this.scene || !this.camera) return;
+        try {
+            // Pre-compile day lighting state
+            this.setStadiumFloodlights(false);
+            this.setStreetLights(false);
+            this.renderer.compile(this.scene, this.camera);
+
+            // Pre-compile night lighting state (SpotLights and PointLights active)
+            this.setStadiumFloodlights(true);
+            this.setStreetLights(true);
+            this.renderer.compile(this.scene, this.camera);
+
+            // Restore current phase
+            this.setStadiumFloodlights(this.stadiumLightsActive);
+            this.setStreetLights(this.streetLightsActive);
+        } catch (e) {
+            console.warn('Shader warmup failed or skipped:', e);
+        }
     },
 
     applyTimeOfDay(timeOrPhase, explicitTimeString = null) {
@@ -1920,12 +1954,18 @@ export const World = {
             }
             if (!this.oceanMesh.material?.userData?.uWaveTime && this.oceanMesh.geometry?.attributes?.position) {
                 const pos = this.oceanMesh.geometry.attributes.position;
+                const meshPosX = this.oceanMesh.position.x;
+                const westX = this.oceanMesh.material?.userData?.uWestX?.value ?? -1800;
+                const halfDepth = (this.oceanMesh.material?.userData?.uOceanDepth?.value ?? 3600) * 0.5;
                 for (let i = 0; i < pos.count; i++) {
                     const vx = pos.getX(i);
                     const vz = pos.getZ(i);
-                    const worldX = this.oceanMesh.position.x + vx;
+                    const worldX = meshPosX + vx;
                     const shoreFade = Math.max(0, Math.min(1, (-24 - worldX) / 5));
-                    const waveY = shoreFade * (Math.sin(vx * 0.08 + time * 1.8) * 0.22 + Math.cos(vz * 0.06 + time * 1.4) * 0.18);
+                    const farFadeX = Math.max(0, Math.min(1, (worldX - westX) / 150));
+                    const farFadeZ = Math.max(0, Math.min(1, (halfDepth - Math.abs(vz)) / 150));
+                    const waveFade = shoreFade * farFadeX * farFadeZ;
+                    const waveY = waveFade * (Math.sin(vx * 0.08 + time * 1.8) * 0.22 + Math.cos(vz * 0.06 + time * 1.4) * 0.18);
                     pos.setY(i, waveY);
                 }
                 pos.needsUpdate = true;

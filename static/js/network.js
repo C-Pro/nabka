@@ -385,11 +385,16 @@ export const MultiplayerClient = {
             if (overlay) overlay.classList.add('hidden');
         }
 
-        if (Player.group && Player.group.children && Player.group.children[0]) {
-            const tex = TextureFactory.createCustomShirtTexture(username, '#38bdf8');
-            if (tex) {
-                Player.group.children[0].material.map = tex;
-                Player.group.children[0].material.needsUpdate = true;
+        if (Player.group) {
+            const torso = Player.group.getObjectByName ? Player.group.getObjectByName('torso') : (Player.group.children && Player.group.children[0]);
+            if (torso && torso.material) {
+                const tex = TextureFactory.createCustomShirtTexture(username, '#38bdf8');
+                if (tex) {
+                    tex.flipY = false;
+                    torso.material = torso.material.clone();
+                    torso.material.map = tex;
+                    torso.material.needsUpdate = true;
+                }
             }
         }
 

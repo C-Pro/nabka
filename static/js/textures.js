@@ -186,7 +186,9 @@ export const TextureFactory = {
         ctx.font = '700 20px sans-serif';
         ctx.fillText('VVO • 25 RUS', 128, 162);
 
-        return new THREE.CanvasTexture(canvas);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.flipY = false;
+        return tex;
     },
 
     createPlayerShirtTexture(username = 'Игрок', accentHex = '#38bdf8') {
