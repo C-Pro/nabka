@@ -2,6 +2,27 @@ import * as StateModule from './state.js';
 
 const getGameState = () => (StateModule && StateModule.GAME_STATE) || (typeof window !== 'undefined' ? window.GAME_STATE : null) || { sfxEnabled: true, audioEnabled: true };
 
+export function computePoliceSirenAcoustics({ sirenPos, sirenVel, listenerPos, listenerVel, cameraYaw = 0, speedOfSound = 240, maxDistance = 115 }) {
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const dx = listenerPos.x - sirenPos.x;
+    const dz = listenerPos.z - sirenPos.z;
+    const distance = Math.hypot(dx, dz);
+    const c = speedOfSound;
+    const ux = distance > 0 ? dx / distance : 0;
+    const uz = distance > 0 ? dz / distance : 0;
+    const vSource = (sirenVel?.vx || 0) * ux + (sirenVel?.vz || 0) * uz;
+    const vListener = -((listenerVel?.vx || 0) * ux + (listenerVel?.vz || 0) * uz);
+    const dopplerRatio = clamp((c + clamp(vListener, -0.48 * c, 0.48 * c)) /
+        (c - clamp(vSource, -0.48 * c, 0.48 * c)), 0.55, 1.85);
+    const active = distance <= maxDistance;
+    const volume = active ? clamp(0.24 / (1 + Math.pow(distance / 14, 1.35)) *
+        Math.max(0, 1 - distance / maxDistance), 0.005, 0.26) : 0;
+    const cutoffHz = clamp((2600 - 1850 * Math.min(1, distance / 95)) *
+        (0.85 + 0.15 * dopplerRatio), 480, 3400);
+    const pan = clamp(((-dx * Math.cos(cameraYaw) + dz * Math.sin(cameraYaw)) / Math.max(1, distance)), -0.85, 0.85);
+    return { active, volume, dopplerRatio, cutoffHz, pan, distance };
+}
+
 export const GEAR_SEGMENTS = {
     1: { start: 0.0, end: 4.17 },
     2: { start: 4.17, end: 10.01 },
@@ -72,6 +93,8 @@ export const SoundManager = {
     divePlaying: false,
     isUnderwater: false,
     surfaceSfxGain: null,
+    policeSirenNodes: null,
+    policeSirenActive: false,
 
     cannonBuffer: null,
 
@@ -932,6 +955,9 @@ export const SoundManager = {
         if (this.masterGain && this.ctx) {
             this.masterGain.gain.setTargetAtTime(gs.sfxEnabled ? 1.0 : 0.0, this.ctx.currentTime, 0.08);
         }
+        if (!gs.sfxEnabled) {
+            this.stopPoliceSiren();
+        }
         if (typeof document !== 'undefined') {
             const sfxIcon = document.getElementById('sfx-icon');
             const sfxLabel = document.getElementById('sfx-label');
@@ -1555,5 +1581,115 @@ export const SoundManager = {
                 osc.stop(now + 0.36);
             }
         } catch (e) {}
+    },
+
+    playPoliceSiren(active = true, volume = 0.12, acoustics = null) {
+        if (!active || !this.initialized || !this.ctx || !getGameState().sfxEnabled) {
+            if (this.policeSirenNodes) {
+                try { this.policeSirenNodes.carrier?.stop?.(); } catch (e) {}
+                try { this.policeSirenNodes.lfo?.stop?.(); } catch (e) {}
+                try { this.policeSirenNodes.carrier?.disconnect?.(); } catch (e) {}
+                try { this.policeSirenNodes.lfo?.disconnect?.(); } catch (e) {}
+                try { this.policeSirenNodes.lfoGain?.disconnect?.(); } catch (e) {}
+                try { this.policeSirenNodes.filter?.disconnect?.(); } catch (e) {}
+                try { this.policeSirenNodes.panner?.disconnect?.(); } catch (e) {}
+                try { this.policeSirenNodes.sirenGain?.disconnect?.(); } catch (e) {}
+            }
+            this.policeSirenNodes = null;
+            this.policeSirenActive = false;
+            return false;
+        }
+
+        const clampedVol = Math.max(0.01, Math.min(0.3, Number(volume) || 0.12));
+        const now = this.ctx.currentTime || 0;
+        const dopplerRatio = Number.isFinite(acoustics?.dopplerRatio) ? acoustics.dopplerRatio : 1;
+        const cutoffHz = Number.isFinite(acoustics?.cutoffHz) ? acoustics.cutoffHz : 1500;
+        const pan = Number.isFinite(acoustics?.pan) ? acoustics.pan : 0;
+
+        if (this.policeSirenActive && this.policeSirenNodes) {
+            try {
+                this.policeSirenNodes.sirenGain.gain.setTargetAtTime(clampedVol, now, 0.08);
+                this.policeSirenNodes.carrier.frequency.setTargetAtTime(740 * dopplerRatio, now, 0.08);
+                this.policeSirenNodes.lfo.frequency.setTargetAtTime(1.45 * (0.88 + 0.12 * dopplerRatio), now, 0.08);
+                this.policeSirenNodes.lfoGain.gain.setTargetAtTime(180 * dopplerRatio, now, 0.08);
+                this.policeSirenNodes.filter.frequency.setTargetAtTime(cutoffHz, now, 0.08);
+                this.policeSirenNodes.panner?.pan?.setTargetAtTime(pan, now, 0.08);
+            } catch (e) {}
+            return true;
+        }
+
+        try {
+            const carrier = this.ctx.createOscillator();
+            carrier.type = 'sawtooth';
+            carrier.frequency.value = 740 * dopplerRatio;
+
+            const lfo = this.ctx.createOscillator();
+            lfo.type = 'sine';
+            lfo.frequency.value = 1.45 * (0.88 + 0.12 * dopplerRatio);
+
+            const lfoGain = this.ctx.createGain();
+            lfoGain.gain.value = 180 * dopplerRatio;
+
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = cutoffHz;
+
+            const sirenGain = this.ctx.createGain();
+            sirenGain.gain.value = 0.001;
+            sirenGain.gain.setTargetAtTime(clampedVol, now, 0.08);
+
+            lfo.connect(lfoGain);
+            lfoGain.connect(carrier.frequency);
+            carrier.connect(filter);
+            filter.connect(sirenGain);
+            const panner = typeof this.ctx.createStereoPanner === 'function' ? this.ctx.createStereoPanner() : null;
+            if (panner) {
+                panner.pan.value = pan;
+                sirenGain.connect(panner);
+                panner.connect(this.surfaceSfxGain || this.masterGain);
+            } else {
+                sirenGain.connect(this.surfaceSfxGain || this.masterGain);
+            }
+
+            carrier.start(now);
+            lfo.start(now);
+
+            this.policeSirenNodes = { carrier, lfo, lfoGain, filter, sirenGain, panner };
+            this.policeSirenActive = true;
+            return true;
+        } catch (e) {
+            this.policeSirenNodes = null;
+            this.policeSirenActive = false;
+            return false;
+        }
+    },
+
+    stopPoliceSiren() {
+        return this.playPoliceSiren(false);
+    },
+
+    playPoliceChime(kind = 'fine') {
+        if (!this.initialized || !this.ctx || !getGameState().sfxEnabled) return false;
+        try {
+            const now = this.ctx.currentTime || 0;
+            const freqs = kind === 'fine' ? [880, 587] : (kind === 'stop' ? [784, 1046] : [659, 987]);
+            freqs.forEach((freq, idx) => {
+                const t = now + idx * 0.11;
+                const osc = this.ctx.createOscillator();
+                const g = this.ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(freq, t);
+                g.gain.setValueAtTime(0.001, t);
+                g.gain.linearRampToValueAtTime(0.14, t + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+                osc.connect(g);
+                g.connect(this.surfaceSfxGain || this.masterGain);
+                osc.start(t);
+                osc.stop(t + 0.17);
+            });
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
 };

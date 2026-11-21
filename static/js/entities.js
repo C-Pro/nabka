@@ -1,10 +1,10 @@
-import { renderVehiclePose, resetVehiclePose } from './vehicle-motion.js';
-import { GAME_STATE, isGameplayInputSuspended } from './state.js';
-import { PhysicsEngine, WorldVehiclePhysics, stepWorldVehiclePhysics, getVehicleCollisionCircles, SEA_SURFACE_Y, getWaterDepthAt, getTargetSwimY, MIN_SWIM_X, SHORE_X } from './physics.js';
+import { renderVehiclePose, resetVehiclePose, VehicleSnapshotBuffer, smoothingAlpha } from './vehicle-motion.js';
+import { GAME_STATE, isGameplayInputSuspended, applyPoliceStateSnapshot, isLocalPlayerChased, resetPoliceState } from './state.js';
+import { PhysicsEngine, WorldVehiclePhysics, stepWorldVehiclePhysics, getVehicleCollisionCircles, getMinVehicleCircleGap, applyVehicleImpulse, POLICE_CAR_SPECS, SEA_SURFACE_Y, getWaterDepthAt, getTargetSwimY, MIN_SWIM_X, SHORE_X } from './physics.js';
 import { TextureFactory } from './textures.js';
-import { SoundManager } from './audio.js';
+import { SoundManager, computePoliceSirenAcoustics } from './audio.js';
 import { World } from './world.js';
-import { completePOI, triggerPlayerSpeech, showToast, closeNpcDialogue, dismissInteractionPrompt, showLocalLabels, hideLocalLabels, LOCAL_LABEL_EXIT_VEHICLE_DURATION_MS } from './ui.js';
+import { completePOI, triggerPlayerSpeech, showToast, closeNpcDialogue, dismissInteractionPrompt, showLocalLabels, hideLocalLabels, LOCAL_LABEL_EXIT_VEHICLE_DURATION_MS, updatePolicePursuitBanner } from './ui.js';
 import { ModelLoader, ModelBuilders } from './models.js';
 
 export const Player = {
@@ -142,6 +142,19 @@ export const Player = {
                     candidatePos.z = v.group.position.z + (dz / dist) * minDist;
                 }
             }
+            if (GAME_STATE.policeCars instanceof Map) {
+                for (const pc of GAME_STATE.policeCars.values()) {
+                    const pPos = (pc.group && pc.group.position) || pc;
+                    const dx = candidatePos.x - pPos.x;
+                    const dz = candidatePos.z - pPos.z;
+                    const dist = Math.hypot(dx, dz);
+                    const minDist = 2.05;
+                    if (dist < minDist && dist > 0.001) {
+                        candidatePos.x = pPos.x + (dx / dist) * minDist;
+                        candidatePos.z = pPos.z + (dz / dist) * minDist;
+                    }
+                }
+            }
         }
 
         if (remotePlayersMap) {
@@ -171,6 +184,20 @@ export const Player = {
                 candidatePos.z = npc.group.position.z + nz * minDist;
                 npc.group.position.x -= nx * 0.08;
                 npc.group.position.z -= nz * 0.08;
+            }
+        }
+
+        if (GAME_STATE.policeCops instanceof Map) {
+            for (const cop of GAME_STATE.policeCops.values()) {
+                const cPos = (cop.group && cop.group.position) || cop.renderPosition || cop;
+                const dx = candidatePos.x - cPos.x;
+                const dz = candidatePos.z - cPos.z;
+                const dist = Math.hypot(dx, dz);
+                const minDist = 0.88;
+                if (dist < minDist && dist > 0.001 && this.position.y < 1.8) {
+                    candidatePos.x = cPos.x + (dx / dist) * minDist;
+                    candidatePos.z = cPos.z + (dz / dist) * minDist;
+                }
             }
         }
 
@@ -625,6 +652,32 @@ export const Dunya = {
         );
 
         PhysicsEngine.resolveWorldCollision(nextPos, 0.28, this.position.y);
+        if (GAME_STATE.policeCars instanceof Map) {
+            for (const pc of GAME_STATE.policeCars.values()) {
+                const pPos = (pc.group && pc.group.position) || pc;
+                const pdx = nextPos.x - pPos.x;
+                const pdz = nextPos.z - pPos.z;
+                const pdist = Math.hypot(pdx, pdz);
+                const minDist = 1.95;
+                if (pdist < minDist && pdist > 0.001 && this.position.y < 1.8) {
+                    nextPos.x = pPos.x + (pdx / pdist) * minDist;
+                    nextPos.z = pPos.z + (pdz / pdist) * minDist;
+                }
+            }
+        }
+        if (GAME_STATE.policeCops instanceof Map) {
+            for (const cop of GAME_STATE.policeCops.values()) {
+                const cPos = (cop.group && cop.group.position) || cop.renderPosition || cop;
+                const cdx = nextPos.x - cPos.x;
+                const cdz = nextPos.z - cPos.z;
+                const cdist = Math.hypot(cdx, cdz);
+                const minDist = 0.72;
+                if (cdist < minDist && cdist > 0.001 && this.position.y < 1.8) {
+                    nextPos.x = cPos.x + (cdx / cdist) * minDist;
+                    nextPos.z = cPos.z + (cdz / cdist) * minDist;
+                }
+            }
+        }
         this.position.x = waitOnShore ? Math.max(SHORE_X + 1, nextPos.x) : nextPos.x;
         this.position.z = nextPos.z;
 
@@ -806,7 +859,19 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
     return carObj;
 }
 
-export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
+export function toggleVehicleDrive(carObj, onSendSnapshot = null, options = {}) {
+    let sendSnapshotFn = onSendSnapshot;
+    let opts = options || {};
+    if (sendSnapshotFn && typeof sendSnapshotFn === 'object' && typeof sendSnapshotFn !== 'function') {
+        opts = sendSnapshotFn;
+        sendSnapshotFn = null;
+    }
+    const force = Boolean(opts && opts.force);
+    if (!force && GAME_STATE.activePoliceEncounter && GAME_STATE.activePoliceEncounter.stage !== 'resolved') {
+        showToast('⚠️ Сначала ответьте полицейскому!', 'amber', 1500);
+        return false;
+    }
+
     const speedBox = (typeof document !== 'undefined') ? document.getElementById('speedometer-box') : null;
     const mobilePedals = (typeof document !== 'undefined') ? document.getElementById('mobile-car-pedals') : null;
     const jumpBtn = (typeof document !== 'undefined') ? document.getElementById('btn-action-jump') : null;
@@ -828,7 +893,7 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         leavingVehicle.tractionLoss = 0;
         resetVehiclePose(leavingVehicle);
 
-        if (onSendSnapshot) onSendSnapshot(true);
+        if (sendSnapshotFn) sendSnapshotFn(true);
 
         const exitX = leavingVehicle.group.position.x - 2.6;
         const exitZ = leavingVehicle.group.position.z;
@@ -836,19 +901,31 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         GAME_STATE.inVehicle = null;
         GAME_STATE.keys.w = GAME_STATE.keys.s = GAME_STATE.keys.space = false;
         SoundManager.updateVehicleAudio(null, false, false, false, false);
-        if (speedBox) speedBox.classList.add('hidden');
+        if (speedBox) {
+            speedBox.classList.add('hidden');
+            speedBox.classList?.remove('border-rose-500/80', 'bg-rose-950/80');
+        }
+        if (typeof document !== 'undefined') {
+            const speedVal = document.getElementById('speed-value');
+            if (speedVal && speedVal.classList) {
+                speedVal.classList.remove('text-rose-400');
+                speedVal.classList.add('text-white');
+            }
+        }
         if (mobilePedals) mobilePedals.classList.add('hidden');
         if (jumpBtn) jumpBtn.classList.remove('hidden');
         if (actionBtnLabel) actionBtnLabel.textContent = 'Действие (E)';
         showToast(`🚶 @${GAME_STATE.username} вышел на променад Набки`, 'sky');
         showLocalLabels(LOCAL_LABEL_EXIT_VEHICLE_DURATION_MS);
-        if (onSendSnapshot) onSendSnapshot(true);
+        if (sendSnapshotFn) sendSnapshotFn(true);
     } else {
         if (carObj.remoteDriver && carObj.remoteDriver !== GAME_STATE.username) {
             showToast(`⚠️ Машина занята игроком @${carObj.remoteDriver}`, 'amber');
-            return;
+            return false;
         }
-        if (GAME_STATE.activeNpcChat) closeNpcDialogue();
+        if (GAME_STATE.activeNpcChat && (!GAME_STATE.activePoliceEncounter || GAME_STATE.activePoliceEncounter.stage === 'resolved')) {
+            closeNpcDialogue();
+        }
         GAME_STATE.inVehicle = carObj;
         hideLocalLabels();
         carObj.snapshotBuffer = null;
@@ -861,12 +938,39 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null) {
         if (actionBtnLabel) actionBtnLabel.textContent = 'Выйти (E)';
         completePOI('jdm_drive', `🏎️ @${GAME_STATE.username} за рулём праворульного ${carObj.name}!`, 1200);
         triggerPlayerSpeech('Турер Ви на Набке! 🏎️💨');
-        if (onSendSnapshot) onSendSnapshot(true);
+        if (sendSnapshotFn) sendSnapshotFn(true);
     }
+    return true;
 }
 
 export function updateWorldVehicles(dt, worldMap = null) {
+    const now = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+    if (GAME_STATE.policeCars instanceof Map) {
+        for (const car of GAME_STATE.policeCars.values()) {
+            const pose = car.snapshotBuffer?.sample(now, 20);
+            if (pose) {
+                Object.assign(car, { x: pose.x, y: pose.y, z: pose.z, yaw: pose.yaw,
+                    vx: pose.vx, vz: pose.vz, yaw_rate: pose.yawRate, yawRate: pose.yawRate, speed: pose.speed });
+                car.group?.position?.set(car.x, car.y, car.z);
+                if (car.group?.rotation) car.group.rotation.y = car.yaw;
+            }
+        }
+    }
     if (!Array.isArray(World.vehicles) || World.vehicles.length === 0) return;
+
+    for (const car of World.vehicles) {
+        const pending = car._pendingServerPoliceImpulse;
+        if (!pending) continue;
+        if (Date.now() > pending.expiresAt) {
+            car._pendingServerPoliceImpulse = null;
+            continue;
+        }
+        const pcar = GAME_STATE.policeCars?.get(pending.msg.police_car_id);
+        if (pcar && getMinVehicleCircleGap(car, pcar) <= 0.35) {
+            applyVehicleImpulse(car, pending.msg);
+            car._pendingServerPoliceImpulse = null;
+        }
+    }
 
     let input = null;
     let isBoostActive = false;
@@ -906,7 +1010,10 @@ export function updateWorldVehicles(dt, worldMap = null) {
     }
 
     // Advance fixed-step world physics for all vehicles, resolving car-to-car and obstacle collisions iteratively
-    const events = stepWorldVehiclePhysics(World.vehicles, dt, PhysicsEngine, bounds, GAME_STATE.inVehicle, input);
+    const allVehicles = (GAME_STATE.policeCars instanceof Map && GAME_STATE.policeCars.size > 0)
+        ? [...World.vehicles, ...GAME_STATE.policeCars.values()]
+        : World.vehicles;
+    const events = stepWorldVehiclePhysics(allVehicles, dt, PhysicsEngine, bounds, GAME_STATE.inVehicle, input);
 
     // Trigger crash audio & particle effects for high-energy collisions
     for (const ev of events) {
@@ -1505,5 +1612,323 @@ export function revalidatePlayerSpawn(worldMap = {}, remotePlayers = null, rando
         }
     }
     return true;
+}
+
+function disposePoliceEntity(entity) {
+    if (!entity) return;
+    if (entity.group) {
+        if (World.scene && typeof World.scene.remove === 'function') {
+            World.scene.remove(entity.group);
+        }
+        if (typeof entity.group.traverse === 'function') {
+            entity.group.traverse(child => {
+                if (child.geometry && typeof child.geometry.dispose === 'function') {
+                    child.geometry.dispose();
+                }
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(mat => {
+                            if (mat.map && typeof mat.map.dispose === 'function') mat.map.dispose();
+                            if (typeof mat.dispose === 'function') mat.dispose();
+                        });
+                    } else {
+                        if (child.material.map && typeof child.material.map.dispose === 'function') {
+                            child.material.map.dispose();
+                        }
+                        if (typeof child.material.dispose === 'function') {
+                            child.material.dispose();
+                        }
+                    }
+                }
+            });
+        }
+    }
+    if (entity.labelEl && typeof entity.labelEl.remove === 'function') {
+        entity.labelEl.remove();
+    }
+    entity.labelEl = null;
+}
+
+export function replicatePoliceState(msg) {
+    const res = applyPoliceStateSnapshot(GAME_STATE, msg);
+    if (!res.applied) return false;
+
+    for (const removedCop of res.removedCops) {
+        disposePoliceEntity(removedCop);
+    }
+    for (const removedCar of res.removedCars) {
+        disposePoliceEntity(removedCar);
+    }
+
+    const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now();
+    const npcLabelsContainer = (typeof document !== 'undefined' && typeof document.getElementById === 'function')
+        ? document.getElementById('npc-labels-container')
+        : null;
+
+    for (const cop of GAME_STATE.policeCops.values()) {
+        if (!cop._initialized) {
+            cop._initialized = true;
+            cop.walkCycle = cop.walkCycle || 0;
+            cop.renderPosition = { x: cop.x, y: cop.y, z: cop.z };
+            if (typeof THREE !== 'undefined' && World.scene) {
+                const g = ModelLoader.instantiate('models/police_officer.glb', () => ModelBuilders.police_officer());
+                g.position.set(cop.x, cop.y, cop.z);
+                if (g.rotation) {
+                    g.rotation.order = 'YXZ';
+                    g.rotation.y = cop.yaw;
+                }
+                cop.group = g;
+                cop.head = g.getObjectByName?.('head') || new THREE.Group();
+                cop.leftArm = g.getObjectByName?.('leftArm') || new THREE.Group();
+                cop.rightArm = g.getObjectByName?.('rightArm') || new THREE.Group();
+                cop.leftLeg = g.getObjectByName?.('leftLeg') || new THREE.Group();
+                cop.rightLeg = g.getObjectByName?.('rightLeg') || new THREE.Group();
+                World.scene.add(g);
+            } else {
+                cop.group = {
+                    position: {
+                        x: cop.x, y: cop.y, z: cop.z,
+                        set(x, y, z) { this.x = x; this.y = y; this.z = z; }
+                    },
+                    rotation: { y: cop.yaw }
+                };
+                cop.head = { rotation: { x: 0, y: 0 } };
+                cop.leftArm = { rotation: { x: 0 } };
+                cop.rightArm = { rotation: { x: 0 } };
+                cop.leftLeg = { rotation: { x: 0 } };
+                cop.rightLeg = { rotation: { x: 0 } };
+            }
+
+            if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+                const labelEl = document.createElement('div');
+                labelEl.className = 'absolute top-0 left-0 -translate-x-1/2 -translate-y-full bg-slate-950/90 border border-blue-400/70 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow flex items-center gap-1 whitespace-nowrap transition-opacity duration-150';
+                const iconSpan = document.createElement('span');
+                iconSpan.textContent = '👮';
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = cop.name || 'Полиция';
+                labelEl.append(iconSpan, nameSpan);
+                if (npcLabelsContainer) npcLabelsContainer.appendChild(labelEl);
+                cop.labelEl = labelEl;
+            }
+        }
+
+        cop.target = {
+            x: cop.x,
+            y: cop.y,
+            z: cop.z,
+            vx: cop.vx,
+            vz: cop.vz,
+            yaw: cop.yaw,
+            state: cop.state,
+            anim: cop.anim,
+            target_user: cop.target_user,
+            timestamp: now
+        };
+    }
+
+    for (const car of GAME_STATE.policeCars.values()) {
+        if (!car._initialized) {
+            car._initialized = true;
+            car.driveable = false;
+            car.isPolice = true;
+            car.isServerControlled = true;
+            car.remoteDriver = null;
+            car.mass = (Number.isFinite(car.mass) && car.mass > 10) ? car.mass : POLICE_CAR_SPECS.mass;
+            car.length = POLICE_CAR_SPECS.length;
+            car.width = POLICE_CAR_SPECS.width;
+            car.axleOffset = POLICE_CAR_SPECS.axleOffset;
+            car.collisionRadius = POLICE_CAR_SPECS.collisionRadius;
+            car.yawInertia = car.mass * (car.width * car.width + car.length * car.length) / 12;
+            car.yawRate = car.yaw_rate || 0;
+            car.snapshotBuffer = new VehicleSnapshotBuffer();
+
+            if (typeof THREE !== 'undefined' && World.scene) {
+                const g = ModelLoader.instantiate('models/police_car.glb', () => ModelBuilders.police_car(car.id));
+                g.position.set(car.x, car.y, car.z);
+                if (g.rotation) g.rotation.y = car.yaw;
+                car.group = g;
+                car.lightbarRed = g.getObjectByName?.('lightbar_red') || null;
+                car.lightbarBlue = g.getObjectByName?.('lightbar_blue') || null;
+                World.scene.add(g);
+            } else {
+                car.group = {
+                    position: {
+                        x: car.x, y: car.y, z: car.z,
+                        set(x, y, z) { this.x = x; this.y = y; this.z = z; }
+                    },
+                    rotation: { y: car.yaw }
+                };
+                car.lightbarRed = null;
+                car.lightbarBlue = null;
+            }
+
+            if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+                const labelEl = document.createElement('div');
+                labelEl.className = 'absolute top-0 left-0 -translate-x-1/2 -translate-y-full bg-slate-950/90 border border-blue-400/70 text-blue-100 text-[10px] font-bold px-2 py-0.5 rounded-full shadow flex items-center gap-1 whitespace-nowrap transition-opacity duration-150';
+                const textSpan = document.createElement('span');
+                textSpan.textContent = car.state === 'chase' ? '🚓 ДПС • ПОГОНЯ!' : '🚓 ДПС';
+                labelEl.appendChild(textSpan);
+                if (npcLabelsContainer) npcLabelsContainer.appendChild(labelEl);
+                car.labelEl = labelEl;
+                car.labelTextEl = textSpan;
+            }
+        }
+
+        if (car.snapshotBuffer) {
+            car.snapshotBuffer.push({
+                x: car.serverX ?? car.x,
+                y: car.serverY ?? car.y,
+                z: car.serverZ ?? car.z,
+                vx: car.serverVx ?? car.vx,
+                vz: car.serverVz ?? car.vz,
+                yaw: car.serverYaw ?? car.yaw,
+                yaw_rate: car.serverYawRate ?? car.yaw_rate ?? 0,
+                speed: car.serverSpeed ?? car.speed ?? 0,
+                sequence: msg.sequence,
+                sample_time_ms: msg.sample_time_ms
+            }, now);
+        }
+    }
+
+    return true;
+}
+
+export function updatePoliceEntities(dt, elapsed = 0, remotePlayersMap = null) {
+    const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now();
+
+    if (GAME_STATE.policeCops instanceof Map) {
+        for (const cop of GAME_STATE.policeCops.values()) {
+            const target = cop.target || cop;
+            const ageSec = Math.min(0.25, Math.max(0, (now - (target.timestamp || now)) / 1000));
+            const predX = target.x + (target.vx || 0) * ageSec;
+            const predZ = target.z + (target.vz || 0) * ageSec;
+
+            if (!cop.renderPosition) {
+                cop.renderPosition = { x: target.x, y: target.y, z: target.z };
+            }
+            const alpha = smoothingAlpha(14, dt);
+            cop.renderPosition.x += (predX - cop.renderPosition.x) * alpha;
+            cop.renderPosition.y += ((target.y || 0) - cop.renderPosition.y) * alpha;
+            cop.renderPosition.z += (predZ - cop.renderPosition.z) * alpha;
+
+            if (cop.group && cop.group.position) {
+                cop.group.position.set(cop.renderPosition.x, cop.renderPosition.y, cop.renderPosition.z);
+            }
+
+            let desiredYaw = target.yaw || 0;
+            if (target.state === 'dialogue' && target.target_user) {
+                let targetPos = null;
+                if (target.target_user === GAME_STATE.username && Player.position) {
+                    targetPos = Player.position;
+                } else if (remotePlayersMap && remotePlayersMap.get) {
+                    targetPos = remotePlayersMap.get(target.target_user)?.group?.position || null;
+                }
+                if (targetPos) {
+                    desiredYaw = Math.atan2(targetPos.x - cop.renderPosition.x, targetPos.z - cop.renderPosition.z);
+                }
+            }
+
+            if (cop.group && cop.group.rotation) {
+                let yawDiff = desiredYaw - (cop.group.rotation.y || 0);
+                yawDiff = Math.atan2(Math.sin(yawDiff), Math.cos(yawDiff));
+                cop.group.rotation.y = (cop.group.rotation.y || 0) + yawDiff * alpha;
+            }
+
+            const speed = Math.hypot(target.vx || 0, target.vz || 0);
+            const isMoving = target.state === 'patrol' || target.state === 'approach' || speed > 0.25;
+            if (isMoving) {
+                const isRun = target.state === 'approach' || target.anim === 'run' || speed > 4.0;
+                cop.walkCycle = (cop.walkCycle || 0) + dt * (isRun ? 14 : 9);
+                const swing = Math.sin(cop.walkCycle) * (isRun ? 0.8 : 0.55);
+                if (cop.leftLeg?.rotation) cop.leftLeg.rotation.x = swing;
+                if (cop.rightLeg?.rotation) cop.rightLeg.rotation.x = -swing;
+                if (cop.leftArm?.rotation) cop.leftArm.rotation.x = -swing * 0.8;
+                if (cop.rightArm?.rotation) cop.rightArm.rotation.x = swing * 0.8;
+            } else {
+                const decay = Math.max(0, 1 - dt * 10);
+                if (cop.leftLeg?.rotation) cop.leftLeg.rotation.x *= decay;
+                if (cop.rightLeg?.rotation) cop.rightLeg.rotation.x *= decay;
+                if (cop.leftArm?.rotation) cop.leftArm.rotation.x *= decay;
+                if (cop.rightArm?.rotation) cop.rightArm.rotation.x *= decay;
+            }
+        }
+    }
+
+    let nearestSirenDist = Infinity;
+    let nearestSirenAcoustics = null;
+    const listenerCar = GAME_STATE.inVehicle;
+    const listenerPos = listenerCar || Player.position;
+    const listenerVel = listenerCar ? { vx: listenerCar.vx, vz: listenerCar.vz } :
+        { vx: Player.velocity?.x || 0, vz: Player.velocity?.z || 0 };
+    if (GAME_STATE.policeCars instanceof Map) {
+        const redPhase = Math.floor(elapsed * 8) % 2 === 0;
+        for (const car of GAME_STATE.policeCars.values()) {
+            if (car.snapshotBuffer) {
+                const pose = car.snapshotBuffer.sample(now, 20);
+                if (pose) {
+                    car.x = pose.x;
+                    car.y = pose.y;
+                    car.z = pose.z;
+                    car.yaw = pose.yaw;
+                    car.vx = pose.vx;
+                    car.vz = pose.vz;
+                    car.yawRate = pose.yawRate;
+                    car.yaw_rate = pose.yawRate;
+                    car.speed = pose.speed;
+                }
+            }
+            if (car.group && car.group.position) {
+                car.group.position.set(car.x, car.y, car.z);
+            }
+            if (car.group && car.group.rotation) {
+                car.group.rotation.y = car.yaw;
+            }
+
+            const emergencyActive = Boolean(car.siren || car.lights || car.state === 'chase');
+            if (car.lightbarRed && car.lightbarRed.material) {
+                car.lightbarRed.material.emissiveIntensity = emergencyActive ? (redPhase ? 2.8 : 0.15) : 0.15;
+            }
+            if (car.lightbarBlue && car.lightbarBlue.material) {
+                car.lightbarBlue.material.emissiveIntensity = emergencyActive ? (!redPhase ? 2.8 : 0.15) : 0.15;
+            }
+
+            if ((car.siren || car.state === 'chase') && listenerPos) {
+                const acoustics = computePoliceSirenAcoustics({
+                    sirenPos: car, sirenVel: car, listenerPos, listenerVel,
+                    cameraYaw: GAME_STATE.cameraYaw || 0
+                });
+                if (acoustics.distance < nearestSirenDist) {
+                    nearestSirenDist = acoustics.distance;
+                    nearestSirenAcoustics = acoustics;
+                }
+            }
+        }
+    }
+
+    const chased = isLocalPlayerChased(GAME_STATE);
+    updatePolicePursuitBanner(chased);
+    if (nearestSirenAcoustics?.active) {
+        SoundManager.playPoliceSiren?.(true, nearestSirenAcoustics.volume, nearestSirenAcoustics);
+    } else {
+        SoundManager.stopPoliceSiren?.();
+    }
+}
+
+export function clearPoliceEntities() {
+    if (GAME_STATE.policeCops instanceof Map) {
+        for (const cop of GAME_STATE.policeCops.values()) {
+            disposePoliceEntity(cop);
+        }
+    }
+    if (GAME_STATE.policeCars instanceof Map) {
+        for (const car of GAME_STATE.policeCars.values()) {
+            disposePoliceEntity(car);
+        }
+    }
+    resetPoliceState(GAME_STATE);
 }
 

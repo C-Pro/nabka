@@ -57,6 +57,7 @@ export function syncGameStateKeys() {
 }
 
 let dpadResetFn = null;
+let cameraTouchId = null;
 
 let activeBrakeKeys = new Set();
 const HANDBRAKE_CODES = ['Space', 'ControlRight', 'ControlLeft', 'Numpad0', 'KeyB'];
@@ -92,12 +93,34 @@ export function clearMovementInput() {
     GAME_STATE.joystickVector.x = 0;
     GAME_STATE.joystickVector.y = 0;
     GAME_STATE.joystickSprint = false;
+    GAME_STATE.isDraggingCamera = false;
+    cameraTouchId = null;
     if (typeof dpadResetFn === 'function') {
         dpadResetFn();
     }
     if (typeof document !== 'undefined') {
-        const activeTouchEls = document.querySelectorAll('.dpad-btn.touch-active, .car-pedal.touch-active, .touch-active');
-        activeTouchEls.forEach(el => el.classList.remove('touch-active'));
+        if (typeof document.querySelectorAll === 'function') {
+            const activeTouchEls = document.querySelectorAll('.dpad-btn.touch-active, .car-pedal.touch-active, .touch-active');
+            activeTouchEls.forEach(el => el.classList?.remove('touch-active'));
+        }
+        const touchControlIds = [
+            'btn-arrow-up',
+            'btn-arrow-down',
+            'btn-arrow-left',
+            'btn-arrow-right',
+            'btn-car-gas',
+            'btn-car-brake',
+            'btn-action-jump',
+            'btn-action-sprint'
+        ];
+        if (typeof document.getElementById === 'function') {
+            touchControlIds.forEach(id => {
+                document.getElementById(id)?.classList?.remove('touch-active');
+            });
+        }
+        if (document.pointerLockElement && typeof document.exitPointerLock === 'function') {
+            document.exitPointerLock();
+        }
     }
 }
 
@@ -195,22 +218,40 @@ export function bindInputControls(worldMap = {}) {
                 if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
                     document.activeElement.blur();
                 }
-                closeNpcDialogue();
+                if (GAME_STATE.activeNpcChat || GAME_STATE.activePoliceEncounter) {
+                    e.preventDefault?.();
+                    closeNpcDialogue();
+                }
                 return;
             }
-            if (GAME_STATE.activeNpcChat) {
-                if (e.repeat) return;
+            if (GAME_STATE.activeNpcChat || GAME_STATE.activePoliceEncounter) {
+                const activeEl = document.activeElement;
+                const isTextFocused = Boolean(
+                    activeEl && (
+                        activeEl.tagName === 'INPUT' ||
+                        activeEl.tagName === 'TEXTAREA' ||
+                        activeEl.isContentEditable
+                    )
+                );
+                if (e.repeat || isTextFocused) return;
+                const getOptionButtons = () => {
+                    if (typeof document.querySelectorAll === 'function') {
+                        return document.querySelectorAll('#npc-options-container button');
+                    }
+                    const container = document.getElementById?.('npc-options-container');
+                    return (container && Array.isArray(container.children)) ? container.children : [];
+                };
                 if (e.code === 'Digit1' || e.code === 'Numpad1') {
-                    const btns = document.querySelectorAll('#npc-options-container button');
+                    const btns = getOptionButtons();
                     if (btns[0]) btns[0].click();
                 } else if (e.code === 'Digit2' || e.code === 'Numpad2') {
-                    const btns = document.querySelectorAll('#npc-options-container button');
+                    const btns = getOptionButtons();
                     if (btns[1]) btns[1].click();
                 } else if (e.code === 'Digit3' || e.code === 'Numpad3') {
-                    const btns = document.querySelectorAll('#npc-options-container button');
+                    const btns = getOptionButtons();
                     if (btns[2]) btns[2].click();
                 } else if (e.code === 'Digit4' || e.code === 'Numpad4') {
-                    const btns = document.querySelectorAll('#npc-options-container button');
+                    const btns = getOptionButtons();
                     if (btns[3]) btns[3].click();
                 }
             }
@@ -252,6 +293,10 @@ export function bindInputControls(worldMap = {}) {
     });
 
     window.addEventListener('keyup', (e) => {
+        if (isGameplayInputSuspended()) {
+            clearMovementInput();
+            return;
+        }
         const code = e.code;
         if (PREVENTED_GAMEPLAY_CODES.includes(code)) {
             e.preventDefault();
@@ -281,6 +326,10 @@ export function bindInputControls(worldMap = {}) {
         if (btnLock) btnLock.addEventListener('click', requestLock);
 
         canvas.addEventListener('mousedown', (e) => {
+            if (isGameplayInputSuspended()) {
+                GAME_STATE.isDraggingCamera = false;
+                return;
+            }
             if (e.button === 0) {
                 GAME_STATE.isDraggingCamera = true;
             }
@@ -298,6 +347,10 @@ export function bindInputControls(worldMap = {}) {
         });
 
         window.addEventListener('mousemove', (e) => {
+            if (isGameplayInputSuspended()) {
+                GAME_STATE.isDraggingCamera = false;
+                return;
+            }
             if (GAME_STATE.pointerLocked || GAME_STATE.isDraggingCamera) {
                 GAME_STATE.lastMouseMoveTime = performance.now();
                 const sensitivity = 0.0032;
@@ -307,15 +360,20 @@ export function bindInputControls(worldMap = {}) {
         });
 
         canvas.addEventListener('wheel', (e) => {
+            if (isGameplayInputSuspended()) return;
             e.preventDefault();
             GAME_STATE.cameraDistance = Math.max(4.2, Math.min(16, GAME_STATE.cameraDistance + e.deltaY * 0.006));
         }, { passive: false });
 
-        let cameraTouchId = null;
+        cameraTouchId = null;
         let lastTouchX = 0;
         let lastTouchY = 0;
 
         canvas.addEventListener('touchstart', (e) => {
+            if (isGameplayInputSuspended()) {
+                cameraTouchId = null;
+                return;
+            }
             if (cameraTouchId !== null) return;
             for (let i = 0; i < e.changedTouches.length; i++) {
                 const t = e.changedTouches[i];
@@ -328,6 +386,10 @@ export function bindInputControls(worldMap = {}) {
         }, { passive: true });
 
         canvas.addEventListener('touchmove', (e) => {
+            if (isGameplayInputSuspended()) {
+                cameraTouchId = null;
+                return;
+            }
             if (cameraTouchId === null) return;
             for (let i = 0; i < e.changedTouches.length; i++) {
                 const t = e.changedTouches[i];
@@ -731,7 +793,7 @@ export function bindInputControls(worldMap = {}) {
     }
 
     const btnCloseNpc = document.getElementById('btn-close-npc-chat');
-    if (btnCloseNpc) btnCloseNpc.addEventListener('click', closeNpcDialogue);
+    if (btnCloseNpc) btnCloseNpc.addEventListener('click', () => closeNpcDialogue());
 
     const helpModal = document.getElementById('help-modal');
     const btnHelp = document.getElementById('btn-help');

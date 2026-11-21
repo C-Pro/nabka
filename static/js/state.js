@@ -126,6 +126,12 @@ export function createGameState(overrides = {}) {
         audioEnabled: true,
         nearestInteractable: null,
         activeNpcChat: null,
+        policeCops: overrides.policeCops || new Map(),
+        policeCars: overrides.policeCars || new Map(),
+        policeStateSequence: -1,
+        activePoliceEncounter: null,
+        activePoliceChases: overrides.activePoliceChases || new Map(),
+        activePoliceChase: null,
         ...overrides
     };
 }
@@ -240,10 +246,10 @@ export async function loadGameData(fetchFn = fetch) {
 
 /**
  * Returns true if gameplay input (movement, vehicle controls, actions) should be suspended
- * due to active modal dialogs (help modal, login overlay, NPC chat) or focused text inputs.
+ * due to active modal dialogs (help modal, login overlay, NPC chat, police encounter) or focused text inputs.
  */
-export function isGameplayInputSuspended() {
-    if (GAME_STATE.activeNpcChat) return true;
+export function isGameplayInputSuspended(state = GAME_STATE) {
+    if (state && (state.activeNpcChat || state.activePoliceEncounter)) return true;
     if (typeof document === 'undefined') return false;
     const activeEl = document.activeElement;
     if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
@@ -258,5 +264,334 @@ export function isGameplayInputSuspended() {
         return true;
     }
     return false;
+}
+
+/**
+ * Pure, DOM/Three.js-free police and economy state helpers.
+ */
+export function setMoneyBalance(state, newMoney) {
+    if (!state || typeof newMoney !== 'number' || !Number.isFinite(newMoney) || !Number.isSafeInteger(newMoney)) {
+        return { updated: false, money: state ? state.money : 0 };
+    }
+    state.money = newMoney;
+    return { updated: true, money: state.money };
+}
+
+export function applyJoinBalance(state, msg) {
+    if (!state || !msg || typeof msg !== 'object') {
+        return { updated: false };
+    }
+    if (msg.user && state.username && String(msg.user) !== String(state.username)) {
+        return { updated: false, reason: 'USERNAME_MISMATCH' };
+    }
+    if (msg.money === undefined || msg.money === null) {
+        return { updated: false, reason: 'NO_MONEY' };
+    }
+    return setMoneyBalance(state, msg.money);
+}
+
+export function applyBalanceUpdate(state, msg) {
+    if (!state || !msg || typeof msg !== 'object') {
+        return { updated: false };
+    }
+    const targetUser = String(msg.username || '');
+    if (!state.username || !targetUser || targetUser !== String(state.username)) {
+        return { updated: false, reason: 'USERNAME_MISMATCH' };
+    }
+    const res = setMoneyBalance(state, msg.money);
+    if (!res.updated) return res;
+    return {
+        updated: true,
+        money: state.money,
+        delta: (typeof msg.delta === 'number' && Number.isSafeInteger(msg.delta)) ? msg.delta : 0,
+        reason: String(msg.reason || '')
+    };
+}
+
+function syncActivePoliceChaseSummary(state) {
+    if (!state || !(state.activePoliceChases instanceof Map) || !state.username) {
+        if (state) state.activePoliceChase = null;
+        return;
+    }
+    let found = null;
+    for (const chase of state.activePoliceChases.values()) {
+        if (chase && chase.target_user === state.username) {
+            found = chase;
+            break;
+        }
+    }
+    state.activePoliceChase = found;
+}
+
+export function applyPoliceStateSnapshot(state, msg) {
+    if (!state || !msg || typeof msg !== 'object') {
+        return { applied: false, reason: 'INVALID_MESSAGE', removedCops: [], removedCars: [] };
+    }
+    const hasSeq = msg.sequence !== undefined && msg.sequence !== null;
+    const seq = hasSeq ? Number(msg.sequence) : NaN;
+    if (hasSeq && (!Number.isFinite(seq) || (Number.isFinite(state.policeStateSequence) && state.policeStateSequence >= 0 && seq <= state.policeStateSequence))) {
+        return { applied: false, reason: 'STALE_SEQUENCE', removedCops: [], removedCars: [] };
+    }
+    if (Number.isFinite(seq)) {
+        state.policeStateSequence = seq;
+    }
+
+    if (!(state.policeCops instanceof Map)) state.policeCops = new Map();
+    if (!(state.policeCars instanceof Map)) state.policeCars = new Map();
+    if (!(state.activePoliceChases instanceof Map)) state.activePoliceChases = new Map();
+
+    const removedCops = [];
+    const removedCars = [];
+
+    if (Array.isArray(msg.foot_cops)) {
+        const seenCopIds = new Set();
+        for (const rawCop of msg.foot_cops) {
+            if (!rawCop || !rawCop.id) continue;
+            const id = String(rawCop.id);
+            seenCopIds.add(id);
+            const existing = state.policeCops.get(id) || {};
+            const updated = Object.assign(existing, {
+                id,
+                name: String(rawCop.name || existing.name || 'Сержант ППС'),
+                x: Number(rawCop.x) || 0,
+                y: Number(rawCop.y) || 0,
+                z: Number(rawCop.z) || 0,
+                vx: Number(rawCop.vx) || 0,
+                vz: Number(rawCop.vz) || 0,
+                yaw: Number(rawCop.yaw) || 0,
+                state: String(rawCop.state || 'patrol'),
+                anim: String(rawCop.anim || 'idle'),
+                target_user: String(rawCop.target_user || '')
+            });
+            state.policeCops.set(id, updated);
+        }
+        for (const [id, cop] of Array.from(state.policeCops.entries())) {
+            if (!seenCopIds.has(id)) {
+                removedCops.push(cop);
+                state.policeCops.delete(id);
+            }
+        }
+    }
+
+    if (Array.isArray(msg.police_cars)) {
+        const seenCarIds = new Set();
+        for (const rawCar of msg.police_cars) {
+            if (!rawCar || !rawCar.id) continue;
+            const id = String(rawCar.id);
+            seenCarIds.add(id);
+            const existing = state.policeCars.get(id) || {};
+            const keepVisualPose = existing._initialized && existing.snapshotBuffer?.samples?.length > 0;
+            const serverX = Number(rawCar.x) || 0;
+            const serverY = Number(rawCar.y) || 0;
+            const serverZ = Number(rawCar.z) || 0;
+            const serverVx = Number(rawCar.vx) || 0;
+            const serverVz = Number(rawCar.vz) || 0;
+            const serverYaw = Number(rawCar.yaw) || 0;
+            const serverYawRate = Number(rawCar.yaw_rate) || 0;
+            const serverSpeed = Number(rawCar.speed) || 0;
+            const updated = Object.assign(existing, {
+                id,
+                serverX, serverY, serverZ, serverVx, serverVz, serverYaw, serverYawRate, serverSpeed,
+                x: keepVisualPose ? existing.x : serverX,
+                y: keepVisualPose ? existing.y : serverY,
+                z: keepVisualPose ? existing.z : serverZ,
+                vx: keepVisualPose ? existing.vx : serverVx,
+                vz: keepVisualPose ? existing.vz : serverVz,
+                yaw: keepVisualPose ? existing.yaw : serverYaw,
+                yaw_rate: keepVisualPose ? existing.yaw_rate : serverYawRate,
+                speed: keepVisualPose ? existing.speed : serverSpeed,
+                mass: (Number.isFinite(Number(rawCar.mass)) && Number(rawCar.mass) > 10) ? Number(rawCar.mass) : (existing.mass || 4200),
+                state: String(rawCar.state || 'patrol'),
+                target_car_id: String(rawCar.target_car_id || ''),
+                target_user: String(rawCar.target_user || ''),
+                siren: Boolean(rawCar.siren),
+                lights: Boolean(rawCar.lights)
+            });
+            state.policeCars.set(id, updated);
+
+            if (updated.state === 'chase' && updated.target_user) {
+                state.activePoliceChases.set(id, {
+                    police_car_id: id,
+                    target_car_id: updated.target_car_id,
+                    target_user: updated.target_user,
+                    status: 'started'
+                });
+            } else {
+                state.activePoliceChases.delete(id);
+            }
+        }
+        for (const [id, car] of Array.from(state.policeCars.entries())) {
+            if (!seenCarIds.has(id)) {
+                removedCars.push(car);
+                state.policeCars.delete(id);
+                state.activePoliceChases.delete(id);
+            }
+        }
+    }
+
+    syncActivePoliceChaseSummary(state);
+    return { applied: true, sequence: state.policeStateSequence, removedCops, removedCars };
+}
+
+export function startPoliceEncounterState(state, msg) {
+    if (!state || !msg || typeof msg !== 'object' || !msg.encounter_id || !Array.isArray(msg.options)) {
+        return { started: false, reason: 'INVALID_ENCOUNTER' };
+    }
+    const targetUser = msg.target_user ? String(msg.target_user) : '';
+    if (targetUser && state.username && targetUser !== String(state.username)) {
+        return { started: false, reason: 'USERNAME_MISMATCH' };
+    }
+    const encounterId = String(msg.encounter_id);
+    if (state.activePoliceEncounter && state.activePoliceEncounter.encounter_id === encounterId) {
+        if (state.activePoliceEncounter.stage === 'pending') {
+            state.activePoliceEncounter.stage = 'opening';
+            state.activePoliceEncounter.chosenOptionIndex = null;
+        }
+        return { started: true, idempotent: true, encounter: state.activePoliceEncounter };
+    }
+    const opening = String(msg.opening || '');
+    state.activeNpcChat = null;
+    state.activePoliceEncounter = {
+        encounter_id: encounterId,
+        cop_id: String(msg.cop_id || ''),
+        cop_name: String(msg.cop_name || 'Сержант ППС'),
+        scenario_id: String(msg.scenario_id || ''),
+        title: String(msg.title || 'Полиция Владивостока'),
+        opening,
+        options: msg.options.map((opt, idx) => ({
+            index: Number.isInteger(opt && opt.index) ? opt.index : idx,
+            text: String((opt && opt.text) || ''),
+            fine: Number(opt && opt.fine) || 0
+        })),
+        target_user: targetUser || String(state.username || ''),
+        stage: 'opening',
+        chosenOptionIndex: null,
+        replyText: '',
+        fine: 0,
+        chatHistory: [
+            { role: 'police', text: opening }
+        ]
+    };
+    return { started: true, idempotent: false, encounter: state.activePoliceEncounter };
+}
+
+export function resolvePoliceEncounterState(state, msg) {
+    if (!state || !msg || typeof msg !== 'object') {
+        return { resolved: false, moneyUpdated: false };
+    }
+    const targetUser = String(msg.target_user || '');
+    if (!state.username || !targetUser || targetUser !== String(state.username)) {
+        return { resolved: false, moneyUpdated: false, reason: 'USERNAME_MISMATCH' };
+    }
+
+    let moneyUpdated = false;
+    if (msg.money !== undefined && msg.money !== null) {
+        const res = setMoneyBalance(state, msg.money);
+        moneyUpdated = res.updated;
+    }
+
+    const enc = state.activePoliceEncounter;
+    if (enc && (!msg.encounter_id || enc.encounter_id === String(msg.encounter_id))) {
+        enc.stage = 'resolved';
+        enc.replyText = String(msg.reply_text || '');
+        enc.fine = Number.isFinite(Number(msg.fine)) ? Number(msg.fine) : 0;
+        if (Number.isInteger(msg.option_index)) {
+            enc.chosenOptionIndex = msg.option_index;
+        }
+        if (enc.replyText) {
+            enc.chatHistory.push({ role: 'police', text: enc.replyText });
+        }
+        return { resolved: true, moneyUpdated, encounter: enc };
+    }
+    return { resolved: false, moneyUpdated };
+}
+
+export function clearPoliceEncounterState(state = GAME_STATE) {
+    if (!state) return;
+    state.activePoliceEncounter = null;
+}
+
+export function isLocalPlayerChased(state = GAME_STATE) {
+    if (!state || !state.username) return false;
+    if (state.activePoliceChases instanceof Map) {
+        for (const chase of state.activePoliceChases.values()) {
+            if (chase && chase.target_user === state.username) {
+                return true;
+            }
+        }
+    }
+    if (state.policeCars instanceof Map) {
+        for (const car of state.policeCars.values()) {
+            if (car && car.state === 'chase' && car.target_user === state.username) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+export function applyPoliceChaseEvent(state, msg) {
+    if (!state || !msg || typeof msg !== 'object') {
+        return { isLocalTarget: false, status: '', chased: false, moneyUpdated: false };
+    }
+    if (!(state.activePoliceChases instanceof Map)) {
+        state.activePoliceChases = new Map();
+    }
+    const policeCarId = String(msg.police_car_id || '');
+    const targetCarId = String(msg.target_car_id || '');
+    const targetUser = String(msg.target_user || '');
+    const status = String(msg.status || '');
+
+    if (policeCarId) {
+        if (status === 'started') {
+            state.activePoliceChases.set(policeCarId, {
+                police_car_id: policeCarId,
+                target_car_id: targetCarId,
+                target_user: targetUser,
+                status: 'started',
+                reason: String(msg.reason || '')
+            });
+        } else if (status === 'stopped' || status === 'evaded') {
+            state.activePoliceChases.delete(policeCarId);
+            if (state.policeCars instanceof Map) {
+                const pcar = state.policeCars.get(policeCarId);
+                if (pcar) {
+                    pcar.state = 'cooldown';
+                    pcar.target_user = '';
+                    pcar.target_car_id = '';
+                    pcar.siren = false;
+                    pcar.lights = false;
+                }
+            }
+        }
+    }
+    syncActivePoliceChaseSummary(state);
+
+    const isLocalTarget = Boolean(state.username && targetUser && targetUser === String(state.username));
+    let moneyUpdated = false;
+    if (isLocalTarget && msg.money !== undefined && msg.money !== null) {
+        const res = setMoneyBalance(state, msg.money);
+        moneyUpdated = res.updated;
+    }
+
+    return {
+        isLocalTarget,
+        status,
+        chased: isLocalPlayerChased(state),
+        moneyUpdated
+    };
+}
+
+export function resetPoliceState(state = GAME_STATE) {
+    if (!state) return;
+    if (state.policeCops instanceof Map) state.policeCops.clear();
+    else state.policeCops = new Map();
+    if (state.policeCars instanceof Map) state.policeCars.clear();
+    else state.policeCars = new Map();
+    if (state.activePoliceChases instanceof Map) state.activePoliceChases.clear();
+    else state.activePoliceChases = new Map();
+    state.policeStateSequence = -1;
+    state.activePoliceEncounter = null;
+    state.activePoliceChase = null;
 }
 

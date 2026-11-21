@@ -1,16 +1,35 @@
 import { VehicleSnapshotBuffer, resetVehiclePose } from './vehicle-motion.js';
 import { MsgPackCodec } from './msgpack.js';
-import { GAME_STATE, computePedestrianAnim, deriveDefaultWsUrl, generateRandomVladivostokName, getInitialUsername } from './state.js';
+import {
+    GAME_STATE,
+    computePedestrianAnim,
+    deriveDefaultWsUrl,
+    generateRandomVladivostokName,
+    getInitialUsername,
+    applyJoinBalance,
+    applyBalanceUpdate,
+    applyPoliceChaseEvent,
+    resetPoliceState
+} from './state.js';
 import { SoundManager } from './audio.js';
 import { TextureFactory } from './textures.js';
 import { World } from './world.js';
-import { Player, toggleVehicleDrive, revalidatePlayerSpawn } from './entities.js';
-import { showToast, triggerPlayerSpeech, showLocalLabels } from './ui.js';
+import { Player, toggleVehicleDrive, revalidatePlayerSpawn, replicatePoliceState, clearPoliceEntities } from './entities.js';
+import {
+    showToast,
+    triggerPlayerSpeech,
+    showLocalLabels,
+    renderMoneyHUD,
+    openPoliceEncounterModal,
+    resolvePoliceEncounterModal,
+    closeNpcDialogue,
+    updatePolicePursuitBanner
+} from './ui.js';
 import { ModelLoader, ModelBuilders } from './models.js';
 import { triggerCameraShake } from './camera-effects.js';
 import { consumeAbility } from './quests.js';
 import { getVladivostokDateParts } from './noon-cannon.js';
-import { PhysicsEngine, SEA_SURFACE_Y, getWaterDepthAt } from './physics.js';
+import { PhysicsEngine, SEA_SURFACE_Y, getWaterDepthAt, applyVehicleImpulse, getMinVehicleCircleGap } from './physics.js';
 
 export function hashUsernameColor(username) {
     const palette = ['#38bdf8', '#fbbf24', '#34d399', '#f472b6', '#a78bfa', '#fb7185', '#2dd4bf'];
@@ -45,6 +64,8 @@ export const MultiplayerClient = {
     maxReconnectAttempts: 10,
     isReconnecting: false,
     handledNoonDates: new Set(),
+    lastPoliceStateSequence: 0,
+    lastVehicleImpulseSequence: 0,
 
     getSessionToken(username) {
         if (!username) return '';
@@ -399,6 +420,7 @@ export const MultiplayerClient = {
         }
 
         this.updateOnlineRosterUI();
+        renderMoneyHUD(GAME_STATE.money);
         this.appendChatSystemMessage(statusLabel || `Подключён к серверу Набки как @${username}`);
         this.sendMoveSnapshot(true);
 
@@ -529,6 +551,16 @@ export const MultiplayerClient = {
         this.setConnectingUI(false);
         GAME_STATE.isConnected = false;
         GAME_STATE.isCannonFirePending = false;
+        this.lastPoliceStateSequence = 0;
+        this.lastVehicleImpulseSequence = 0;
+        if (Array.isArray(World.vehicles)) {
+            World.vehicles.forEach(v => { v.lastImpulseSequence = undefined; });
+        }
+        clearPoliceEntities();
+        resetPoliceState(GAME_STATE);
+        SoundManager.stopPoliceSiren?.();
+        updatePolicePursuitBanner(false);
+        closeNpcDialogue({ force: true });
         if (typeof document !== 'undefined') {
             const dot = document.getElementById('net-status-dot');
             if (dot) dot.className = 'w-2 h-2 rounded-full bg-rose-500';
@@ -537,7 +569,7 @@ export const MultiplayerClient = {
         }
 
         if (GAME_STATE.inVehicle) {
-            toggleVehicleDrive(GAME_STATE.inVehicle);
+            toggleVehicleDrive(GAME_STATE.inVehicle, { force: true });
         }
         World.resetVehicles();
 
@@ -556,6 +588,16 @@ export const MultiplayerClient = {
         if (!isReconnect) {
             this.reconnectAttempts = 0;
             this.isReconnecting = false;
+            this.lastPoliceStateSequence = 0;
+            this.lastVehicleImpulseSequence = 0;
+            if (Array.isArray(World.vehicles)) {
+                World.vehicles.forEach(v => { v.lastImpulseSequence = undefined; });
+            }
+            clearPoliceEntities();
+            resetPoliceState(GAME_STATE);
+            SoundManager.stopPoliceSiren?.();
+            updatePolicePursuitBanner(false);
+            closeNpcDialogue({ force: true });
             if (this.reconnectTimer) {
                 clearTimeout(this.reconnectTimer);
                 this.reconnectTimer = null;
@@ -812,6 +854,37 @@ export const MultiplayerClient = {
                     if (msg.token) {
                         this.setSessionToken(user, String(msg.token));
                     }
+                    this.lastPoliceStateSequence = 0;
+                    this.lastVehicleImpulseSequence = 0;
+                    GAME_STATE.policeStateSequence = -1;
+                    if (GAME_STATE.activePoliceEncounter) {
+                        closeNpcDialogue({ force: true });
+                    }
+                    if (GAME_STATE.activePoliceChases instanceof Map) {
+                        GAME_STATE.activePoliceChases.clear();
+                    }
+                    GAME_STATE.activePoliceChase = null;
+                    updatePolicePursuitBanner(false);
+                    SoundManager.stopPoliceSiren?.();
+                    if (GAME_STATE.policeCars instanceof Map) {
+                        for (const pcar of GAME_STATE.policeCars.values()) {
+                            pcar.snapshotBuffer = new VehicleSnapshotBuffer();
+                            pcar.state = 'patrol';
+                            pcar.target_user = '';
+                            pcar.target_car_id = '';
+                            pcar.siren = false;
+                            pcar.lights = false;
+                        }
+                    }
+                    if (Array.isArray(World.vehicles)) {
+                        World.vehicles.forEach(v => { v.lastImpulseSequence = undefined; });
+                    }
+                    if (msg.money !== undefined && msg.money !== null) {
+                        const balRes = applyJoinBalance(GAME_STATE, msg);
+                        if (balRes.updated) {
+                            renderMoneyHUD(GAME_STATE.money);
+                        }
+                    }
                     this.activateSessionUI(user);
                     if (Array.isArray(msg.roster)) {
                         const rosterSet = new Set(msg.roster.map(String));
@@ -882,7 +955,7 @@ export const MultiplayerClient = {
                     // Reconcile vehicle conflict: if another player is authoritative driver for our currently occupied car
                     if (car && GAME_STATE.inVehicle === car && driver && driver !== GAME_STATE.username) {
                         showToast(`⚠️ Машина занята игроком @${driver}!`, 'amber');
-                        toggleVehicleDrive(car, (force) => this.sendMoveSnapshot(force));
+                        toggleVehicleDrive(car, (force) => this.sendMoveSnapshot(force), { force: true });
                     }
 
                     if (!driver) {
@@ -983,6 +1056,14 @@ export const MultiplayerClient = {
                     break;
                 }
 
+                if (op === 'police_dialogue_choice' || errText.toLowerCase().includes('police encounter')) {
+                    if (GAME_STATE.activePoliceEncounter) {
+                        closeNpcDialogue({ force: true });
+                    }
+                    showToast(`⚠️ ${errText}`, 'amber');
+                    break;
+                }
+
                 if (errText.includes('unknown message type')) {
                     if (GAME_STATE.isCannonFirePending) {
                         GAME_STATE.isCannonFirePending = false;
@@ -998,6 +1079,93 @@ export const MultiplayerClient = {
             }
             case 'pong': {
                 // Heartbeat response from server
+                break;
+            }
+            case 'balance_update': {
+                const res = applyBalanceUpdate(GAME_STATE, msg);
+                if (res.updated) {
+                    renderMoneyHUD(GAME_STATE.money);
+                    if (res.delta < 0) {
+                        showToast(`💸 Списано: -₽ ${Math.abs(res.delta).toLocaleString('ru-RU')}`, 'amber', 3000);
+                    }
+                }
+                break;
+            }
+            case 'police_state': {
+                const seq = Number(msg.sequence);
+                if (Number.isFinite(seq) && (this.lastPoliceStateSequence || 0) > 0 && seq <= this.lastPoliceStateSequence) {
+                    break;
+                }
+                if (Number.isFinite(seq)) {
+                    this.lastPoliceStateSequence = seq;
+                }
+                replicatePoliceState(msg);
+                break;
+            }
+            case 'police_encounter_start': {
+                if (msg.target_user && GAME_STATE.username && String(msg.target_user) !== String(GAME_STATE.username)) {
+                    break;
+                }
+                openPoliceEncounterModal(msg, (encId, optIdx) => this.sendPoliceDialogueChoice(encId, optIdx));
+                break;
+            }
+            case 'police_encounter_result': {
+                resolvePoliceEncounterModal(msg);
+                break;
+            }
+            case 'police_chase': {
+                const chaseRes = applyPoliceChaseEvent(GAME_STATE, msg);
+                if (chaseRes.isLocalTarget) {
+                    renderMoneyHUD(GAME_STATE.money);
+                    updatePolicePursuitBanner(chaseRes.chased);
+                    if (chaseRes.status === 'started') {
+                        showToast('🚨 Полиция начала погоню! Сбавьте скорость (<= 40 км/ч) или остановитесь.', 'amber', 3500);
+                    } else if (chaseRes.status === 'stopped') {
+                        if (!chaseRes.chased) SoundManager.stopPoliceSiren?.();
+                        if (Number(msg.fine) > 0) {
+                            SoundManager.playPoliceChime?.('fine');
+                            triggerCameraShake(1.0);
+                            showToast(`🚨 ДПС остановили вас! Штраф: -₽ ${Math.abs(Number(msg.fine)).toLocaleString('ru-RU')}`, 'amber', 4000);
+                        }
+                    } else if (chaseRes.status === 'evaded') {
+                        if (!chaseRes.chased) SoundManager.stopPoliceSiren?.();
+                        SoundManager.playPoliceChime?.('evade');
+                        showToast('🚓 Вы ушли от погони ДПС!', 'emerald', 3000);
+                    }
+                }
+                break;
+            }
+            case 'vehicle_impulse': {
+                if (msg.target_user && GAME_STATE.username && String(msg.target_user) !== String(GAME_STATE.username)) {
+                    break;
+                }
+                const seq = Number(msg.sequence);
+                if (Number.isFinite(seq) && (this.lastVehicleImpulseSequence || 0) > 0 && seq <= this.lastVehicleImpulseSequence) {
+                    break;
+                }
+                if (Number.isFinite(seq)) {
+                    this.lastVehicleImpulseSequence = seq;
+                }
+                let targetCar = (GAME_STATE.inVehicle && GAME_STATE.inVehicle.id === msg.car_id)
+                    ? GAME_STATE.inVehicle
+                    : null;
+                if (!targetCar && Array.isArray(World.vehicles)) {
+                    targetCar = World.vehicles.find(v => v.id === msg.car_id && !v.remoteDriver) || null;
+                }
+                if (targetCar) {
+                    const pcar = GAME_STATE.policeCars?.get(msg.police_car_id);
+                    if (pcar?._initialized && pcar.snapshotBuffer?.samples?.length > 0 &&
+                        getMinVehicleCircleGap(targetCar, pcar) > 0.35) {
+                        targetCar._pendingServerPoliceImpulse = { msg, expiresAt: Date.now() + 220 };
+                        break;
+                    }
+                    const impRes = applyVehicleImpulse(targetCar, msg);
+                    const dvMag = Math.hypot(impRes.dvx || 0, impRes.dvz || 0);
+                    if (impRes.applied && dvMag > 2.0) {
+                        SoundManager.playCrashSound?.(Math.min(35, dvMag * 1.5));
+                        triggerCameraShake(0.9);
+                    }
+                }
                 break;
             }
         }
@@ -1141,7 +1309,7 @@ export const MultiplayerClient = {
                     if (car) {
                         if (GAME_STATE.inVehicle === car && this.username !== GAME_STATE.username) {
                             showToast(`⚠️ Машина занята игроком @${this.username}!`, 'amber');
-                            toggleVehicleDrive(car, (force) => MultiplayerClient.sendMoveSnapshot(force));
+                            toggleVehicleDrive(car, (force) => MultiplayerClient.sendMoveSnapshot(force), { force: true });
                         }
                         if (car.remoteDriver !== this.username || !car.snapshotBuffer) {
                             car.snapshotBuffer = new VehicleSnapshotBuffer();
@@ -1489,6 +1657,37 @@ export const MultiplayerClient = {
             GAME_STATE.isCannonFirePending = false;
         }
         GAME_STATE.lastActiveEventAt = performance.now();
+    },
+
+    sendPoliceDialogueChoice(encounterId, optionIndex) {
+        if (!encounterId || typeof encounterId !== 'string') return false;
+        const optIdx = Number(optionIndex);
+        if (!Number.isInteger(optIdx) || optIdx < 0 || optIdx > 15) return false;
+
+        const enc = GAME_STATE.activePoliceEncounter;
+        if (enc && enc.encounter_id === encounterId && (enc.stage === 'pending' || enc.stage === 'resolved')) {
+            return false;
+        }
+
+        if (!this.ws || this.ws.readyState !== 1) {
+            showToast('⚠️ Нет соединения с сервером', 'amber');
+            return false;
+        }
+
+        if (enc && enc.encounter_id === encounterId) {
+            enc.stage = 'pending';
+        }
+        const ok = this.safeSend(MsgPackCodec.encode({
+            type: 'police_dialogue_choice',
+            encounter_id: encounterId,
+            option_index: optIdx
+        }));
+        if (!ok && enc && enc.encounter_id === encounterId) {
+            enc.stage = 'opening';
+            return false;
+        }
+        GAME_STATE.lastActiveEventAt = performance.now();
+        return ok;
     },
 
     getLocalPedestrianAnim() {

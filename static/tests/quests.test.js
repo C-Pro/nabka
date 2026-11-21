@@ -83,15 +83,41 @@ describe('Quest System - Pure Logic and State Transitions', () => {
         expect(canAcceptQuest('non_existent_quest', state).ok).toBe(false);
     });
 
-    test('canAcceptQuest rejects non-finite, negative, or unsafe integer balances', () => {
+    test('canAcceptQuest rejects non-finite, non-number, or unsafe integer balances with INVALID_BALANCE', () => {
         const stateInf = createGameState({ money: Infinity });
         expect(canAcceptQuest('captain_cannon', stateInf).reason).toBe('INVALID_BALANCE');
 
-        const stateNeg = createGameState({ money: -500 });
-        expect(canAcceptQuest('captain_cannon', stateNeg).reason).toBe('INVALID_BALANCE');
+        const stateNegInf = createGameState({ money: -Infinity });
+        expect(canAcceptQuest('captain_cannon', stateNegInf).reason).toBe('INVALID_BALANCE');
 
         const stateNaN = createGameState({ money: NaN });
         expect(canAcceptQuest('captain_cannon', stateNaN).reason).toBe('INVALID_BALANCE');
+
+        const stateFloat = createGameState({ money: 12.5 });
+        expect(canAcceptQuest('captain_cannon', stateFloat).reason).toBe('INVALID_BALANCE');
+
+        const stateStr = createGameState({ money: '100' });
+        expect(canAcceptQuest('captain_cannon', stateStr).reason).toBe('INVALID_BALANCE');
+    });
+
+    test('canAcceptQuest returns INSUFFICIENT_FUNDS for negative balances and ABILITY_ALREADY_ACTIVE if permit active', () => {
+        const stateNeg = createGameState({ money: -500 });
+        const check = canAcceptQuest('captain_cannon', stateNeg);
+        expect(check.ok).toBe(false);
+        expect(check.reason).toBe('INSUFFICIENT_FUNDS');
+        expect(check.currentMoney).toBe(-500);
+        expect(stateNeg.money).toBe(-500);
+
+        const res = acceptQuest('captain_cannon', stateNeg);
+        expect(res.ok).toBe(false);
+        expect(res.reason).toBe('INSUFFICIENT_FUNDS');
+        expect(stateNeg.money).toBe(-500);
+
+        const stateActiveNeg = createGameState({
+            money: -500,
+            questFlags: { can_fire_fortress_cannon: true }
+        });
+        expect(canAcceptQuest('captain_cannon', stateActiveNeg).reason).toBe('ABILITY_ALREADY_ACTIVE');
     });
 
     test('canAcceptQuest rejects when user has insufficient balance without modifying state', () => {

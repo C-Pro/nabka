@@ -251,13 +251,19 @@
 
             <!-- Cash in Rubles -->
             <div id="hud-money" class="font-gta text-lg sm:text-3xl text-emerald-400 gta-text-shadow tracking-wider">
-                ₽ 125,400
+                ₽ 125 400
             </div>
 
             <!-- Speedometer when driving -->
-            <div id="speedometer-box" class="hidden hud-glass rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 mt-1 w-28 sm:w-36 pointer-events-auto flex items-center justify-between shadow-xl">
+            <div id="speedometer-box" class="hidden hud-glass rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 mt-1 w-28 sm:w-36 pointer-events-auto flex items-center justify-between shadow-xl transition-colors">
                 <span class="text-[10px] sm:text-[11px] text-amber-300 font-semibold"><i class="fa-solid fa-gauge-high mr-1"></i>JDM</span>
                 <span class="font-gta text-xs sm:text-sm text-white"><span id="speed-value">0</span> км/ч</span>
+            </div>
+
+            <!-- Police Pursuit Banner -->
+            <div id="police-pursuit-banner" role="status" aria-live="polite" class="hidden pointer-events-none hud-glass border border-rose-500/80 bg-rose-950/85 text-rose-100 px-3 py-1.5 mt-1.5 rounded-full shadow-2xl flex items-center gap-2 text-[11px] sm:text-xs font-gta tracking-wide animate-pulse">
+                <i class="fa-solid fa-car-burst text-rose-400" aria-hidden="true"></i>
+                <span id="police-pursuit-text">ПОГОНЯ ДПС! СБАВЬ СКОРОСТЬ (&gt;40 КМ/Ч)</span>
             </div>
         </div>
 
@@ -369,7 +375,7 @@
         </div>
 
         <!-- Interactive NPC Dialogue Modal (Authentic Vladivostok Locals) -->
-        <div id="npc-dialogue-modal" class="hidden absolute left-1/2 -translate-x-1/2 z-40 w-full max-w-xl px-3 pointer-events-auto">
+        <div id="npc-dialogue-modal" role="dialog" aria-modal="true" aria-labelledby="npc-modal-name" class="hidden absolute left-1/2 -translate-x-1/2 z-40 w-full max-w-xl px-3 pointer-events-auto">
             <div class="hud-glass rounded-2xl p-4 border border-sky-400/50 shadow-2xl flex flex-col gap-3">
                 <!-- NPC Header -->
                 <div class="flex items-center justify-between border-b border-slate-700/80 pb-2.5">
@@ -380,16 +386,16 @@
                         <div>
                             <div class="flex items-center gap-2">
                                 <h3 id="npc-modal-name" class="font-gta text-sm sm:text-base text-white">Михалыч</h3>
-                                <span class="text-[10px] font-mono-code bg-amber-500/20 text-amber-300 border border-amber-400/30 px-2 py-0.5 rounded-full">
+                                <span id="npc-modal-badge" class="text-[10px] font-mono-code bg-amber-500/20 text-amber-300 border border-amber-400/30 px-2 py-0.5 rounded-full">
                                     Местный • 25 RUS
                                 </span>
                             </div>
                             <p id="npc-modal-role" class="text-[11px] text-sky-300 font-medium">Моряк с рейда Амурского залива</p>
                         </div>
                     </div>
-                    <button id="btn-close-npc-chat" class="text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
+                    <button id="btn-close-npc-chat" type="button" aria-label="Закрыть диалог" class="text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
                         <span>ESC</span>
-                        <i class="fa-solid fa-xmark"></i>
+                        <i class="fa-solid fa-xmark" aria-hidden="true"></i>
                     </button>
                 </div>
 

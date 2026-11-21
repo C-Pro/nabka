@@ -4,16 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
-	"os"
+	"math"
 	"strings"
 	"sync"
 	"time"
-
-	"nabka"
 
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -25,6 +21,11 @@ const defaultSessionTTL = 5 * time.Minute
 type userSession struct {
 	token    string
 	lastSeen time.Time
+}
+
+// AccountState holds authoritative persistent player economy state.
+type AccountState struct {
+	Money int64
 }
 
 func generateSessionToken() (string, error) {
@@ -95,10 +96,27 @@ type cmdSetNowFunc struct {
 	result chan struct{}
 }
 
-// HubSnapshot contains an immutable copy of cars and users states.
+type cmdStepSimulation struct {
+	dt     float64
+	result chan struct{}
+}
+
+type cmdSetSimAutoTick struct {
+	enabled bool
+	result  chan struct{}
+}
+
+type cmdPoliceDialogueChoice struct {
+	sender *Client
+	choice *PoliceDialogueChoiceRequest
+}
+
+// HubSnapshot contains an immutable copy of cars, users, accounts, and police state.
 type HubSnapshot struct {
-	Cars  map[string]CarState
-	Users map[string]UserState
+	Cars     map[string]CarState
+	Users    map[string]UserState
+	Accounts map[string]int64
+	Police   PoliceSnapshot
 }
 
 type fortressCoords struct {
@@ -107,13 +125,15 @@ type fortressCoords struct {
 	radius float64
 }
 
-// Hub maintains the set of active clients, tracks world state (cars and users), and broadcasts messages via an actor loop.
+// Hub maintains the set of active clients, tracks world state (cars, users, accounts, police), and broadcasts messages via an actor loop.
 type Hub struct {
 	sequence       uint64
+	policeSeq      uint64
 	started        time.Time
 	clients        map[string]*Client
 	cars           map[string]*CarState
 	users          map[string]*UserState
+	accounts       map[string]*AccountState
 	sessions       map[string]*userSession
 	sessionTTL     time.Duration
 	allowedCars    map[string]struct{}
@@ -122,68 +142,13 @@ type Hub struct {
 	lastCannonFire map[string]time.Time
 	noonFiredDate  string
 	nowFunc        func() time.Time
+	police         *PoliceManager
+	simAutoTick    bool
 	cmdCh          chan hubCmd
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-}
-
-func loadWorldMapVehicleIDs() []string {
-	raw, err := os.ReadFile("static/data/world_map.json")
-	if err != nil {
-		raw, err = fs.ReadFile(nabka.FS(), "data/world_map.json")
-		if err != nil {
-			return nil
-		}
-	}
-	var parsed struct {
-		Vehicles []struct {
-			ID string `json:"id"`
-		} `json:"vehicles"`
-	}
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil
-	}
-	var ids []string
-	for _, v := range parsed.Vehicles {
-		if v.ID != "" {
-			ids = append(ids, v.ID)
-		}
-	}
-	return ids
-}
-
-func loadWorldMapFortressCoords() fortressCoords {
-	def := fortressCoords{x: 127.87, z: -124.43, radius: 6.0}
-	raw, err := os.ReadFile("static/data/world_map.json")
-	if err != nil {
-		raw, err = fs.ReadFile(nabka.FS(), "data/world_map.json")
-		if err != nil {
-			return def
-		}
-	}
-	var parsed struct {
-		Interactables []struct {
-			ID     string  `json:"id"`
-			X      float64 `json:"x"`
-			Z      float64 `json:"z"`
-			Radius float64 `json:"radius"`
-		} `json:"interactables"`
-	}
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return def
-	}
-	for _, it := range parsed.Interactables {
-		if it.ID == "fortress" {
-			r := it.Radius
-			if r <= 0 {
-				r = 6.0
-			}
-			return fortressCoords{x: it.X, z: it.Z, radius: r}
-		}
-	}
-	return def
 }
 
 func vladivostokDateAndNoon(now time.Time) (dateStr string, todayNoonUtc time.Time) {
@@ -211,21 +176,31 @@ func nextVladivostokNoonDelay(now time.Time) time.Duration {
 // NewHub creates and starts a new Hub instance.
 func NewHub(parentCtx context.Context, allowedCars ...string) *Hub {
 	ctx, cancel := context.WithCancel(parentCtx)
+	worldCfg := loadWorldMapConfig()
 	allowedMap := make(map[string]struct{})
 	if len(allowedCars) > 0 {
 		for _, c := range allowedCars {
-			allowedMap[c] = struct{}{}
+			if !strings.HasPrefix(c, "police_car") {
+				allowedMap[c] = struct{}{}
+			}
 		}
 	} else {
-		// Default to world vehicles defined in world_map.json
+		// Default to world vehicles defined in world_map.json (never police cars)
 		allowedMap["car_0"] = struct{}{}
 		allowedMap["car_1"] = struct{}{}
 		allowedMap["car_2"] = struct{}{}
 		allowedMap["car_3"] = struct{}{}
 		allowedMap["car_4"] = struct{}{}
-		for _, id := range loadWorldMapVehicleIDs() {
-			allowedMap[id] = struct{}{}
+		for _, id := range worldCfg.vehicleIDs {
+			if !strings.HasPrefix(id, "police_car") {
+				allowedMap[id] = struct{}{}
+			}
 		}
+	}
+
+	pm, err := NewPoliceManager(worldCfg)
+	if err != nil {
+		panic(fmt.Sprintf("failed to initialize police manager: %v", err))
 	}
 
 	h := &Hub{
@@ -233,12 +208,15 @@ func NewHub(parentCtx context.Context, allowedCars ...string) *Hub {
 		clients:        make(map[string]*Client),
 		cars:           make(map[string]*CarState),
 		users:          make(map[string]*UserState),
+		accounts:       make(map[string]*AccountState),
 		sessions:       make(map[string]*userSession),
 		sessionTTL:     defaultSessionTTL,
 		allowedCars:    allowedMap,
-		fortress:       loadWorldMapFortressCoords(),
+		fortress:       worldCfg.fortress,
 		cannonCooldown: 2 * time.Second,
 		lastCannonFire: make(map[string]time.Time),
+		police:         pm,
+		simAutoTick:    true,
 		cmdCh:          make(chan hubCmd, 2048),
 		ctx:            ctx,
 		cancel:         cancel,
@@ -346,14 +324,23 @@ func (h *Hub) BroadcastDrivingMove(sender *Client, move *OutboundDrivingMoveMsg,
 	}
 }
 
-// Snapshot returns an immutable copy of all tracked cars and active users.
+// Snapshot returns an immutable copy of all tracked cars, active users, accounts, and police state.
 func (h *Hub) Snapshot() HubSnapshot {
+	emptySnap := func() HubSnapshot {
+		return HubSnapshot{
+			Cars:     make(map[string]CarState),
+			Users:    make(map[string]UserState),
+			Accounts: make(map[string]int64),
+			Police: PoliceSnapshot{
+				FootCops:         make([]PoliceFootCopState, 0),
+				PoliceCars:       make([]PoliceCarState, 0),
+				ActiveEncounters: make(map[string]OutboundPoliceEncounterStartMsg),
+			},
+		}
+	}
 	select {
 	case <-h.ctx.Done():
-		return HubSnapshot{
-			Cars:  make(map[string]CarState),
-			Users: make(map[string]UserState),
-		}
+		return emptySnap()
 	default:
 	}
 
@@ -366,16 +353,10 @@ func (h *Hub) Snapshot() HubSnapshot {
 		case snap := <-resCh:
 			return snap
 		case <-h.ctx.Done():
-			return HubSnapshot{
-				Cars:  make(map[string]CarState),
-				Users: make(map[string]UserState),
-			}
+			return emptySnap()
 		}
 	case <-h.ctx.Done():
-		return HubSnapshot{
-			Cars:  make(map[string]CarState),
-			Users: make(map[string]UserState),
-		}
+		return emptySnap()
 	}
 }
 
@@ -423,6 +404,44 @@ func (h *Hub) SetNowFunc(fn func() time.Time) {
 		case <-res:
 		case <-h.ctx.Done():
 		}
+	case <-h.ctx.Done():
+	}
+}
+
+// StepSimulation synchronously advances the police simulation by dt seconds inside the Hub actor.
+func (h *Hub) StepSimulation(dt float64) {
+	res := make(chan struct{})
+	select {
+	case h.cmdCh <- &cmdStepSimulation{dt: dt, result: res}:
+		select {
+		case <-res:
+		case <-h.ctx.Done():
+		}
+	case <-h.ctx.Done():
+	}
+}
+
+// SetSimAutoTick enables or disables the background 20 Hz simulation ticker (useful for deterministic tests).
+func (h *Hub) SetSimAutoTick(enabled bool) {
+	res := make(chan struct{})
+	select {
+	case h.cmdCh <- &cmdSetSimAutoTick{enabled: enabled, result: res}:
+		select {
+		case <-res:
+		case <-h.ctx.Done():
+		}
+	case <-h.ctx.Done():
+	}
+}
+
+// SubmitPoliceDialogueChoice forwards a validated police dialogue option selection into the Hub actor.
+func (h *Hub) SubmitPoliceDialogueChoice(sender *Client, choice *PoliceDialogueChoiceRequest) {
+	req := &cmdPoliceDialogueChoice{
+		sender: sender,
+		choice: choice,
+	}
+	select {
+	case h.cmdCh <- req:
 	case <-h.ctx.Done():
 	}
 }
@@ -482,6 +501,9 @@ func (h *Hub) run() {
 	cleanTicker := time.NewTicker(time.Minute)
 	defer cleanTicker.Stop()
 
+	simTicker := time.NewTicker(50 * time.Millisecond)
+	defer simTicker.Stop()
+
 	noonTimer := time.NewTimer(nextVladivostokNoonDelay(h.now()))
 	defer noonTimer.Stop()
 
@@ -495,14 +517,22 @@ func (h *Hub) run() {
 			h.clients = make(map[string]*Client)
 			return
 
-		case now := <-cleanTicker.C:
+		case <-cleanTicker.C:
+			now := h.now()
 			for uname, sess := range h.sessions {
 				if _, online := h.clients[uname]; !online {
-					if now.Sub(sess.lastSeen) > h.sessionTTL {
+					if h.sessionTTL <= 0 || now.Sub(sess.lastSeen) > h.sessionTTL {
 						delete(h.sessions, uname)
 						delete(h.lastCannonFire, uname)
+						delete(h.accounts, uname)
+						h.police.CleanupExpiredUser(uname)
 					}
 				}
+			}
+
+		case <-simTicker.C:
+			if h.simAutoTick {
+				h.stepSimulationLocked(0.05)
 			}
 
 		case <-noonTimer.C:
@@ -523,9 +553,12 @@ func (h *Hub) run() {
 				sess, hasSession := h.sessions[c.client.Username]
 				existingClient, isConnected := h.clients[c.client.Username]
 
-				now := time.Now()
-				if hasSession && !isConnected && now.Sub(sess.lastSeen) > h.sessionTTL {
+				now := h.now()
+				if hasSession && !isConnected && (h.sessionTTL <= 0 || now.Sub(sess.lastSeen) > h.sessionTTL) {
 					delete(h.sessions, c.client.Username)
+					delete(h.lastCannonFire, c.client.Username)
+					delete(h.accounts, c.client.Username)
+					h.police.CleanupExpiredUser(c.client.Username)
 					hasSession = false
 					sess = nil
 				}
@@ -588,7 +621,9 @@ func (h *Hub) run() {
 
 				c.result <- true
 
-				// 1. Send personalized join message with session token and current roster directly to the newly connected client
+				acct := h.ensureAccountLocked(c.client.Username)
+
+				// 1. Send personalized join message with session token, roster, and authoritative money
 				roster := make([]string, 0, len(h.clients))
 				for u := range h.clients {
 					roster = append(roster, u)
@@ -598,6 +633,7 @@ func (h *Hub) run() {
 					User:   c.client.Username,
 					Token:  assignedToken,
 					Roster: roster,
+					Money:  Int64Ptr(acct.Money),
 				})
 				select {
 				case c.client.send <- selfJoinMsg:
@@ -716,6 +752,34 @@ func (h *Hub) run() {
 					continue
 				}
 
+				// 5. Send current authoritative police_state baseline
+				if policeMsg, err := msgpack.Marshal(h.police.StateMsg(h.policeSeq)); err == nil {
+					select {
+					case c.client.send <- policeMsg:
+					default:
+						baselineFailed = true
+					}
+				}
+				if baselineFailed {
+					h.removeClientLocked(c.client, "slow consumer")
+					continue
+				}
+
+				// 6. Re-send unresolved police encounter if preserved across 4408 replacement
+				if enc := h.police.ActiveEncounterFor(c.client.Username); enc != nil {
+					if encMsg, err := msgpack.Marshal(*enc); err == nil {
+						select {
+						case c.client.send <- encMsg:
+						default:
+							baselineFailed = true
+						}
+					}
+				}
+				if baselineFailed {
+					h.removeClientLocked(c.client, "slow consumer")
+					continue
+				}
+
 			case *cmdUnregister:
 				existing, exists := h.clients[c.client.Username]
 				if !exists || existing != c.client {
@@ -724,10 +788,10 @@ func (h *Hub) run() {
 				}
 
 				if sess, has := h.sessions[c.client.Username]; has {
-					sess.lastSeen = time.Now()
+					sess.lastSeen = h.now()
 				}
 
-				releasedCar := h.cleanupUserStateLocked(c.client.Username)
+				releasedCar, chaseEvents := h.cleanupUserStateLocked(c.client.Username)
 
 				delete(h.clients, c.client.Username)
 				close(c.client.send)
@@ -743,6 +807,11 @@ func (h *Hub) run() {
 
 				if releasedCar != nil {
 					h.broadcastCarStateLocked(releasedCar)
+				}
+				for _, ce := range chaseEvents {
+					if data, err := msgpack.Marshal(ce); err == nil {
+						h.broadcastData(data, nil)
+					}
 				}
 
 			case *cmdMovePedestrian:
@@ -778,10 +847,27 @@ func (h *Hub) run() {
 
 				if prevCar != nil {
 					h.broadcastCarStateLocked(prevCar)
+					chaseEvents := h.police.OnPlayerExitedVehicle(c.sender.Username, prevCar.CarID)
+					for _, ce := range chaseEvents {
+						h.broadcastChaseEventLocked(ce)
+					}
 				}
 
 			case *cmdMoveDriving:
 				if existing, ok := h.clients[c.sender.Username]; !ok || existing != c.sender {
+					continue
+				}
+
+				if strings.HasPrefix(c.move.CarID, "police_car") {
+					errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+						Type:    TypeError,
+						Message: "cannot drive police vehicle",
+						Op:      TypeMove,
+					})
+					select {
+					case c.sender.send <- errMsg:
+					default:
+					}
 					continue
 				}
 
@@ -841,7 +927,7 @@ func (h *Hub) run() {
 
 				h.sequence++
 				c.move.Sequence = h.sequence
-				c.move.SampleTimeMS = float64(time.Since(h.started)) / float64(time.Millisecond)
+				c.move.SampleTimeMS = math.Max(0, float64(h.now().Sub(h.started))/float64(time.Millisecond))
 				c.data, _ = msgpack.Marshal(c.move)
 				h.cars[c.move.CarID] = &CarState{
 					CarID:        c.move.CarID,
@@ -879,6 +965,7 @@ func (h *Hub) run() {
 				}
 
 				h.broadcastData(c.data, c.sender)
+				h.police.OnPlayerEnteredVehicle(c.sender.Username, c.move.CarID)
 
 				if prevCar != nil {
 					h.broadcastCarStateLocked(prevCar)
@@ -893,9 +980,62 @@ func (h *Hub) run() {
 				for k, v := range h.users {
 					usersCopy[k] = *v
 				}
+				accountsCopy := make(map[string]int64, len(h.accounts))
+				for k, v := range h.accounts {
+					accountsCopy[k] = v.Money
+				}
 				c.result <- HubSnapshot{
-					Cars:  carsCopy,
-					Users: usersCopy,
+					Cars:     carsCopy,
+					Users:    usersCopy,
+					Accounts: accountsCopy,
+					Police:   h.police.Snapshot(),
+				}
+
+			case *cmdStepSimulation:
+				h.stepSimulationLocked(c.dt)
+				close(c.result)
+
+			case *cmdSetSimAutoTick:
+				h.simAutoTick = c.enabled
+				close(c.result)
+
+			case *cmdPoliceDialogueChoice:
+				existing, ok := h.clients[c.sender.Username]
+				if !ok || existing != c.sender {
+					continue
+				}
+				res, err := h.police.HandleDialogueChoice(c.sender.Username, c.choice.EncounterID, c.choice.OptionIndex)
+				if err != nil {
+					errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+						Type:    TypeError,
+						Message: err.Error(),
+						Op:      TypePoliceDialogueChoice,
+					})
+					select {
+					case c.sender.send <- errMsg:
+					default:
+					}
+					continue
+				}
+				var newMoney int64
+				if res.Fine != 0 {
+					newMoney = h.applyBalanceDeltaLocked(c.sender.Username, -res.Fine, "police_fine", res.CopID)
+				} else {
+					newMoney = h.ensureAccountLocked(c.sender.Username).Money
+				}
+				if resBytes, err := msgpack.Marshal(OutboundPoliceEncounterResultMsg{
+					Type:        TypePoliceEncounterResult,
+					EncounterID: res.EncounterID,
+					CopID:       res.CopID,
+					CopName:     res.CopName,
+					ScenarioID:  res.ScenarioID,
+					TargetUser:  res.TargetUser,
+					OptionIndex: res.OptionIndex,
+					ReplyText:   res.ReplyText,
+					Fine:        res.Fine,
+					Money:       newMoney,
+				}); err == nil {
+					h.broadcastData(resBytes, nil)
 				}
 
 			case *cmdBroadcast:
@@ -1032,10 +1172,112 @@ func (h *Hub) run() {
 	}
 }
 
-// cleanupUserStateLocked releases any car occupied by username and deletes user state.
-// Returns the released CarState (if any) so caller can broadcast its parked state.
+func (h *Hub) ensureAccountLocked(username string) *AccountState {
+	if acct, ok := h.accounts[username]; ok {
+		return acct
+	}
+	acct := &AccountState{Money: DefaultInitialMoney}
+	h.accounts[username] = acct
+	return acct
+}
+
+func (h *Hub) applyBalanceDeltaLocked(username string, delta int64, reason, sourceID string) int64 {
+	acct := h.ensureAccountLocked(username)
+	acct.Money += delta
+	if msgBytes, err := msgpack.Marshal(OutboundBalanceUpdateMsg{
+		Type:     TypeBalanceUpdate,
+		Username: username,
+		Money:    acct.Money,
+		Delta:    delta,
+		Reason:   reason,
+		SourceID: sourceID,
+	}); err == nil {
+		h.broadcastData(msgBytes, nil)
+	}
+	return acct.Money
+}
+
+func (h *Hub) buildChaseMsgLocked(ce PoliceChaseEvent) OutboundPoliceChaseMsg {
+	var money int64
+	if ce.TargetUser != "" {
+		if ce.Fine != 0 {
+			money = h.applyBalanceDeltaLocked(ce.TargetUser, -ce.Fine, "speeding_fine", ce.PoliceCarID)
+		} else if acct, ok := h.accounts[ce.TargetUser]; ok {
+			money = acct.Money
+		} else {
+			money = DefaultInitialMoney
+		}
+	}
+	return OutboundPoliceChaseMsg{
+		Type:        TypePoliceChase,
+		PoliceCarID: ce.PoliceCarID,
+		TargetCarID: ce.TargetCarID,
+		TargetUser:  ce.TargetUser,
+		Status:      ce.Status,
+		Reason:      ce.Reason,
+		Fine:        ce.Fine,
+		Money:       money,
+	}
+}
+
+func (h *Hub) broadcastChaseEventLocked(ce PoliceChaseEvent) {
+	msg := h.buildChaseMsgLocked(ce)
+	if data, err := msgpack.Marshal(msg); err == nil {
+		h.broadcastData(data, nil)
+	}
+}
+
+func (h *Hub) stepSimulationLocked(dt float64) {
+	if dt <= 0 || !IsFinite(dt) {
+		return
+	}
+	res := h.police.Step(dt, h.users, h.cars)
+
+	for _, ev := range res.EncounterStarts {
+		if targetClient, ok := h.clients[ev.Msg.TargetUser]; ok {
+			if data, err := msgpack.Marshal(ev.Msg); err == nil {
+				select {
+				case targetClient.send <- data:
+				default:
+				}
+			}
+		}
+	}
+
+	for _, ce := range res.ChaseEvents {
+		h.broadcastChaseEventLocked(ce)
+	}
+
+	for _, ie := range res.ImpulseEvents {
+		h.sequence++
+		if data, err := msgpack.Marshal(OutboundVehicleImpulseMsg{
+			Type:        TypeVehicleImpulse,
+			PoliceCarID: ie.PoliceCarID,
+			CarID:       ie.CarID,
+			TargetUser:  ie.TargetUser,
+			DVX:         ie.DVX,
+			DVZ:         ie.DVZ,
+			DYawRate:    ie.DYawRate,
+			PoliceMass:  ie.PoliceMass,
+			PlayerMass:  ie.PlayerMass,
+			Sequence:    h.sequence,
+		}); err == nil {
+			h.broadcastData(data, nil)
+		}
+	}
+
+	if len(h.clients) > 0 {
+		h.policeSeq++
+		if stateData, err := msgpack.Marshal(h.police.StateMsg(h.policeSeq)); err == nil {
+			h.broadcastData(stateData, nil)
+		}
+	}
+}
+
+// cleanupUserStateLocked releases any car occupied by username, cleans up police interactions,
+// and deletes user state. Returns the released CarState (if any) and any ended chase messages.
 // Must be called from the actor loop.
-func (h *Hub) cleanupUserStateLocked(username string) *CarState {
+func (h *Hub) cleanupUserStateLocked(username string) (*CarState, []OutboundPoliceChaseMsg) {
 	var releasedCar *CarState
 	if prev, ok := h.users[username]; ok {
 		if prev.Mode == ModeDriving && prev.CarID != "" {
@@ -1049,7 +1291,27 @@ func (h *Hub) cleanupUserStateLocked(username string) *CarState {
 		}
 		delete(h.users, username)
 	}
-	return releasedCar
+	chaseEvents := h.police.OnPlayerDisconnected(username)
+	var chaseMsgs []OutboundPoliceChaseMsg
+	if len(chaseEvents) > 0 {
+		var money int64 = DefaultInitialMoney
+		if acct, ok := h.accounts[username]; ok {
+			money = acct.Money
+		}
+		for _, ce := range chaseEvents {
+			chaseMsgs = append(chaseMsgs, OutboundPoliceChaseMsg{
+				Type:        TypePoliceChase,
+				PoliceCarID: ce.PoliceCarID,
+				TargetCarID: ce.TargetCarID,
+				TargetUser:  ce.TargetUser,
+				Status:      ce.Status,
+				Reason:      ce.Reason,
+				Fine:        0,
+				Money:       money,
+			})
+		}
+	}
+	return releasedCar, chaseMsgs
 }
 
 // broadcastCarStateLocked publishes authoritative car state (e.g. parked) to all clients.
@@ -1086,10 +1348,10 @@ func (h *Hub) removeClientLocked(client *Client, reason string) {
 	}
 
 	if sess, has := h.sessions[client.Username]; has {
-		sess.lastSeen = time.Now()
+		sess.lastSeen = h.now()
 	}
 
-	releasedCar := h.cleanupUserStateLocked(client.Username)
+	releasedCar, chaseEvents := h.cleanupUserStateLocked(client.Username)
 	delete(h.clients, client.Username)
 	close(client.send)
 	client.CloseSocket()
@@ -1103,6 +1365,11 @@ func (h *Hub) removeClientLocked(client *Client, reason string) {
 
 	if releasedCar != nil {
 		h.broadcastCarStateLocked(releasedCar)
+	}
+	for _, ce := range chaseEvents {
+		if data, err := msgpack.Marshal(ce); err == nil {
+			h.broadcastData(data, nil)
+		}
 	}
 }
 
@@ -1127,9 +1394,9 @@ func (h *Hub) broadcastData(data []byte, exclude *Client) {
 		for _, sc := range slowClients {
 			if existing, ok := h.clients[sc.Username]; ok && existing == sc {
 				if sess, has := h.sessions[sc.Username]; has {
-					sess.lastSeen = time.Now()
+					sess.lastSeen = h.now()
 				}
-				releasedCar := h.cleanupUserStateLocked(sc.Username)
+				releasedCar, chaseEvents := h.cleanupUserStateLocked(sc.Username)
 				delete(h.clients, sc.Username)
 				close(sc.send)
 				sc.CloseSocket()
@@ -1162,6 +1429,13 @@ func (h *Hub) broadcastData(data []byte, exclude *Client) {
 					})
 				}
 
+				var chasePayloads [][]byte
+				for _, ce := range chaseEvents {
+					if b, err := msgpack.Marshal(ce); err == nil {
+						chasePayloads = append(chasePayloads, b)
+					}
+				}
+
 				for _, remaining := range h.clients {
 					select {
 					case remaining.send <- leaveMsg:
@@ -1174,6 +1448,19 @@ func (h *Hub) broadcastData(data []byte, exclude *Client) {
 						case remaining.send <- parkedCarMsg:
 						default:
 							nextSlow = append(nextSlow, remaining)
+							continue
+						}
+					}
+					for _, cp := range chasePayloads {
+						stalled := false
+						select {
+						case remaining.send <- cp:
+						default:
+							nextSlow = append(nextSlow, remaining)
+							stalled = true
+						}
+						if stalled {
+							break
 						}
 					}
 				}

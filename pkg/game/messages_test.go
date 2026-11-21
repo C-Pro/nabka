@@ -1,6 +1,7 @@
 package game
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -304,5 +305,218 @@ func TestParseCannonFire(t *testing.T) {
 	// Empty payload
 	if _, err := ParseCannonFire([]byte{}); err == nil {
 		t.Fatal("expected error for empty payload")
+	}
+}
+
+func TestParsePoliceDialogueChoice(t *testing.T) {
+	// Valid option 0 with trimmed whitespace
+	b, err := msgpack.Marshal(map[string]any{
+		"type":         TypePoliceDialogueChoice,
+		"encounter_id": "  enc_1  ",
+		"option_index": 0,
+	})
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	req, err := ParsePoliceDialogueChoice(b)
+	if err != nil {
+		t.Fatalf("expected valid parse for option 0, got: %v", err)
+	}
+	if req.EncounterID != "enc_1" || req.OptionIndex != 0 {
+		t.Fatalf("unexpected parsed request: %+v", req)
+	}
+
+	// Valid upper boundary option 15
+	b15, _ := msgpack.Marshal(map[string]any{
+		"type":         TypePoliceDialogueChoice,
+		"encounter_id": "enc_15",
+		"option_index": 15,
+	})
+	req15, err := ParsePoliceDialogueChoice(b15)
+	if err != nil || req15.OptionIndex != 15 {
+		t.Fatalf("expected valid parse for option 15, got %+v (err=%v)", req15, err)
+	}
+
+	// Invalid cases
+	cases := []struct {
+		name    string
+		payload any
+	}{
+		{"missing option_index", map[string]any{"type": TypePoliceDialogueChoice, "encounter_id": "enc_1"}},
+		{"nil option_index", map[string]any{"type": TypePoliceDialogueChoice, "encounter_id": "enc_1", "option_index": nil}},
+		{"negative option_index", map[string]any{"type": TypePoliceDialogueChoice, "encounter_id": "enc_1", "option_index": -1}},
+		{"out of range option_index", map[string]any{"type": TypePoliceDialogueChoice, "encounter_id": "enc_1", "option_index": 16}},
+		{"float option_index", map[string]any{"type": TypePoliceDialogueChoice, "encounter_id": "enc_1", "option_index": 1.5}},
+		{"missing encounter_id", map[string]any{"type": TypePoliceDialogueChoice, "option_index": 0}},
+		{"whitespace encounter_id", map[string]any{"type": TypePoliceDialogueChoice, "encounter_id": "   ", "option_index": 0}},
+		{"control char encounter_id", map[string]any{"type": TypePoliceDialogueChoice, "encounter_id": "enc\x001", "option_index": 0}},
+		{"too long encounter_id", map[string]any{"type": TypePoliceDialogueChoice, "encounter_id": string(make([]rune, 65)), "option_index": 0}},
+		{"wrong type", map[string]any{"type": TypeChat, "encounter_id": "enc_1", "option_index": 0}},
+		{"non-map root", []any{TypePoliceDialogueChoice, "enc_1", 0}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := msgpack.Marshal(tc.payload)
+			if err != nil {
+				t.Fatalf("marshal error: %v", err)
+			}
+			if _, err := ParsePoliceDialogueChoice(raw); err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+		})
+	}
+
+	// Trailing bytes & empty payload
+	if _, err := ParsePoliceDialogueChoice(append(b, 0x01)); err == nil {
+		t.Fatal("expected error for trailing bytes")
+	}
+	if _, err := ParsePoliceDialogueChoice([]byte{}); err == nil {
+		t.Fatal("expected error for empty payload")
+	}
+}
+
+func TestPoliceMsgPackZeroAndNegativeValues(t *testing.T) {
+	// 1. OutboundJoinMsg with Money: 0, negative, and nil
+	zeroJoinBytes, err := MarshalMsgPack(OutboundJoinMsg{Type: TypeJoin, User: "vasya", Money: Int64Ptr(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var zeroJoinMap map[string]any
+	if err := msgpack.Unmarshal(zeroJoinBytes, &zeroJoinMap); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := zeroJoinMap["money"]; !ok || fmt.Sprint(v) != "0" {
+		t.Fatalf("expected money=0 present on self-join, got %+v", zeroJoinMap)
+	}
+
+	negJoinBytes, _ := MarshalMsgPack(OutboundJoinMsg{Type: TypeJoin, User: "vasya", Money: Int64Ptr(-5000)})
+	var negJoinMap map[string]any
+	_ = msgpack.Unmarshal(negJoinBytes, &negJoinMap)
+	if fmt.Sprint(negJoinMap["money"]) != "-5000" {
+		t.Fatalf("expected money=-5000, got %+v", negJoinMap)
+	}
+
+	nilJoinBytes, _ := MarshalMsgPack(OutboundJoinMsg{Type: TypeJoin, User: "vasya"})
+	var nilJoinMap map[string]any
+	_ = msgpack.Unmarshal(nilJoinBytes, &nilJoinMap)
+	if _, hasMoney := nilJoinMap["money"]; hasMoney {
+		t.Fatalf("expected broadcast join without Money pointer to omit money key, got %+v", nilJoinMap)
+	}
+
+	// 2. OutboundBalanceUpdateMsg with 0 and negative values
+	balBytes, _ := MarshalMsgPack(OutboundBalanceUpdateMsg{
+		Type:     TypeBalanceUpdate,
+		Username: "vasya",
+		Money:    -2600,
+		Delta:    0,
+		Reason:   "test",
+	})
+	var balMap map[string]any
+	_ = msgpack.Unmarshal(balBytes, &balMap)
+	if fmt.Sprint(balMap["money"]) != "-2600" || fmt.Sprint(balMap["delta"]) != "0" {
+		t.Fatalf("expected money=-2600 and delta=0 keys present, got %+v", balMap)
+	}
+	if _, hasSrc := balMap["source_id"]; hasSrc {
+		t.Fatalf("expected empty source_id to be omitted, got %+v", balMap)
+	}
+
+	// 3. OutboundPoliceStateMsg with non-nil empty slices & zero values
+	psBytes, _ := MarshalMsgPack(OutboundPoliceStateMsg{
+		Type:         TypePoliceState,
+		Sequence:     0,
+		SampleTimeMS: 0,
+		FootCops:     make([]PoliceFootCopState, 0),
+		PoliceCars:   make([]PoliceCarState, 0),
+	})
+	var psMap map[string]any
+	_ = msgpack.Unmarshal(psBytes, &psMap)
+	if _, ok := psMap["sequence"]; !ok {
+		t.Fatalf("expected zero sequence key present: %+v", psMap)
+	}
+	if _, ok := psMap["sample_time_ms"]; !ok {
+		t.Fatalf("expected zero sample_time_ms key present: %+v", psMap)
+	}
+	fcSlice, ok := psMap["foot_cops"].([]any)
+	if !ok || fcSlice == nil {
+		t.Fatalf("expected foot_cops encoded as non-nil empty array, got %#v", psMap["foot_cops"])
+	}
+	pcSlice, ok := psMap["police_cars"].([]any)
+	if !ok || pcSlice == nil {
+		t.Fatalf("expected police_cars encoded as non-nil empty array, got %#v", psMap["police_cars"])
+	}
+
+	// 4. OutboundPoliceEncounterStartMsg with Russian UTF-8 (str16 >255 bytes) and fine=0
+	longRussian := "Здравия желаю, сержант ППС Дробышев. Ориентировка по Спортивной набережной: не видели ли вы тут молодого человека в чёрной ветровке и тёмных спортивных штанах? Говорят, ушёл от Юбилейного пляжа в сторону кинотеатра Океан и улицы Адмирала Фокина на Набке."
+	encBytes, _ := MarshalMsgPack(OutboundPoliceEncounterStartMsg{
+		Type:        TypePoliceEncounterStart,
+		EncounterID: "enc_1",
+		CopID:       "cop_0",
+		CopName:     "Сержант ППС Дробышев",
+		ScenarioID:  "person_search",
+		Title:       "Ориентировка на Набке",
+		Opening:     longRussian,
+		Options:     []PoliceDialogueOptionView{{Index: 0, Text: "Не видел", Fine: 0}},
+		TargetUser:  "vasya",
+	})
+	var encMap map[string]any
+	_ = msgpack.Unmarshal(encBytes, &encMap)
+	if encMap["opening"] != longRussian {
+		t.Fatalf("Russian UTF-8 str16 round-trip mismatch: %v", encMap["opening"])
+	}
+
+	// 5. OutboundPoliceEncounterResultMsg, OutboundPoliceChaseMsg, OutboundVehicleImpulseMsg zero/negative fields
+	resBytes, _ := MarshalMsgPack(OutboundPoliceEncounterResultMsg{
+		Type:        TypePoliceEncounterResult,
+		EncounterID: "enc_1",
+		CopID:       "cop_0",
+		CopName:     "Сержант ППС Дробышев",
+		ScenarioID:  "weed_shakedown",
+		TargetUser:  "vasya",
+		OptionIndex: 0,
+		ReplyText:   "Свободен",
+		Fine:        0,
+		Money:       -2500,
+	})
+	var resMap map[string]any
+	_ = msgpack.Unmarshal(resBytes, &resMap)
+	if fmt.Sprint(resMap["option_index"]) != "0" || fmt.Sprint(resMap["fine"]) != "0" || fmt.Sprint(resMap["money"]) != "-2500" {
+		t.Fatalf("expected zero option_index/fine and negative money, got %+v", resMap)
+	}
+
+	chaseBytes, _ := MarshalMsgPack(OutboundPoliceChaseMsg{
+		Type:        TypePoliceChase,
+		PoliceCarID: "police_car_0",
+		TargetCarID: "car_0",
+		TargetUser:  "vasya",
+		Status:      ChaseStatusEvaded,
+		Reason:      "evaded",
+		Fine:        0,
+		Money:       -1000,
+	})
+	var chaseMap map[string]any
+	_ = msgpack.Unmarshal(chaseBytes, &chaseMap)
+	if fmt.Sprint(chaseMap["fine"]) != "0" || fmt.Sprint(chaseMap["money"]) != "-1000" {
+		t.Fatalf("expected fine=0 and money=-1000 on chase, got %+v", chaseMap)
+	}
+
+	impBytes, _ := MarshalMsgPack(OutboundVehicleImpulseMsg{
+		Type:        TypeVehicleImpulse,
+		PoliceCarID: "police_car_0",
+		CarID:       "car_0",
+		TargetUser:  "vasya",
+		DVX:         0,
+		DVZ:         0,
+		DYawRate:    0,
+		PoliceMass:  4200,
+		PlayerMass:  1450,
+		Sequence:    0,
+	})
+	var impMap map[string]any
+	_ = msgpack.Unmarshal(impBytes, &impMap)
+	for _, k := range []string{"dvx", "dvz", "dyaw_rate", "police_mass", "player_mass", "sequence"} {
+		if _, ok := impMap[k]; !ok {
+			t.Fatalf("expected key %q present on zero vehicle_impulse, got %+v", k, impMap)
+		}
 	}
 }

@@ -1997,6 +1997,116 @@ export const ModelBuilders = {
         return g;
     },
 
+    police_officer() {
+        const group = new THREE.Group();
+        group.name = 'police_officer';
+
+        const navyMat = new THREE.MeshStandardMaterial({ color: 0x172554, roughness: 0.65 });
+        const darkNavyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.7 });
+        const vestMat = new THREE.MeshStandardMaterial({ color: 0xa3e635, roughness: 0.45 });
+        const skinMat = new THREE.MeshStandardMaterial({ color: 0xf1c27d, roughness: 0.6 });
+        const badgeMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.75, roughness: 0.25 });
+        const capBandMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5 });
+
+        const torso = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.15, 0.52), navyMat);
+        torso.name = 'torso';
+        torso.position.y = 1.48;
+        torso.castShadow = true;
+        torso.receiveShadow = true;
+        group.add(torso);
+
+        const vest = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.76, 0.55), vestMat);
+        vest.name = 'vest';
+        vest.position.set(0, 1.48, 0);
+        vest.castShadow = true;
+        group.add(vest);
+
+        const belt = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.12, 0.56), darkNavyMat);
+        belt.name = 'belt';
+        belt.position.set(0, 0.98, 0);
+        group.add(belt);
+
+        const badge = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.18, 0.04), badgeMat);
+        badge.name = 'badge';
+        badge.position.set(0.24, 1.66, 0.28);
+        group.add(badge);
+
+        const head = new THREE.Group();
+        head.name = 'head';
+        head.position.set(0, 2.32, 0);
+
+        const headMesh = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.54, 0.54), skinMat);
+        headMesh.name = 'headMesh';
+        headMesh.castShadow = true;
+        head.add(headMesh);
+
+        const capBase = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.10, 0.58), navyMat);
+        capBase.name = 'capBase';
+        capBase.position.set(0, 0.24, 0);
+        head.add(capBase);
+
+        const capBand = new THREE.Mesh(new THREE.BoxGeometry(0.59, 0.06, 0.59), capBandMat);
+        capBand.name = 'capBand';
+        capBand.position.set(0, 0.22, 0);
+        head.add(capBand);
+
+        const capCrown = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.14, 0.66), navyMat);
+        capCrown.name = 'capCrown';
+        capCrown.position.set(0, 0.34, -0.02);
+        capCrown.castShadow = true;
+        head.add(capCrown);
+
+        const capVisor = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.06, 0.34), darkNavyMat);
+        capVisor.name = 'capVisor';
+        capVisor.position.set(0, 0.19, 0.36);
+        head.add(capVisor);
+
+        const capCockade = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.10, 0.04), badgeMat);
+        capCockade.name = 'capCockade';
+        capCockade.position.set(0, 0.32, 0.32);
+        head.add(capCockade);
+
+        group.add(head);
+
+        const makeArm = (armName, xPos) => {
+            const pivot = new THREE.Group();
+            pivot.name = armName;
+            pivot.position.set(xPos, 1.95, 0);
+            const armMesh = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.95, 0.28), navyMat);
+            armMesh.name = `${armName}_mesh`;
+            armMesh.position.y = -0.475;
+            armMesh.castShadow = true;
+            pivot.add(armMesh);
+            return pivot;
+        };
+
+        group.add(makeArm('leftArm', 0.60));
+        group.add(makeArm('rightArm', -0.60));
+
+        const makeLeg = (legName, xPos) => {
+            const pivot = new THREE.Group();
+            pivot.name = legName;
+            pivot.position.set(xPos, 0.90, 0);
+            const legMesh = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.78, 0.34), navyMat);
+            legMesh.name = `${legName}_mesh`;
+            legMesh.position.y = -0.39;
+            legMesh.castShadow = true;
+            pivot.add(legMesh);
+
+            const boot = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.22, 0.48), darkNavyMat);
+            boot.name = `${legName}_boot`;
+            boot.position.set(0, -0.79, 0.05);
+            boot.castShadow = true;
+            pivot.add(boot);
+            return pivot;
+        };
+
+        group.add(makeLeg('leftLeg', 0.23));
+        group.add(makeLeg('rightLeg', -0.23));
+
+        return group;
+    },
+
     car(colorHex = 0xf8fafc, id = 'car_0') {
         const group = new THREE.Group();
         group.name = id;
@@ -2058,6 +2168,121 @@ export const ModelBuilders = {
         });
 
         return group;
+    },
+
+    police_car(id = 'police_car') {
+        const group = new THREE.Group();
+        group.name = id;
+
+        const whiteBodyMat = new THREE.MeshStandardMaterial({
+            color: 0xf8fafc,
+            metalness: 0.35,
+            roughness: 0.35
+        });
+        const stripeMat = new THREE.MeshStandardMaterial({
+            color: 0x1d4ed8,
+            metalness: 0.3,
+            roughness: 0.35
+        });
+        const cabinMat = new THREE.MeshStandardMaterial({
+            color: 0x0f172a,
+            metalness: 0.6,
+            roughness: 0.25
+        });
+
+        const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.75, 4.9), whiteBodyMat);
+        chassis.name = 'chassis';
+        chassis.position.y = 0.65;
+        chassis.castShadow = true;
+        chassis.receiveShadow = true;
+        group.add(chassis);
+
+        const stripeLeft = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.22, 4.65), stripeMat);
+        stripeLeft.name = 'stripe_left';
+        stripeLeft.position.set(-1.155, 0.66, 0);
+        group.add(stripeLeft);
+
+        const stripeRight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.22, 4.65), stripeMat);
+        stripeRight.name = 'stripe_right';
+        stripeRight.position.set(1.155, 0.66, 0);
+        group.add(stripeRight);
+
+        const stripeHood = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.03, 1.45), stripeMat);
+        stripeHood.name = 'stripe_hood';
+        stripeHood.position.set(0, 1.03, 1.55);
+        group.add(stripeHood);
+
+        const stripeTrunk = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.03, 0.90), stripeMat);
+        stripeTrunk.name = 'stripe_trunk';
+        stripeTrunk.position.set(0, 1.03, -1.95);
+        group.add(stripeTrunk);
+
+        const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.65, 2.4), cabinMat);
+        cabin.name = 'cabin';
+        cabin.position.set(0, 1.3, -0.2);
+        cabin.castShadow = true;
+        group.add(cabin);
+
+        const lightbarBase = new THREE.Mesh(
+            new THREE.BoxGeometry(1.32, 0.06, 0.34),
+            new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
+        );
+        lightbarBase.name = 'lightbar_base';
+        lightbarBase.position.set(0, 1.655, -0.1);
+        group.add(lightbarBase);
+
+        const lightbarRed = new THREE.Mesh(
+            new THREE.BoxGeometry(0.54, 0.14, 0.30),
+            new THREE.MeshStandardMaterial({
+                color: 0xdc2626,
+                emissive: 0xef4444,
+                emissiveIntensity: 1.6,
+                roughness: 0.2
+            })
+        );
+        lightbarRed.name = 'lightbar_red';
+        lightbarRed.position.set(-0.35, 1.74, -0.1);
+        group.add(lightbarRed);
+
+        const lightbarBlue = new THREE.Mesh(
+            new THREE.BoxGeometry(0.54, 0.14, 0.30),
+            new THREE.MeshStandardMaterial({
+                color: 0x2563eb,
+                emissive: 0x3b82f6,
+                emissiveIntensity: 1.6,
+                roughness: 0.2
+            })
+        );
+        lightbarBlue.name = 'lightbar_blue';
+        lightbarBlue.position.set(0.35, 1.74, -0.1);
+        group.add(lightbarBlue);
+
+        const headMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+        const tailMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+        [-0.75, 0.75].forEach((lx, idx) => {
+            const hl = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.2, 0.1), headMat);
+            hl.name = `headlight_${idx}`;
+            hl.position.set(lx, 0.7, 2.46);
+            group.add(hl);
+
+            const tl = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.2, 0.1), tailMat);
+            tl.name = `taillight_${idx}`;
+            tl.position.set(lx, 0.75, -2.46);
+            group.add(tl);
+        });
+
+        const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.32, 16);
+        wheelGeo.rotateZ(Math.PI / 2);
+        const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.7 });
+        [[-1.15, 1.5], [1.15, 1.5], [-1.15, -1.5], [1.15, -1.5]].forEach(([wx, wz], idx) => {
+            const w = new THREE.Mesh(wheelGeo, wheelMat);
+            w.name = `wheel_${idx}`;
+            w.position.set(wx, 0.42, wz);
+            w.castShadow = true;
+            group.add(w);
+        });
+
+        return group;
     }
 };
 
@@ -2100,6 +2325,8 @@ export const ModelLoader = {
             'models/dunya.glb',
             'models/berik.glb',
             'models/npc.glb',
+            'models/police_officer.glb',
+            'models/police_car.glb',
             'models/seagull.glb',
             'models/sailboat_white.glb',
             'models/sailboat_blue.glb',

@@ -7,8 +7,8 @@
  * In this client-side prototype, player balance, completed quests, and quest ability
  * flags are maintained locally in GAME_STATE. They are session-local, reset upon
  * page reload/refresh, and do not persist across restarts or replicate across multiplayer
- * network sessions. All transactions validate non-negative finite safe-integer balances
- * and enforce idempotent transitions.
+ * network sessions. All transactions validate finite safe-integer balances
+ * (including negative balances from police fines) and enforce idempotent transitions.
  */
 
 export const QUEST_DEFINITIONS = [
@@ -83,8 +83,8 @@ export function canAcceptQuest(questId, state) {
         return { ok: false, reason: 'NO_STATE' };
     }
 
-    // Validate balance integrity
-    if (typeof state.money !== 'number' || !Number.isFinite(state.money) || !Number.isSafeInteger(state.money) || state.money < 0) {
+    // Validate balance integrity (negative safe-integer balances are permitted)
+    if (typeof state.money !== 'number' || !Number.isFinite(state.money) || !Number.isSafeInteger(state.money)) {
         return { ok: false, reason: 'INVALID_BALANCE', currentMoney: state.money };
     }
 

@@ -526,6 +526,8 @@ export function buildAllExportableModels(worldMap = {}) {
     models.set('player.glb', ModelBuilders.player('Игрок', '#38bdf8'));
     models.set('dunya.glb', ModelBuilders.dunya());
     models.set('npc.glb', ModelBuilders.npc(0xe11d48));
+    models.set('police_officer.glb', ModelBuilders.police_officer());
+    models.set('police_car.glb', ModelBuilders.police_car());
 
     return models;
 }

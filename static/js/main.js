@@ -1,11 +1,11 @@
 import { smoothingAlpha } from './vehicle-motion.js';
 import { GAME_STATE, DEFAULT_WALK_PITCH, loadGameData } from './state.js';
 import { World } from './world.js';
-import { getSeabedHeightAt, SEA_SURFACE_Y } from './physics.js';
-import { Player, Dunya, createJDMCar, toggleVehicleDrive, initPromenadeNPCs, selectValidSpawnPoint, updateWorldVehicles } from './entities.js';
+import { getSeabedHeightAt, SEA_SURFACE_Y, POLICE_SPEED_LIMIT_KMH } from './physics.js';
+import { Player, Dunya, createJDMCar, toggleVehicleDrive, initPromenadeNPCs, selectValidSpawnPoint, updateWorldVehicles, updatePoliceEntities } from './entities.js';
 import { MultiplayerClient } from './network.js';
 import { bindInputControls } from './input.js';
-import { checkProximityInteractions, updateScreenProjections, drawGTARadar, showLocalLabels, showToast } from './ui.js';
+import { checkProximityInteractions, updateScreenProjections, drawGTARadar, showLocalLabels, showToast, renderMoneyHUD } from './ui.js';
 import { ModelLoader } from './models.js';
 import { applyCameraShake, removeCameraShake, triggerCameraShake } from './camera-effects.js';
 import { NoonCannonScheduler } from './noon-cannon.js';
@@ -128,6 +128,7 @@ function gameLoop() {
 
     if (GAME_STATE.isConnected) {
         Player.update(dt, MultiplayerClient.remotePlayers);
+        updatePoliceEntities(dt, elapsed, MultiplayerClient.remotePlayers);
         updateWorldVehicles(dt, activeWorldMap);
         Dunya.update(dt, elapsed, Player.position);
         MultiplayerClient.update(dt);
@@ -135,8 +136,18 @@ function gameLoop() {
 
     if (GAME_STATE.inVehicle) {
         const kmh = Math.round(Math.abs(GAME_STATE.inVehicle.speed) * 3.6);
+        const isSpeeding = kmh > POLICE_SPEED_LIMIT_KMH;
         const speedVal = document.getElementById('speed-value');
-        if (speedVal) speedVal.textContent = String(kmh);
+        const speedBox = document.getElementById('speedometer-box');
+        if (speedVal) {
+            speedVal.textContent = String(kmh);
+            speedVal.classList?.toggle('text-rose-400', isSpeeding);
+            speedVal.classList?.toggle('text-white', !isSpeeding);
+        }
+        if (speedBox && speedBox.classList) {
+            speedBox.classList.toggle('border-rose-500/80', isSpeeding);
+            speedBox.classList.toggle('bg-rose-950/80', isSpeeding);
+        }
     }
 
     World.animateEnvironment(elapsed, dt, Player.position);
@@ -149,20 +160,26 @@ function gameLoop() {
         dunya: Dunya,
         worldMap: activeWorldMap
     });
+    const policeCopsList = GAME_STATE.policeCops instanceof Map ? Array.from(GAME_STATE.policeCops.values()) : [];
+    const policeCarsList = GAME_STATE.policeCars instanceof Map ? Array.from(GAME_STATE.policeCars.values()) : [];
     updateScreenProjections({
         camera: World.camera,
         playerPos: Player.position,
         dunya: Dunya,
         worldLabels: World.worldLabels,
         npcs: World.npcs,
-        remotePlayers: MultiplayerClient.remotePlayers
+        remotePlayers: MultiplayerClient.remotePlayers,
+        policeCops: policeCopsList,
+        policeCars: policeCarsList
     });
     drawGTARadar({
         playerPos: Player.position,
         interactables: World.interactables,
         npcs: World.npcs,
         dunya: Dunya,
-        remotePlayers: MultiplayerClient.remotePlayers
+        remotePlayers: MultiplayerClient.remotePlayers,
+        policeCops: policeCopsList,
+        policeCars: policeCarsList
     });
 
     World.renderer.render(World.scene, World.camera);
@@ -232,6 +249,7 @@ export async function startApp() {
     Dunya.init(World.scene, chosenSpawn.x + dunyaOffsetX, chosenSpawn.z + dunyaOffsetZ, chosenSpawn.yaw, GAME_STATE.petType);
 
     MultiplayerClient.initUI(worldMap);
+    renderMoneyHUD();
     bindInputControls(worldMap);
     showLocalLabels(1500);
 

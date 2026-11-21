@@ -23,16 +23,45 @@ const (
 
 // Standard message types
 const (
-	TypeRegister   = "register"
-	TypeJoin       = "join"
-	TypeLeave      = "leave"
-	TypeMove       = "move"
-	TypeChat       = "chat"
-	TypeError      = "error"
-	TypePing       = "ping"
-	TypePong       = "pong"
-	TypeCannonFire = "cannon_fire"
-	TypeCannonShot = "cannon_shot"
+	TypeRegister              = "register"
+	TypeJoin                  = "join"
+	TypeLeave                 = "leave"
+	TypeMove                  = "move"
+	TypeChat                  = "chat"
+	TypeError                 = "error"
+	TypePing                  = "ping"
+	TypePong                  = "pong"
+	TypeCannonFire            = "cannon_fire"
+	TypeCannonShot            = "cannon_shot"
+	TypeBalanceUpdate         = "balance_update"
+	TypePoliceState           = "police_state"
+	TypePoliceEncounterStart  = "police_encounter_start"
+	TypePoliceDialogueChoice  = "police_dialogue_choice"
+	TypePoliceEncounterResult = "police_encounter_result"
+	TypePoliceChase           = "police_chase"
+	TypeVehicleImpulse        = "vehicle_impulse"
+)
+
+// Foot cop simulation states
+const (
+	CopStatePatrol   = "patrol"
+	CopStateApproach = "approach"
+	CopStateDialogue = "dialogue"
+	CopStateCooldown = "cooldown"
+)
+
+// Police car simulation states
+const (
+	PoliceCarStatePatrol   = "patrol"
+	PoliceCarStateChase    = "chase"
+	PoliceCarStateCooldown = "cooldown"
+)
+
+// Police chase event statuses
+const (
+	ChaseStatusStarted = "started"
+	ChaseStatusStopped = "stopped"
+	ChaseStatusEvaded  = "evaded"
 )
 
 // Modes for movement
@@ -105,12 +134,31 @@ type InboundCannonFireMsg struct {
 	Type string `msgpack:"type"`
 }
 
+// InboundPoliceDialogueChoiceMsg represents a client response to an active police encounter.
+type InboundPoliceDialogueChoiceMsg struct {
+	Type        string  `msgpack:"type"`
+	EncounterID *string `msgpack:"encounter_id"`
+	OptionIndex *int    `msgpack:"option_index"`
+}
+
+// PoliceDialogueChoiceRequest holds validated police dialogue choice parameters.
+type PoliceDialogueChoiceRequest struct {
+	EncounterID string
+	OptionIndex int
+}
+
+// Int64Ptr returns a pointer to v (used for optional wire fields where 0/negative must serialize).
+func Int64Ptr(v int64) *int64 {
+	return &v
+}
+
 // OutboundJoinMsg broadcasts when a user connects.
 type OutboundJoinMsg struct {
 	Type   string   `msgpack:"type"`
 	User   string   `msgpack:"user"`
 	Token  string   `msgpack:"token,omitempty"`
 	Roster []string `msgpack:"roster,omitempty"`
+	Money  *int64   `msgpack:"money,omitempty"`
 }
 
 // OutboundLeaveMsg broadcasts when a user disconnects or times out.
@@ -174,6 +222,119 @@ type OutboundCannonShotMsg struct {
 	Type   string `msgpack:"type"`
 	User   string `msgpack:"user,omitempty"`
 	Reason string `msgpack:"reason"`
+}
+
+// OutboundBalanceUpdateMsg notifies clients of an authoritative wallet change.
+type OutboundBalanceUpdateMsg struct {
+	Type     string `msgpack:"type"`
+	Username string `msgpack:"username"`
+	Money    int64  `msgpack:"money"`
+	Delta    int64  `msgpack:"delta"`
+	Reason   string `msgpack:"reason"`
+	SourceID string `msgpack:"source_id,omitempty"`
+}
+
+// PoliceFootCopState represents a single foot policeman's replicated simulation state.
+type PoliceFootCopState struct {
+	ID         string  `msgpack:"id"`
+	Name       string  `msgpack:"name"`
+	X          float64 `msgpack:"x"`
+	Y          float64 `msgpack:"y"`
+	Z          float64 `msgpack:"z"`
+	VX         float64 `msgpack:"vx"`
+	VZ         float64 `msgpack:"vz"`
+	Yaw        float64 `msgpack:"yaw"`
+	State      string  `msgpack:"state"`
+	Anim       string  `msgpack:"anim"`
+	TargetUser string  `msgpack:"target_user"`
+}
+
+// PoliceCarState represents a single police car's replicated simulation state.
+type PoliceCarState struct {
+	ID          string  `msgpack:"id"`
+	X           float64 `msgpack:"x"`
+	Y           float64 `msgpack:"y"`
+	Z           float64 `msgpack:"z"`
+	VX          float64 `msgpack:"vx"`
+	VZ          float64 `msgpack:"vz"`
+	Yaw         float64 `msgpack:"yaw"`
+	YawRate     float64 `msgpack:"yaw_rate"`
+	Speed       float64 `msgpack:"speed"`
+	Mass        float64 `msgpack:"mass"`
+	State       string  `msgpack:"state"`
+	TargetCarID string  `msgpack:"target_car_id"`
+	TargetUser  string  `msgpack:"target_user"`
+	Siren       bool    `msgpack:"siren"`
+	Lights      bool    `msgpack:"lights"`
+}
+
+// OutboundPoliceStateMsg broadcasts authoritative police world state at 20 Hz and on join baseline.
+type OutboundPoliceStateMsg struct {
+	Type         string               `msgpack:"type"`
+	Sequence     uint64               `msgpack:"sequence"`
+	SampleTimeMS int64                `msgpack:"sample_time_ms"`
+	FootCops     []PoliceFootCopState `msgpack:"foot_cops"`
+	PoliceCars   []PoliceCarState     `msgpack:"police_cars"`
+}
+
+// PoliceDialogueOptionView is a single selectable dialogue option sent to the target player.
+type PoliceDialogueOptionView struct {
+	Index int    `msgpack:"index"`
+	Text  string `msgpack:"text"`
+	Fine  int64  `msgpack:"fine"`
+}
+
+// OutboundPoliceEncounterStartMsg initiates an unsolicited Russian police encounter with target_user.
+type OutboundPoliceEncounterStartMsg struct {
+	Type        string                     `msgpack:"type"`
+	EncounterID string                     `msgpack:"encounter_id"`
+	CopID       string                     `msgpack:"cop_id"`
+	CopName     string                     `msgpack:"cop_name"`
+	ScenarioID  string                     `msgpack:"scenario_id"`
+	Title       string                     `msgpack:"title"`
+	Opening     string                     `msgpack:"opening"`
+	Options     []PoliceDialogueOptionView `msgpack:"options"`
+	TargetUser  string                     `msgpack:"target_user"`
+}
+
+// OutboundPoliceEncounterResultMsg broadcasts the outcome of a police encounter choice.
+type OutboundPoliceEncounterResultMsg struct {
+	Type        string `msgpack:"type"`
+	EncounterID string `msgpack:"encounter_id"`
+	CopID       string `msgpack:"cop_id"`
+	CopName     string `msgpack:"cop_name"`
+	ScenarioID  string `msgpack:"scenario_id"`
+	TargetUser  string `msgpack:"target_user"`
+	OptionIndex int    `msgpack:"option_index"`
+	ReplyText   string `msgpack:"reply_text"`
+	Fine        int64  `msgpack:"fine"`
+	Money       int64  `msgpack:"money"`
+}
+
+// OutboundPoliceChaseMsg broadcasts police car chase lifecycle transitions.
+type OutboundPoliceChaseMsg struct {
+	Type        string `msgpack:"type"`
+	PoliceCarID string `msgpack:"police_car_id"`
+	TargetCarID string `msgpack:"target_car_id"`
+	TargetUser  string `msgpack:"target_user"`
+	Status      string `msgpack:"status"`
+	Reason      string `msgpack:"reason"`
+	Fine        int64  `msgpack:"fine"`
+	Money       int64  `msgpack:"money"`
+}
+
+// OutboundVehicleImpulseMsg notifies clients of a server-resolved heavy police collision impulse.
+type OutboundVehicleImpulseMsg struct {
+	Type        string  `msgpack:"type"`
+	PoliceCarID string  `msgpack:"police_car_id"`
+	CarID       string  `msgpack:"car_id"`
+	TargetUser  string  `msgpack:"target_user"`
+	DVX         float64 `msgpack:"dvx"`
+	DVZ         float64 `msgpack:"dvz"`
+	DYawRate    float64 `msgpack:"dyaw_rate"`
+	PoliceMass  float64 `msgpack:"police_mass"`
+	PlayerMass  float64 `msgpack:"player_mass"`
+	Sequence    uint64  `msgpack:"sequence"`
 }
 
 // CarState tracks the last seen world position and state of a vehicle.
@@ -510,6 +671,60 @@ func ParseRegister(data []byte) (string, error) {
 		return "", err
 	}
 	return req.Username, nil
+}
+
+// ParsePoliceDialogueChoice decodes and strictly validates a client's police dialogue option selection.
+func ParsePoliceDialogueChoice(data []byte) (*PoliceDialogueChoiceRequest, error) {
+	if err := ValidateMsgPackMap(data); err != nil {
+		return nil, err
+	}
+
+	reader := bytes.NewReader(data)
+	dec := msgpack.NewDecoder(reader)
+
+	var in InboundPoliceDialogueChoiceMsg
+	if err := dec.Decode(&in); err != nil {
+		return nil, fmt.Errorf("failed to decode police dialogue choice: %w", err)
+	}
+
+	if reader.Len() > 0 {
+		return nil, errors.New("unexpected trailing bytes after police dialogue choice")
+	}
+
+	if in.Type != TypePoliceDialogueChoice {
+		return nil, fmt.Errorf("expected type %q, got %q", TypePoliceDialogueChoice, in.Type)
+	}
+
+	if in.EncounterID == nil {
+		return nil, errors.New("missing encounter_id")
+	}
+	encID := strings.TrimSpace(*in.EncounterID)
+	if encID == "" {
+		return nil, errors.New("encounter_id cannot be empty or whitespace")
+	}
+	if !utf8.ValidString(encID) {
+		return nil, errors.New("encounter_id must be valid UTF-8")
+	}
+	if rc := utf8.RuneCountInString(encID); rc < 1 || rc > 64 {
+		return nil, errors.New("encounter_id must be between 1 and 64 characters")
+	}
+	for _, r := range encID {
+		if r < 32 || r == 127 {
+			return nil, errors.New("encounter_id contains invalid control characters")
+		}
+	}
+
+	if in.OptionIndex == nil {
+		return nil, errors.New("missing option_index")
+	}
+	if *in.OptionIndex < 0 || *in.OptionIndex > 15 {
+		return nil, errors.New("option_index must be between 0 and 15")
+	}
+
+	return &PoliceDialogueChoiceRequest{
+		EncounterID: encID,
+		OptionIndex: *in.OptionIndex,
+	}, nil
 }
 
 // MarshalMsgPack wraps msgpack.Marshal

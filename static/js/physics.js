@@ -51,6 +51,8 @@ export const DEFAULT_MODEL_BOUNDS = {
     'models/olympiets_complex.glb': { minX: -9.45, maxX: 9, minY: 0, maxY: 11.2, minZ: -14, maxZ: 14 },
     'models/pier.glb': { minX: -18, maxX: 18, minY: -0.3, maxY: 0.3, minZ: -3.5, maxZ: 3.5 },
     'models/player.glb': { minX: -0.74, maxX: 0.74, minY: 0, maxY: 2.67, minZ: -0.3, maxZ: 0.555 },
+    'models/police_car.glb': { minX: -1.31, maxX: 1.31, minY: 0, maxY: 1.81, minZ: -2.51, maxZ: 2.51 },
+    'models/police_officer.glb': { minX: -0.74, maxX: 0.74, minY: 0, maxY: 2.73, minZ: -0.35, maxZ: 0.53 },
     'models/road_lamp.glb': { minX: -0.28, maxX: 0.28, minY: 0, maxY: 7.65, minZ: -0.28, maxZ: 0.28 },
     'models/roadster.glb': { minX: -1.231, maxX: 1.231, minY: 0, maxY: 1.262, minZ: -2.206, maxZ: 2.242 },
     'models/sailboat_blue.glb': { minX: -3.75, maxX: 3.75, minY: -0.7, maxY: 11, minZ: -1.4, maxZ: 1.4 },
@@ -635,8 +637,8 @@ export const CAR_SPECS = {
     length: 4.8,
     width: 2.3,
     wheelbase: 2.7,
-    axleOffset: 1.25,
-    collisionRadius: 1.15,
+    axleOffset: 1.18,
+    collisionRadius: 0.96,
     restitution: 0.25,
     maxSpeedForward: 44.44,
     maxSpeedBoost: 55.56,
@@ -662,6 +664,20 @@ export const CAR_SPECS = {
     handbrakeSlipFloor: 0.35,
     tractionLossRate: 12.0,
     tractionRecoveryRate: 8.0
+};
+
+export const POLICE_SPEED_LIMIT_KMH = 40;
+export const POLICE_SPEED_LIMIT_MS = POLICE_SPEED_LIMIT_KMH / 3.6;
+
+export const POLICE_CAR_SPECS = {
+    mass: 4200,
+    maxSpeedForward: CAR_SPECS.maxSpeedForward,
+    maxSpeedBoost: CAR_SPECS.maxSpeedBoost,
+    length: 4.8,
+    width: 2.3,
+    axleOffset: 1.18,
+    collisionRadius: 0.96,
+    restitution: 0.25
 };
 
 export function rotationalVelocity(r, omega) {
@@ -711,6 +727,18 @@ export function getVehicleCollisionCircles(car, axleOffset = CAR_SPECS.axleOffse
             radius
         }
     ];
+}
+
+export function getMinVehicleCircleGap(carA, carB) {
+    const circlesA = getVehicleCollisionCircles(carA, carA.axleOffset ?? CAR_SPECS.axleOffset, carA.collisionRadius ?? CAR_SPECS.collisionRadius);
+    const circlesB = getVehicleCollisionCircles(carB, carB.axleOffset ?? CAR_SPECS.axleOffset, carB.collisionRadius ?? CAR_SPECS.collisionRadius);
+    let minGap = Infinity;
+    for (const a of circlesA) {
+        for (const b of circlesB) {
+            minGap = Math.min(minGap, Math.hypot(a.x - b.x, a.z - b.z) - a.radius - b.radius);
+        }
+    }
+    return minGap;
 }
 
 export function getVehicleInertia(car) {
@@ -932,12 +960,173 @@ export function stepVehicleDynamics(car, input, dt) {
     }
 }
 
-export function resolveVehicleToVehicleCollisions(cars, dt) {
+const POLICE_IMPULSE_WINDOW_MS = 250;
+
+function defaultNowMs() {
+    return (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now();
+}
+
+function pruneImpulseLedger(ledger, nowMs) {
+    if (!(ledger instanceof Map)) return;
+    for (const [k, entry] of ledger.entries()) {
+        if (!entry || (nowMs - entry.timestamp) > POLICE_IMPULSE_WINDOW_MS) {
+            ledger.delete(k);
+        }
+    }
+}
+
+function applyLocalPoliceCollisionImpulse(localCar, policeCar, dvx, dvz, dyawRate, nowMs) {
+    const policeId = policeCar && policeCar.id ? String(policeCar.id) : null;
+    if (policeId && localCar._recentServerPoliceImpulses instanceof Map) {
+        pruneImpulseLedger(localCar._recentServerPoliceImpulses, nowMs);
+        const srv = localCar._recentServerPoliceImpulses.get(policeId);
+        if (srv && (dvx * srv.dvx + dvz * srv.dvz) > 0) {
+            const remVx = srv.dvx - (srv.absorbedDvx || 0);
+            const remVz = srv.dvz - (srv.absorbedDvz || 0);
+            const remYaw = srv.dyawRate - (srv.absorbedDyawRate || 0);
+            if ((remVx * dvx + remVz * dvz) > 0) {
+                const resVx = dvx - remVx;
+                const resVz = dvz - remVz;
+                const resYaw = dyawRate - remYaw;
+                if ((resVx * dvx + resVz * dvz) > 0) {
+                    localCar.vx = (Number(localCar.vx) || 0) + resVx;
+                    localCar.vz = (Number(localCar.vz) || 0) + resVz;
+                    localCar.yawRate = (Number(localCar.yawRate) || 0) + resYaw;
+                    localCar._recentServerPoliceImpulses.delete(policeId);
+                    if (!(localCar._recentLocalPoliceImpulses instanceof Map)) {
+                        localCar._recentLocalPoliceImpulses = new Map();
+                    }
+                    localCar._recentLocalPoliceImpulses.set(policeId, {
+                        timestamp: nowMs,
+                        dvx: resVx,
+                        dvz: resVz,
+                        dyawRate: resYaw
+                    });
+                } else {
+                    srv.absorbedDvx = (srv.absorbedDvx || 0) + dvx;
+                    srv.absorbedDvz = (srv.absorbedDvz || 0) + dvz;
+                    srv.absorbedDyawRate = (srv.absorbedDyawRate || 0) + dyawRate;
+                }
+                localCar.speed = localCar.vx * Math.sin(localCar.yaw || 0) + localCar.vz * Math.cos(localCar.yaw || 0);
+                return;
+            }
+            localCar._recentServerPoliceImpulses.delete(policeId);
+        }
+    }
+
+    localCar.vx = (Number(localCar.vx) || 0) + dvx;
+    localCar.vz = (Number(localCar.vz) || 0) + dvz;
+    localCar.yawRate = (Number(localCar.yawRate) || 0) + dyawRate;
+    localCar.speed = localCar.vx * Math.sin(localCar.yaw || 0) + localCar.vz * Math.cos(localCar.yaw || 0);
+
+    if (policeId) {
+        if (!(localCar._recentLocalPoliceImpulses instanceof Map)) {
+            localCar._recentLocalPoliceImpulses = new Map();
+        }
+        pruneImpulseLedger(localCar._recentLocalPoliceImpulses, nowMs);
+        const prev = localCar._recentLocalPoliceImpulses.get(policeId);
+        if (prev && (prev.dvx * dvx + prev.dvz * dvz) >= 0) {
+            prev.dvx += dvx;
+            prev.dvz += dvz;
+            prev.dyawRate += dyawRate;
+            prev.timestamp = nowMs;
+        } else {
+            localCar._recentLocalPoliceImpulses.set(policeId, {
+                timestamp: nowMs,
+                dvx,
+                dvz,
+                dyawRate
+            });
+        }
+    }
+}
+
+export function applyVehicleImpulse(car, impulse, nowMs = defaultNowMs()) {
+    if (!car || !impulse || typeof impulse !== 'object') {
+        return { applied: false, reason: 'INVALID_IMPULSE' };
+    }
+    const dvx = Number(impulse.dvx);
+    const dvz = Number(impulse.dvz);
+    const dyawRate = impulse.dyaw_rate !== undefined ? Number(impulse.dyaw_rate) : Number(impulse.dyawRate ?? 0);
+    if (!Number.isFinite(dvx) || !Number.isFinite(dvz) || !Number.isFinite(dyawRate) || Math.hypot(dvx, dvz) > 200 || Math.abs(dyawRate) > 50) {
+        return { applied: false, reason: 'INVALID_IMPULSE' };
+    }
+
+    if (impulse.sequence !== undefined && impulse.sequence !== null) {
+        const seq = Number(impulse.sequence);
+        if (!Number.isFinite(seq)) {
+            return { applied: false, reason: 'INVALID_IMPULSE' };
+        }
+        if (Number.isFinite(car.lastImpulseSequence) && seq <= car.lastImpulseSequence) {
+            return { applied: false, reason: 'STALE_SEQUENCE' };
+        }
+        car.lastImpulseSequence = seq;
+    }
+
+    let appliedDvx = dvx;
+    let appliedDvz = dvz;
+    let appliedDyawRate = dyawRate;
+    let alreadyAppliedLocally = false;
+
+    const policeId = impulse.police_car_id ? String(impulse.police_car_id) : null;
+    if (policeId && car._recentLocalPoliceImpulses instanceof Map) {
+        pruneImpulseLedger(car._recentLocalPoliceImpulses, nowMs);
+        const local = car._recentLocalPoliceImpulses.get(policeId);
+        if (local && (dvx * local.dvx + dvz * local.dvz) > 0) {
+            const resVx = ((dvx * local.dvx > 0) ? Math.sign(dvx) * Math.max(0, Math.abs(dvx) - Math.abs(local.dvx)) : dvx) || 0;
+            const resVz = ((dvz * local.dvz > 0) ? Math.sign(dvz) * Math.max(0, Math.abs(dvz) - Math.abs(local.dvz)) : dvz) || 0;
+            const resYaw = ((dyawRate * local.dyawRate > 0) ? Math.sign(dyawRate) * Math.max(0, Math.abs(dyawRate) - Math.abs(local.dyawRate)) : dyawRate) || 0;
+            appliedDvx = resVx;
+            appliedDvz = resVz;
+            appliedDyawRate = resYaw;
+            alreadyAppliedLocally = !resVx && !resVz && !resYaw;
+            car._recentLocalPoliceImpulses.delete(policeId);
+        }
+    }
+
+    car.vx = (Number(car.vx) || 0) + appliedDvx;
+    car.vz = (Number(car.vz) || 0) + appliedDvz;
+    car.yawRate = (Number(car.yawRate) || 0) + appliedDyawRate;
+    car.speed = car.vx * Math.sin(car.yaw || 0) + car.vz * Math.cos(car.yaw || 0);
+    car.isAwake = true;
+
+    if (policeId && (Math.hypot(appliedDvx, appliedDvz) > 0 || Math.abs(appliedDyawRate) > 0)) {
+        if (!(car._recentServerPoliceImpulses instanceof Map)) {
+            car._recentServerPoliceImpulses = new Map();
+        }
+        pruneImpulseLedger(car._recentServerPoliceImpulses, nowMs);
+        car._recentServerPoliceImpulses.set(policeId, {
+            timestamp: nowMs,
+            dvx: appliedDvx,
+            dvz: appliedDvz,
+            dyawRate: appliedDyawRate,
+            absorbedDvx: 0,
+            absorbedDvz: 0,
+            absorbedDyawRate: 0
+        });
+    }
+
+    const result = {
+        applied: true,
+        dvx: appliedDvx,
+        dvz: appliedDvz,
+        dyawRate: appliedDyawRate
+    };
+    if (alreadyAppliedLocally) {
+        result.reason = 'ALREADY_APPLIED_LOCALLY';
+    }
+    return result;
+}
+
+export function resolveVehicleToVehicleCollisions(cars, dt, nowMs = defaultNowMs()) {
     if (!Array.isArray(cars) || cars.length < 2) return [];
     const events = [];
 
     for (let i = 0; i < cars.length; i++) {
         const carA = cars[i];
+        const readOnlyA = Boolean(carA.remoteDriver || carA.isServerControlled);
         const rawMassA = Number(carA.mass);
         const invMassA = carA.remoteDriver ? 0 : ((Number.isFinite(rawMassA) && rawMassA > 10.0) ? (1 / rawMassA) : (1 / CAR_SPECS.mass));
         const rawIA = Number(carA.inertia);
@@ -945,6 +1134,9 @@ export function resolveVehicleToVehicleCollisions(cars, dt) {
 
         for (let j = i + 1; j < cars.length; j++) {
             const carB = cars[j];
+            const readOnlyB = Boolean(carB.remoteDriver || carB.isServerControlled);
+            if (readOnlyA && readOnlyB) continue;
+
             const rawMassB = Number(carB.mass);
             const invMassB = carB.remoteDriver ? 0 : ((Number.isFinite(rawMassB) && rawMassB > 10.0) ? (1 / rawMassB) : (1 / CAR_SPECS.mass));
             const rawIB = Number(carB.inertia);
@@ -1009,17 +1201,17 @@ export function resolveVehicleToVehicleCollisions(cars, dt) {
             }
 
             if (bestContact && bestOverlap > 0.0001) {
-                if (!carA.remoteDriver) carA.isAwake = true;
-                if (!carB.remoteDriver) carB.isAwake = true;
+                if (!readOnlyA) carA.isAwake = true;
+                if (!readOnlyB) carB.isAwake = true;
 
                 const { overlap, nx, nz, contactX, contactZ } = bestContact;
                 const sumInvM = invMassA + invMassB;
 
                 // Mass-weighted position correction
-                if (!carA.remoteDriver) carA.x = (Number(carA.x) || 0) - nx * overlap * (invMassA / sumInvM);
-                if (!carA.remoteDriver) carA.z = (Number(carA.z) || 0) - nz * overlap * (invMassA / sumInvM);
-                if (!carB.remoteDriver) carB.x = (Number(carB.x) || 0) + nx * overlap * (invMassB / sumInvM);
-                if (!carB.remoteDriver) carB.z = (Number(carB.z) || 0) + nz * overlap * (invMassB / sumInvM);
+                if (!readOnlyA) carA.x = (Number(carA.x) || 0) - nx * overlap * (invMassA / sumInvM);
+                if (!readOnlyA) carA.z = (Number(carA.z) || 0) - nz * overlap * (invMassA / sumInvM);
+                if (!readOnlyB) carB.x = (Number(carB.x) || 0) + nx * overlap * (invMassB / sumInvM);
+                if (!readOnlyB) carB.z = (Number(carB.z) || 0) + nz * overlap * (invMassB / sumInvM);
 
                 // Lever arms from updated vehicle centers
                 const rA = { x: contactX - carA.x, z: contactZ - carA.z };
@@ -1046,16 +1238,33 @@ export function resolveVehicleToVehicleCollisions(cars, dt) {
                     const restitution = Math.abs(vn) > 0.8 ? CAR_SPECS.restitution : 0.0;
                     const J = -(1 + restitution) * vn / denom;
 
-                    if (!carA.remoteDriver) carA.vx = (Number(carA.vx) || 0) - J * nx * invMassA;
-                    if (!carA.remoteDriver) carA.vz = (Number(carA.vz) || 0) - J * nz * invMassA;
-                    if (!carB.remoteDriver) carB.vx = (Number(carB.vx) || 0) + J * nx * invMassB;
-                    if (!carB.remoteDriver) carB.vz = (Number(carB.vz) || 0) + J * nz * invMassB;
+                    const dvxA = -J * nx * invMassA;
+                    const dvzA = -J * nz * invMassA;
+                    const dyawA = -J * ca * invIA;
+                    const dvxB = J * nx * invMassB;
+                    const dvzB = J * nz * invMassB;
+                    const dyawB = J * cb * invIB;
 
-                    if (!carA.remoteDriver) carA.yawRate = (Number(carA.yawRate) || 0) - J * ca * invIA;
-                    if (!carB.remoteDriver) carB.yawRate = (Number(carB.yawRate) || 0) + J * cb * invIB;
-
-                    if (!carA.remoteDriver) carA.speed = carA.vx * Math.sin(carA.yaw || 0) + carA.vz * Math.cos(carA.yaw || 0);
-                    if (!carB.remoteDriver) carB.speed = carB.vx * Math.sin(carB.yaw || 0) + carB.vz * Math.cos(carB.yaw || 0);
+                    if (!readOnlyA) {
+                        if (carB.isServerControlled && carB.isPolice) {
+                            applyLocalPoliceCollisionImpulse(carA, carB, dvxA, dvzA, dyawA, nowMs);
+                        } else {
+                            carA.vx = (Number(carA.vx) || 0) + dvxA;
+                            carA.vz = (Number(carA.vz) || 0) + dvzA;
+                            carA.yawRate = (Number(carA.yawRate) || 0) + dyawA;
+                            carA.speed = carA.vx * Math.sin(carA.yaw || 0) + carA.vz * Math.cos(carA.yaw || 0);
+                        }
+                    }
+                    if (!readOnlyB) {
+                        if (carA.isServerControlled && carA.isPolice) {
+                            applyLocalPoliceCollisionImpulse(carB, carA, dvxB, dvzB, dyawB, nowMs);
+                        } else {
+                            carB.vx = (Number(carB.vx) || 0) + dvxB;
+                            carB.vz = (Number(carB.vz) || 0) + dvzB;
+                            carB.yawRate = (Number(carB.yawRate) || 0) + dyawB;
+                            carB.speed = carB.vx * Math.sin(carB.yaw || 0) + carB.vz * Math.cos(carB.yaw || 0);
+                        }
+                    }
 
                     events.push({
                         carA,
@@ -1113,7 +1322,7 @@ function applyStaticContactImpulse(car, contactX, contactZ, nx, nz, invMass, inv
 }
 
 export function resolveVehicleWorldCollision(car, colliders, bounds = null) {
-    if (car.remoteDriver) return false;
+    if (car.remoteDriver || car.isServerControlled || car.isPolice) return false;
     let hitAny = false;
     const rawMass = Number(car.mass);
     const invMass = (Number.isFinite(rawMass) && rawMass > 10.0) ? (1 / rawMass) : (1 / CAR_SPECS.mass);
@@ -1301,11 +1510,12 @@ export function createVehiclePhysicsWorld(options = {}) {
             accumulator += Math.min(0.1, dt);
             const allEvents = [];
 
+            const isExternalVehicle = (v) => Boolean(v.remoteDriver || v.isServerControlled || v.isPolice);
             while (accumulator >= fixedDt) {
-                for (const v of vehicles) { if (!v.remoteDriver) resetVehiclePose(v); }
+                for (const v of vehicles) { if (!isExternalVehicle(v)) resetVehiclePose(v); }
                 // 1. Advance individual vehicle dynamics for local non-remote vehicles
                 for (const v of vehicles) {
-                    if (v.remoteDriver) continue;
+                    if (isExternalVehicle(v)) continue;
                     const input = (v === activeVehicle) ? activeInput : null;
                     stepSingleVehicleDynamics(v, input, fixedDt);
                 }
@@ -1317,7 +1527,7 @@ export function createVehiclePhysicsWorld(options = {}) {
                         allEvents.push(...events);
                     }
                     for (const v of vehicles) {
-                        if (v.isAwake === false && !v.remoteDriver) continue;
+                        if (v.isAwake === false && !isExternalVehicle(v)) continue;
                         resolveVehicleWorldCollision(v, colliders, bounds);
                     }
                 }

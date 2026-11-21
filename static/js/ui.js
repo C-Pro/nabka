@@ -1,8 +1,19 @@
-import { GAME_STATE, applyPOICompletion, startNpcDialogueSession, advanceNpcDialogue, resolveZoneName } from './state.js';
+import {
+    GAME_STATE,
+    applyPOICompletion,
+    startNpcDialogueSession,
+    advanceNpcDialogue,
+    resolveZoneName,
+    startPoliceEncounterState,
+    resolvePoliceEncounterState,
+    clearPoliceEncounterState
+} from './state.js';
 import { SoundManager } from './audio.js';
 import { getQuestById, canAcceptQuest, acceptQuest, consumeAbility, hasQuestAbility, isQuestCompleted } from './quests.js';
 import { triggerCameraShake } from './camera-effects.js';
 import { MultiplayerClient } from './network.js';
+import { clearMovementInput } from './input.js';
+import { Player } from './entities.js';
 
 export function substitutePlayerMentions(text, username = (typeof GAME_STATE !== 'undefined' ? GAME_STATE.username : 'Игрок')) {
     if (!text) return '';
@@ -70,13 +81,50 @@ export function renderStars() {
     }
 }
 
+export function formatRubles(amount) {
+    const n = Number(amount);
+    const safe = Number.isFinite(n) ? n : 0;
+    const absStr = Math.abs(safe).toLocaleString('ru-RU');
+    return safe < 0 ? `-₽ ${absStr}` : `₽ ${absStr}`;
+}
+
+export function renderMoneyHUD(amount = GAME_STATE.money) {
+    if (typeof document === 'undefined') return;
+    const moneyEl = document.getElementById('hud-money');
+    if (!moneyEl) return;
+    const n = Number(amount);
+    const safe = Number.isFinite(n) ? n : 0;
+    moneyEl.textContent = formatRubles(safe);
+    if (moneyEl.classList) {
+        if (safe < 0) {
+            moneyEl.classList.remove('text-emerald-400');
+            moneyEl.classList.add('text-rose-400');
+        } else {
+            moneyEl.classList.remove('text-rose-400');
+            moneyEl.classList.add('text-emerald-400');
+        }
+    }
+}
+
+export function updatePolicePursuitBanner(isChased, text = null) {
+    if (typeof document === 'undefined') return;
+    const banner = document.getElementById('police-pursuit-banner');
+    if (!banner) return;
+    if (banner.classList) {
+        banner.classList.toggle('hidden', !isChased);
+    }
+    if (text !== null && text !== undefined) {
+        const textEl = document.getElementById('police-pursuit-text');
+        if (textEl) textEl.textContent = String(text);
+    }
+}
+
 export function completePOI(poiId, message, cashReward) {
     SoundManager.playActionSound('cash');
     const res = applyPOICompletion(GAME_STATE, poiId, cashReward);
 
     if (typeof document !== 'undefined') {
-        const moneyEl = document.getElementById('hud-money');
-        if (moneyEl) moneyEl.textContent = `₽ ${GAME_STATE.money.toLocaleString('ru-RU')}`;
+        renderMoneyHUD(GAME_STATE.money);
 
         if (res.isNew) {
             const questProgressEl = document.getElementById('quest-progress');
@@ -107,9 +155,20 @@ export function openNpcDialogue(npc, playerPos) {
     startNpcDialogueSession(npc);
 
     if (typeof document !== 'undefined') {
-        document.getElementById('npc-avatar-badge').textContent = npc.persona.emoji;
-        document.getElementById('npc-modal-name').textContent = npc.persona.name;
-        document.getElementById('npc-modal-role').textContent = npc.persona.role;
+        const avatarEl = document.getElementById('npc-avatar-badge');
+        const nameEl = document.getElementById('npc-modal-name');
+        const badgeEl = document.getElementById('npc-modal-badge');
+        const roleEl = document.getElementById('npc-modal-role');
+        const closeBtn = document.getElementById('btn-close-npc-chat');
+        if (avatarEl) avatarEl.textContent = npc.persona.emoji;
+        if (nameEl) nameEl.textContent = npc.persona.name;
+        if (badgeEl) badgeEl.textContent = 'Местный • 25 RUS';
+        if (roleEl) roleEl.textContent = npc.persona.role;
+        if (closeBtn) {
+            closeBtn.disabled = false;
+            closeBtn.classList?.remove('opacity-40', 'pointer-events-none');
+            closeBtn.removeAttribute?.('aria-disabled');
+        }
 
         renderNpcChatHistory(npc);
         renderNpcDialogueOptions(npc);
@@ -122,13 +181,232 @@ export function openNpcDialogue(npc, playerPos) {
     }
 }
 
-export function closeNpcDialogue() {
+export function closeNpcDialogue(options = {}) {
+    const force = options === true || Boolean(options && options.force);
+    if (!force && GAME_STATE.activePoliceEncounter && GAME_STATE.activePoliceEncounter.stage !== 'resolved') {
+        showToast('👮 Сначала ответьте полицейскому!', 'amber', 1500);
+        return false;
+    }
+
     GAME_STATE.activeNpcChat = null;
+    clearPoliceEncounterState(GAME_STATE);
     GAME_STATE.keys.w = GAME_STATE.keys.a = GAME_STATE.keys.s = GAME_STATE.keys.d = GAME_STATE.keys.shift = GAME_STATE.keys.space = false;
     if (typeof document !== 'undefined') {
         const modal = document.getElementById('npc-dialogue-modal');
         if (modal) modal.classList.add('hidden');
+        const closeBtn = document.getElementById('btn-close-npc-chat');
+        if (closeBtn) {
+            closeBtn.disabled = false;
+            closeBtn.classList?.remove('opacity-40', 'pointer-events-none');
+            closeBtn.removeAttribute?.('aria-disabled');
+        }
+        const badgeEl = document.getElementById('npc-modal-badge');
+        if (badgeEl) badgeEl.textContent = 'Местный • 25 RUS';
     }
+    return true;
+}
+
+function renderPoliceEncounterHistory(encounter) {
+    if (typeof document === 'undefined' || !encounter) return;
+    const historyEl = document.getElementById('npc-chat-history');
+    if (!historyEl) return;
+    if (typeof historyEl.replaceChildren === 'function') {
+        historyEl.replaceChildren();
+    } else {
+        historyEl.innerHTML = '';
+        if (Array.isArray(historyEl.children)) historyEl.children.length = 0;
+    }
+
+    encounter.chatHistory.forEach(entry => {
+        const row = document.createElement('div');
+        const bubble = document.createElement('div');
+        const senderTag = document.createElement('span');
+        const textNode = document.createElement('span');
+        textNode.textContent = String(entry.text || '');
+
+        if (entry.role === 'user') {
+            row.className = 'flex justify-end';
+            bubble.className = 'bg-sky-600/35 border border-sky-400/40 text-white px-3 py-1.5 rounded-xl rounded-br-none max-w-[85%]';
+            senderTag.className = 'font-mono-code text-[10px] text-sky-300 block mb-0.5';
+            senderTag.textContent = '@' + (GAME_STATE.username || 'Игрок');
+        } else {
+            row.className = 'flex justify-start';
+            bubble.className = 'bg-slate-900/95 border border-blue-500/50 text-slate-100 px-3 py-1.5 rounded-xl rounded-bl-none max-w-[88%]';
+            senderTag.className = 'font-bold text-[10px] text-blue-300 block mb-0.5';
+            senderTag.textContent = `👮 ${encounter.cop_name}`;
+        }
+
+        bubble.appendChild(senderTag);
+        bubble.appendChild(textNode);
+        row.appendChild(bubble);
+        historyEl.appendChild(row);
+    });
+
+    historyEl.scrollTop = historyEl.scrollHeight;
+}
+
+function renderPoliceEncounterOptions(encounter, onSelectOption) {
+    if (typeof document === 'undefined' || !encounter) return;
+    const optionsContainer = document.getElementById('npc-options-container');
+    if (!optionsContainer) return;
+    if (typeof optionsContainer.replaceChildren === 'function') {
+        optionsContainer.replaceChildren();
+    } else {
+        optionsContainer.innerHTML = '';
+        if (Array.isArray(optionsContainer.children)) optionsContainer.children.length = 0;
+    }
+
+    if (encounter.stage === 'resolved') {
+        const closeOptBtn = document.createElement('button');
+        closeOptBtn.type = 'button';
+        closeOptBtn.className = 'btn-game w-full text-left bg-emerald-950/70 hover:bg-emerald-600/35 text-emerald-200 border border-emerald-400/50 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2.5 transition shadow';
+
+        const numBadge = document.createElement('span');
+        numBadge.className = 'bg-emerald-500/25 text-emerald-300 border border-emerald-400/40 font-mono-code text-[10px] px-1.5 py-0.5 rounded shrink-0';
+        numBadge.textContent = '1';
+
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = 'Понятно, иду дальше';
+
+        closeOptBtn.appendChild(numBadge);
+        closeOptBtn.appendChild(labelSpan);
+        closeOptBtn.addEventListener('click', () => closeNpcDialogue({ force: true }));
+        optionsContainer.appendChild(closeOptBtn);
+        return;
+    }
+
+    encounter.options.forEach((opt, idx) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.disabled = encounter.stage !== 'opening';
+        btn.className = 'btn-game w-full text-left bg-slate-800/95 hover:bg-blue-600/35 text-sky-200 border border-blue-400/40 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2.5 transition shadow';
+
+        const numBadge = document.createElement('span');
+        numBadge.className = 'bg-blue-500/25 text-blue-300 border border-blue-400/40 font-mono-code text-[10px] px-1.5 py-0.5 rounded shrink-0';
+        numBadge.textContent = String(idx + 1);
+
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = opt.fine > 0
+            ? `${opt.text} (−${Math.abs(opt.fine).toLocaleString('ru-RU')} ₽)`
+            : opt.text;
+
+        btn.appendChild(numBadge);
+        btn.appendChild(labelSpan);
+        btn.addEventListener('click', () => {
+            if (!GAME_STATE.activePoliceEncounter || GAME_STATE.activePoliceEncounter.stage !== 'opening') {
+                return;
+            }
+            const res = typeof onSelectOption === 'function'
+                ? onSelectOption(encounter.encounter_id, opt.index)
+                : true;
+            if (res === false) return;
+
+            encounter.stage = 'pending';
+            encounter.chosenOptionIndex = opt.index;
+            encounter.chatHistory.push({ role: 'user', text: opt.text });
+            renderPoliceEncounterHistory(encounter);
+            if (typeof optionsContainer.querySelectorAll === 'function') {
+                optionsContainer.querySelectorAll('button').forEach(b => { b.disabled = true; });
+            } else if (Array.isArray(optionsContainer.children)) {
+                optionsContainer.children.forEach(b => { b.disabled = true; });
+            }
+        });
+        optionsContainer.appendChild(btn);
+    });
+}
+
+export function openPoliceEncounterModal(msg, onSelectOption = null) {
+    const started = startPoliceEncounterState(GAME_STATE, msg);
+    if (!started.started) return false;
+
+    clearMovementInput();
+
+    if (GAME_STATE.inVehicle) {
+        GAME_STATE.inVehicle.vx = 0;
+        GAME_STATE.inVehicle.vz = 0;
+        GAME_STATE.inVehicle.speed = 0;
+        GAME_STATE.inVehicle.yawRate = 0;
+        GAME_STATE.inVehicle.isAwake = false;
+    }
+    if (Player && Player.velocity) {
+        if (typeof Player.velocity.set === 'function') {
+            Player.velocity.set(0, 0, 0);
+        } else {
+            Player.velocity.x = 0;
+            Player.velocity.y = 0;
+            Player.velocity.z = 0;
+        }
+    }
+
+    if (typeof document !== 'undefined') {
+        if (document.activeElement && typeof document.activeElement.blur === 'function') {
+            document.activeElement.blur();
+        }
+        if (document.pointerLockElement && typeof document.exitPointerLock === 'function') {
+            document.exitPointerLock();
+        }
+    }
+
+    SoundManager.ensureInit?.();
+    SoundManager.playPoliceChime?.('stop');
+
+    const encounter = started.encounter;
+    if (typeof document !== 'undefined') {
+        const avatarEl = document.getElementById('npc-avatar-badge');
+        const nameEl = document.getElementById('npc-modal-name');
+        const badgeEl = document.getElementById('npc-modal-badge');
+        const roleEl = document.getElementById('npc-modal-role');
+        const closeBtn = document.getElementById('btn-close-npc-chat');
+        const modal = document.getElementById('npc-dialogue-modal');
+
+        if (avatarEl) avatarEl.textContent = '👮';
+        if (nameEl) nameEl.textContent = encounter.cop_name;
+        if (badgeEl) badgeEl.textContent = 'ДПС / ППС • 25 RUS';
+        if (roleEl) roleEl.textContent = encounter.title;
+        if (closeBtn) {
+            if (encounter.stage !== 'resolved') {
+                closeBtn.disabled = true;
+                closeBtn.classList?.add('opacity-40', 'pointer-events-none');
+                closeBtn.setAttribute?.('aria-disabled', 'true');
+            } else {
+                closeBtn.disabled = false;
+                closeBtn.classList?.remove('opacity-40', 'pointer-events-none');
+                closeBtn.removeAttribute?.('aria-disabled');
+            }
+        }
+
+        renderPoliceEncounterHistory(encounter);
+        renderPoliceEncounterOptions(encounter, onSelectOption);
+
+        if (modal) modal.classList.remove('hidden');
+    }
+
+    return true;
+}
+
+export function resolvePoliceEncounterModal(msg) {
+    const res = resolvePoliceEncounterState(GAME_STATE, msg);
+    if (res.moneyUpdated) {
+        renderMoneyHUD(GAME_STATE.money);
+    }
+
+    const isLocalTarget = Boolean(GAME_STATE.username && msg && String(msg.target_user || '') === String(GAME_STATE.username));
+    if (isLocalTarget && Number(msg.fine) > 0) {
+        showToast(`🚨 Штраф полиции: -₽ ${Math.abs(Number(msg.fine)).toLocaleString('ru-RU')}`, 'amber', 3500);
+        SoundManager.playPoliceChime?.('fine');
+    }
+
+    if (res.resolved && res.encounter && typeof document !== 'undefined') {
+        renderPoliceEncounterHistory(res.encounter);
+        const closeBtn = document.getElementById('btn-close-npc-chat');
+        if (closeBtn) {
+            closeBtn.disabled = false;
+            closeBtn.classList?.remove('opacity-40', 'pointer-events-none');
+            closeBtn.removeAttribute?.('aria-disabled');
+        }
+        renderPoliceEncounterOptions(res.encounter, null);
+    }
+    return res;
 }
 
 export function renderNpcChatHistory(npc) {
@@ -313,10 +591,7 @@ export function selectCaptainCannonAccept(npc) {
         npc.chatStage = 'answered';
         triggerPlayerSpeech(quest.dialogue.acceptOptionText);
         SoundManager.playActionSound('cash');
-        if (typeof document !== 'undefined') {
-            const moneyEl = document.getElementById('hud-money');
-            if (moneyEl) moneyEl.textContent = `₽ ${GAME_STATE.money.toLocaleString('ru-RU')}`;
-        }
+        renderMoneyHUD(GAME_STATE.money);
         const toastMsg = isRepeat
             ? '💰 Ты снова заплатил 50 000 ₽ капитану Михалычу! Повторный залп готов.'
             : '💰 Ты заплатил 50 000 ₽ капитану Михалычу! Разрешение на выстрел получено.';
@@ -438,6 +713,7 @@ let _cachedCoordsEl = null;
 let _lastCoordsText = '';
 let _lastZoneText = '';
 
+let _cachedRadarDoc = null;
 let _cachedRadarCanvas = null;
 let _cachedRadarCtx = null;
 let _lastRadarDrawTime = 0;
@@ -445,7 +721,7 @@ let _lastRadarPx = 999999;
 let _lastRadarPz = 999999;
 let _lastRadarYaw = 999999;
 
-export function updateScreenProjections({ camera, playerPos, dunya, worldLabels, npcs, remotePlayers }) {
+export function updateScreenProjections({ camera, playerPos, dunya, worldLabels, npcs, remotePlayers, policeCops = [], policeCars = [] }) {
     if (typeof document !== 'undefined' && _cachedDoc !== document) {
         _cachedDoc = document;
         _cachedContainer = null;
@@ -657,17 +933,67 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
             rp.tagWrapper.style.display = 'none';
         }
     });
+
+    const projectPoliceItem = (item, offsetY, isCar = false) => {
+        if (!item || !item.labelEl) return;
+        const pos = (item.group && item.group.position) || item.renderPosition || item;
+        if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.z)) return;
+        const posY = Number(pos.y) || 0;
+        const dist = camera.position.distanceTo(pos);
+        const metrics = getLabelDistanceMetrics(dist);
+        if (!metrics.visible) {
+            item.labelEl.style.opacity = '0';
+            item.labelEl.style.display = 'none';
+            return;
+        }
+        if (isCar && item.labelTextEl) {
+            const chasing = item.state === 'chase';
+            item.labelTextEl.textContent = chasing ? '🚓 ДПС • ПОГОНЯ!' : '🚓 ДПС';
+        }
+        let worldAnchor;
+        if (hasFullScratch) {
+            worldAnchor = scratch.set(pos.x, posY + offsetY, pos.z).project(camera);
+        } else if (typeof THREE !== 'undefined' && THREE.Vector3 && typeof THREE.Vector3.prototype?.project === 'function') {
+            worldAnchor = new THREE.Vector3(pos.x, posY + offsetY, pos.z).project(camera);
+        } else if (typeof camera.project === 'function') {
+            worldAnchor = camera.project({ x: pos.x, y: posY + offsetY, z: pos.z });
+        } else {
+            worldAnchor = { x: 0, y: 0, z: 0.5 };
+        }
+        if (worldAnchor.z < 1) {
+            const sx = (worldAnchor.x * 0.5 + 0.5) * width;
+            const sy = (-worldAnchor.y * 0.5 + 0.5) * height;
+            item.labelEl.style.display = '';
+            item.labelEl.style.transform = `translate3d(${sx}px, ${sy}px, 0) translate(-50%, -100%)`;
+            item.labelEl.style.opacity = metrics.opacity;
+            item.labelEl.style.zIndex = metrics.zIndex;
+        } else {
+            item.labelEl.style.opacity = '0';
+            item.labelEl.style.display = 'none';
+        }
+    };
+
+    if (policeCops && typeof policeCops.forEach === 'function') {
+        policeCops.forEach(cop => projectPoliceItem(cop, 2.55, false));
+    }
+    if (policeCars && typeof policeCars.forEach === 'function') {
+        policeCars.forEach(car => projectPoliceItem(car, 2.35, true));
+    }
 }
 
 const _radarMedia = (typeof window !== 'undefined' && typeof window.matchMedia === 'function')
     ? window.matchMedia('(min-width: 640px)')
     : null;
 
-export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlayers }) {
-    if (typeof document !== 'undefined' && _cachedDoc !== document) {
-        _cachedDoc = document;
+export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlayers, policeCops = [], policeCars = [] }) {
+    if (typeof document !== 'undefined' && _cachedRadarDoc !== document) {
+        _cachedRadarDoc = document;
         _cachedRadarCanvas = null;
         _cachedRadarCtx = null;
+        _lastRadarDrawTime = 0;
+        _lastRadarPx = 999999;
+        _lastRadarPz = 999999;
+        _lastRadarYaw = 999999;
     }
 
     // Skip drawing when radar container is hidden (screen width < 640px)
@@ -772,6 +1098,40 @@ export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlay
         ctx.lineWidth = 1.5;
         ctx.stroke();
     });
+
+    if (policeCops && typeof policeCops.forEach === 'function') {
+        policeCops.forEach(cop => {
+            const pos = (cop.group && cop.group.position) || cop.renderPosition || cop;
+            if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.z)) return;
+            const cxBlip = (pos.x - px) * scale;
+            const czBlip = (pos.z - pz) * scale;
+            ctx.fillStyle = '#2563eb';
+            ctx.beginPath();
+            ctx.arc(cxBlip, czBlip, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.4;
+            ctx.stroke();
+        });
+    }
+
+    if (policeCars && typeof policeCars.forEach === 'function') {
+        const flashRed = Math.floor(now / 150) % 2 === 0;
+        policeCars.forEach(car => {
+            const pos = (car.group && car.group.position) || car;
+            if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.z)) return;
+            const vxBlip = (pos.x - px) * scale;
+            const vzBlip = (pos.z - pz) * scale;
+            const activePursuit = Boolean(car.state === 'chase' || car.siren);
+            ctx.fillStyle = activePursuit ? (flashRed ? '#ef4444' : '#3b82f6') : '#1d4ed8';
+            ctx.beginPath();
+            ctx.arc(vxBlip, vzBlip, activePursuit ? 6 : 5.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = activePursuit ? '#ffffff' : '#93c5fd';
+            ctx.lineWidth = 1.6;
+            ctx.stroke();
+        });
+    }
 
     ctx.restore();
 }

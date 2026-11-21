@@ -75,15 +75,16 @@ All messages are encoded as MessagePack maps (`fixmap` / `map`).
 ### 3.1. Join Event (Server -> Clients)
 
 Broadcast upon successful registration:
-- **To the newly connected client**: Contains the authoritative `token`.
-- **To other clients**: `token` is omitted for security.
+- **To the newly connected client**: Contains the authoritative `token`, `roster`, and `money`.
+- **To other clients**: `token`, `roster`, and `money` are omitted for security and privacy.
 
 ```json
 {
   "type": "join",
   "user": "vasya",
   "token": "4f8a12bc...",
-  "roster": ["vasya", "dunya"]
+  "roster": ["vasya", "dunya"],
+  "money": 125400
 }
 ```
 
@@ -93,12 +94,13 @@ Broadcast upon successful registration:
 | `user` | `string` | The registered username |
 | `token` | `string` | *(Optional, sent only to the newcomer)* Unique session token for reconnections |
 | `roster` | `[]string` | *(Optional, sent only to the newcomer)* Current online roster for reconciliation |
+| `money` | `int64` | *(Optional, sent only to the newcomer; always present on self-join including `0` or negative)* Authoritative wallet balance (default `125400`, negative allowed) |
 
 ---
 
 ### 3.2. Initial World State Synchronization (Server -> Newly Joined Client)
 
-Immediately following the `join` broadcast, the server synchronizes the current world state by transmitting tracked vehicle and player positions directly to the newly joined client:
+Immediately following the `join` broadcast, the server synchronizes the current world state by transmitting tracked vehicle, player, and police state directly to the newly joined client in order:
 
 1. **Tracked Vehicles**: For each vehicle that has been moved or driven in the world, the server sends a driving movement message (`mode: "driving"`, `car_id`, `x`, `y`, `z`, `yaw`, `speed`, `drift`, `lights`):
    - **Parked vehicle**: `username` is empty (`""`), `speed` is `0`, and `drift` is `false`. The client updates the parked vehicle's world transform without attaching a remote driver.
@@ -106,6 +108,8 @@ Immediately following the `join` broadcast, the server synchronizes the current 
 2. **Active Players**: For each other connected client, their last known state is transmitted:
    - **Pedestrian**: Outbound pedestrian movement message (`mode: "pedestrian"`, `anim`, `vx`, `vz`, `yaw`, etc.).
    - **Driving**: Outbound driving movement message (`mode: "driving"`, `car_id`, etc.).
+3. **Police World State**: A `police_state` snapshot containing current `foot_cops` and `police_cars` positions, velocities, states, and siren/light states.
+4. **Active Police Encounter (Reconnect / `4408` replacement)**: If the reconnecting player has an unresolved `police_encounter_start`, the server re-sends it immediately after `police_state`.
 
 Vehicles that have not been moved remain at their default client-side spawn positions.
 
@@ -212,10 +216,12 @@ Local physics runs at 60 Hz and renders between its previous/current poses (up t
 one simulation tick of presentation delay). Outgoing snapshots use simulation
 coordinates, not the interpolated mesh. Remote cars render 100 ms behind the
 server sample timeline; extrapolation uses world velocity/yaw rate and stops after
-100 ms. Long gaps and teleports reset history. Remote cars act as kinematic
-obstacles in local collision resolution: local bodies respond, remote poses and
-velocities are never modified. This remains client-driven vehicle simulation;
-server-authoritative collision outcomes are not implemented by this change.
+100 ms. Long gaps and teleports reset history. Remote player cars act as kinematic
+obstacles in local collision resolution; police cars (`4200 kg` mass vs `1280–1560 kg`
+standard player cars) are simulated authoritatively by the server and broadcast
+`vehicle_impulse` velocity/yaw deflections upon 3-circle vehicle collisions. Client
+attempts to drive any `police_car*` ID via `mode: "driving"` are rejected with an
+`error` message (`op: "move"`).
 
 Older clients ignore extra outbound fields. New clients can use arrival timestamps
 and heading-based velocity for older servers. Remove these migration fallbacks
@@ -266,7 +272,7 @@ Sent by clients to synchronize vehicle telemetry, visual state, and world positi
 | `x` | `float64` | Yes | World X position |
 | `y` | `float64` | Yes | World Y position |
 | `z` | `float64` | Yes | World Z position |
-| `speed` | `float64` | Yes | Current speed (m/s or km/h) |
+| `speed` | `float64` | Yes | Current forward speed in **m/s** (`km/h = |speed| * 3.6`; police speeding threshold `40 km/h = 11.1111... m/s`) |
 | `yaw` | `float64` | Yes | Vehicle yaw angle in radians |
 | `drift` | `bool` | Yes | Whether tire smoke / drift particles should trigger |
 | `lights` | `bool` | Yes | Headlights active state |
@@ -375,6 +381,171 @@ Broadcast when a cannon shot is confirmed, or at daily noon:
 
 - When `reason === "fortress"`: all connected clients hear the cannon sound and experience camera shake. The firing player reconciles their one-time quest ability and displays celebration speech/toast. Other players see attribution toast/chat.
 - When `reason === "noon"`: the server broadcasts at exactly 12:00 Vladivostok time (02:00:00 UTC) with a 60-second grace window on restart. All connected clients play the cannon sound and display the traditional noon announcement.
+
+---
+
+### 3.10. Police Simulation, Encounters, Chases & Economy
+
+The server runs a fixed-timestep (`20 Hz`, `dt = 0.05s`) authoritative police simulation governing foot policemen (`cop_0..cop_3`), police patrol cars (`police_car_0`, `police_car_1`), speeding chases (`> 40 km/h` = `40 / 3.6` m/s), 3-circle heavy vehicle collisions (`4200 kg` police car mass), unsolicited Russian-language encounters, and persistent per-session player wallets (`accounts`, default `125400`, negative `int64` balances allowed).
+
+#### Balance Update (`balance_update`, Server -> Clients)
+Broadcast whenever a player's authoritative wallet changes (e.g., dialogue fine or speeding ticket):
+```json
+{
+  "type": "balance_update",
+  "username": "vasya",
+  "money": -2600,
+  "delta": -5000,
+  "reason": "speeding_fine",
+  "source_id": "police_car_0"
+}
+```
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `string` | `"balance_update"` |
+| `username` | `string` | Target player username |
+| `money` | `int64` | New authoritative balance (always serialized, including `0` and negative values) |
+| `delta` | `int64` | Signed balance change (negative for fines; always serialized) |
+| `reason` | `string` | Change reason (`"police_fine"`, `"speeding_fine"`) |
+| `source_id` | `string` | *(Optional)* Originating cop or police car ID |
+
+#### Police World State (`police_state`, Server -> Clients)
+Sent on join baseline and broadcast at `20 Hz` to all connected clients:
+```json
+{
+  "type": "police_state",
+  "sequence": 42,
+  "sample_time_ms": 2100,
+  "foot_cops": [
+    {
+      "id": "cop_0",
+      "name": "Сержант ППС Дробышев",
+      "x": -5.0,
+      "y": 0.0,
+      "z": 5.0,
+      "vx": 0.0,
+      "vz": -1.6,
+      "yaw": 3.14159,
+      "state": "patrol",
+      "anim": "walk",
+      "target_user": ""
+    }
+  ],
+  "police_cars": [
+    {
+      "id": "police_car_0",
+      "x": 23.0,
+      "y": 0.0,
+      "z": 10.0,
+      "vx": 0.0,
+      "vz": 9.0,
+      "yaw": 0.0,
+      "yaw_rate": 0.0,
+      "speed": 9.0,
+      "mass": 4200.0,
+      "state": "patrol",
+      "target_car_id": "",
+      "target_user": "",
+      "siren": false,
+      "lights": false
+    }
+  ]
+}
+```
+- `foot_cops[].state`: `"patrol" | "approach" | "dialogue" | "cooldown"`
+- `police_cars[].state`: `"patrol" | "chase" | "cooldown"`
+- `foot_cops` and `police_cars` are always encoded as MsgPack arrays (never `null`). All numeric and boolean fields are always present.
+
+#### Unsolicited Police Encounter Start (`police_encounter_start`, Server -> Target Client)
+Sent directly to `target_user` when an approaching foot policeman reaches talking distance (`<= 2.4 m`), and re-sent on `4408` connection replacement if still unresolved:
+```json
+{
+  "type": "police_encounter_start",
+  "encounter_id": "enc_1",
+  "cop_id": "cop_0",
+  "cop_name": "Сержант ППС Дробышев",
+  "scenario_id": "weed_shakedown",
+  "title": "Личный досмотр у набережной",
+  "opening": "Так, гражданин, стоять, руки из карманов! ...",
+  "options": [
+    { "index": 0, "text": "...", "fine": 5000 },
+    { "index": 1, "text": "...", "fine": 3500 },
+    { "index": 2, "text": "...", "fine": 8000 }
+  ],
+  "target_user": "vasya"
+}
+```
+
+#### Police Dialogue Choice (`police_dialogue_choice`, Client -> Server)
+Sent by the target player to select an option in an active encounter:
+```json
+{
+  "type": "police_dialogue_choice",
+  "encounter_id": "enc_1",
+  "option_index": 0
+}
+```
+Validation rules:
+- Must be a MsgPack map with no trailing bytes and `type == "police_dialogue_choice"`.
+- `encounter_id`: required valid UTF-8 string, whitespace-trimmed length `1..64` runes, no ASCII control characters (`< 32` or `127`).
+- `option_index`: required integer in `0..15` (fixint-safe in `msgpack.js`), and must be a valid option index for the active scenario.
+- Connection identity (`c.Username`) must match `encounter.target_user`. Invalid/unauthorized requests return `type: "error"` with `op: "police_dialogue_choice"` without mutating state.
+
+#### Police Encounter Result (`police_encounter_result`, Server -> Clients)
+Broadcast upon valid choice resolution:
+```json
+{
+  "type": "police_encounter_result",
+  "encounter_id": "enc_1",
+  "cop_id": "cop_0",
+  "cop_name": "Сержант ППС Дробышев",
+  "scenario_id": "weed_shakedown",
+  "target_user": "vasya",
+  "option_index": 0,
+  "reply_text": "...",
+  "fine": 5000,
+  "money": 120400
+}
+```
+
+#### Police Chase Event (`police_chase`, Server -> Clients)
+Broadcast when a patrolling police car starts a chase (`max(|speed|, hypot(vx, vz)) > 40 / 3.6` m/s within `45 m`), stops & fines the target (`dist <= 7.5 m` and `speed <= 3.0 m/s` sustained `0.5s`, fine `5000`), or ends in evasion (`dist > 90 m` for `5s`, `45s` max duration, target exits vehicle, or disconnects):
+```json
+{
+  "type": "police_chase",
+  "police_car_id": "police_car_0",
+  "target_car_id": "car_0",
+  "target_user": "vasya",
+  "status": "stopped",
+  "reason": "fined",
+  "fine": 5000,
+  "money": -2600
+}
+```
+- `status`: `"started" | "stopped" | "evaded"`
+
+#### Vehicle Impulse (`vehicle_impulse`, Server -> Clients)
+Broadcast when a 3-circle heavy rigid-body collision (`4200 kg` police car vs `1280–1560 kg` player car) produces a non-trivial velocity or angular-velocity deflection (subject to a `300 ms` per-pair cooldown):
+```json
+{
+  "type": "vehicle_impulse",
+  "police_car_id": "police_car_0",
+  "car_id": "car_0",
+  "target_user": "vasya",
+  "dvx": -8.4,
+  "dvz": 2.1,
+  "dyaw_rate": 0.45,
+  "police_mass": 4200.0,
+  "player_mass": 1470.0,
+  "sequence": 128
+}
+```
+
+#### Server-Reserved Message Types
+Clients are strictly prohibited from sending server-originated message types. Sending any of `join`, `leave`, `cannon_shot`, `balance_update`, `police_state`, `police_encounter_start`, `police_encounter_result`, `police_chase`, or `vehicle_impulse` from a client returns `type: "error"` containing `"server reserved"` without mutating world state.
+
+#### Non-Driveable Police Vehicles
+Police car IDs (`police_car_*`) are excluded from `world_map.json` `vehicles[]` and `Hub.allowedCars`. Any client `move` (`mode: "driving"`) targeting `police_car*` is rejected with `type: "error"` (`op: "move"`, `"cannot drive police vehicle"`).
 
 ---
 

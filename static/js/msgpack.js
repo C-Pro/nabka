@@ -7,7 +7,10 @@ export const MsgPackCodec = {
     utf8Encoder: new TextEncoder(),
     utf8Decoder: new TextDecoder('utf-8'),
 
-    encode(obj, floatKeys = new Set(['x', 'y', 'z', 'vx', 'vz', 'yaw', 'speed', 'yaw_rate', 'sample_time_ms'])) {
+    encode(obj, floatKeys = new Set([
+        'x', 'y', 'z', 'vx', 'vz', 'yaw', 'speed', 'yaw_rate', 'sample_time_ms',
+        'dvx', 'dvz', 'dyaw_rate', 'police_mass', 'player_mass', 'mass'
+    ])) {
         const bytes = [];
         this._encodeValue(obj, bytes, null, floatKeys);
         return new Uint8Array(bytes).buffer;
@@ -24,8 +27,51 @@ export const MsgPackCodec = {
         }
         if (typeof val === 'number') {
             const forceFloat = currentKey && floatKeys.has(currentKey);
-            if (!forceFloat && Number.isInteger(val) && val >= -32 && val <= 127) {
-                out.push(val & 0xff);
+            if (!forceFloat && Number.isSafeInteger(val) && !Object.is(val, -0)) {
+                if (val >= -32 && val <= 127) {
+                    out.push(val & 0xff);
+                    return;
+                }
+                if (val >= 0) {
+                    if (val <= 0xff) {
+                        out.push(0xcc, val);
+                        return;
+                    }
+                    if (val <= 0xffff) {
+                        out.push(0xcd, (val >> 8) & 0xff, val & 0xff);
+                        return;
+                    }
+                    if (val <= 0xffffffff) {
+                        out.push(0xce, (val >>> 24) & 0xff, (val >>> 16) & 0xff, (val >>> 8) & 0xff, val & 0xff);
+                        return;
+                    }
+                    out.push(0xcf);
+                    const hi = Math.floor(val / 4294967296);
+                    const lo = (val - hi * 4294967296) >>> 0;
+                    out.push((hi >>> 24) & 0xff, (hi >>> 16) & 0xff, (hi >>> 8) & 0xff, hi & 0xff);
+                    out.push((lo >>> 24) & 0xff, (lo >>> 16) & 0xff, (lo >>> 8) & 0xff, lo & 0xff);
+                    return;
+                }
+                if (val >= -128) {
+                    out.push(0xd0, val & 0xff);
+                    return;
+                }
+                if (val >= -32768) {
+                    out.push(0xd1, (val >> 8) & 0xff, val & 0xff);
+                    return;
+                }
+                if (val >= -2147483648) {
+                    out.push(0xd2, (val >> 24) & 0xff, (val >> 16) & 0xff, (val >> 8) & 0xff, val & 0xff);
+                    return;
+                }
+                out.push(0xd3);
+                const hi = Math.floor(val / 4294967296);
+                const lo = (val - hi * 4294967296) >>> 0;
+                const buf = new ArrayBuffer(8);
+                const view = new DataView(buf);
+                view.setInt32(0, hi, false);
+                view.setUint32(4, lo, false);
+                for (let i = 0; i < 8; i++) out.push(view.getUint8(i));
                 return;
             }
             // Encode as IEEE-754 float64 (0xcb) so Go float64 fields always unmarshal cleanly

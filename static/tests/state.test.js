@@ -13,7 +13,18 @@ import {
     VLADIVOSTOK_LOCATION_SUFFIXES,
     generateRandomVladivostokName,
     getInitialUsername,
-    getInitialPetType
+    getInitialPetType,
+    setMoneyBalance,
+    applyJoinBalance,
+    applyBalanceUpdate,
+    applyPoliceStateSnapshot,
+    startPoliceEncounterState,
+    resolvePoliceEncounterState,
+    clearPoliceEncounterState,
+    applyPoliceChaseEvent,
+    isLocalPlayerChased,
+    resetPoliceState,
+    isGameplayInputSuspended
 } from '../js/state.js';
 import { World, getVladivostokTime, getTimeOfDayPhase } from '../js/world.js';
 import { MultiplayerClient, showChatBox, hideChatBox, scheduleChatAutoHide } from '../js/network.js';
@@ -1633,6 +1644,224 @@ describe('Pet Selection (Dog Dunya / Cat Berik) and Persistence', () => {
                 globalThis.THREE = origThree;
                 hideLocalLabels();
             }
+        });
+    });
+
+    describe('Police & Negative Balance State Transitions', () => {
+        test('setMoneyBalance, applyJoinBalance, and applyBalanceUpdate support negative balances and isolate by username', () => {
+            const state = createGameState({ username: 'Вован-с-Чуркина' });
+            expect(state.money).toBe(125400);
+
+            expect(setMoneyBalance(state, -7500)).toEqual({ updated: true, money: -7500 });
+            expect(state.money).toBe(-7500);
+
+            expect(setMoneyBalance(state, NaN).updated).toBe(false);
+            expect(setMoneyBalance(state, 12.5).updated).toBe(false);
+            expect(state.money).toBe(-7500);
+
+            expect(applyJoinBalance(state, { user: 'Другой', money: 999999 }).updated).toBe(false);
+            expect(state.money).toBe(-7500);
+
+            expect(applyJoinBalance(state, { user: 'Вован-с-Чуркина', money: -3000 })).toEqual({ updated: true, money: -3000 });
+            expect(state.money).toBe(-3000);
+
+            expect(applyBalanceUpdate(state, { username: 'Другой', money: 50000, delta: 1000 }).updated).toBe(false);
+            expect(state.money).toBe(-3000);
+
+            const balRes = applyBalanceUpdate(state, {
+                username: 'Вован-с-Чуркина',
+                money: -18000,
+                delta: -15000,
+                reason: 'police_fine'
+            });
+            expect(balRes).toEqual({ updated: true, money: -18000, delta: -15000, reason: 'police_fine' });
+            expect(state.money).toBe(-18000);
+        });
+
+        test('applyPoliceStateSnapshot enforces monotonic sequence, syncs chases, and tracks removals', () => {
+            const state = createGameState({ username: 'Вован-с-Чуркина' });
+
+            const r1 = applyPoliceStateSnapshot(state, {
+                sequence: 5,
+                foot_cops: [{ id: 'cop_0', name: 'Сержант Иванов', x: 2, y: 0, z: 3, vx: 0, vz: 1, yaw: 0, state: 'patrol', anim: 'walk', target_user: '' }],
+                police_cars: [{ id: 'police_car_0', x: 23, y: 0, z: -10, vx: 0, vz: 10, yaw: 0, state: 'chase', target_car_id: 'car_0', target_user: 'Вован-с-Чуркина', siren: true, lights: true }]
+            });
+            expect(r1.applied).toBe(true);
+            expect(state.policeCops.size).toBe(1);
+            expect(state.policeCars.size).toBe(1);
+            expect(isLocalPlayerChased(state)).toBe(true);
+
+            // Stale sequence must be ignored
+            const rStale = applyPoliceStateSnapshot(state, { sequence: 4, foot_cops: [], police_cars: [] });
+            expect(rStale.applied).toBe(false);
+            expect(rStale.reason).toBe('STALE_SEQUENCE');
+            expect(state.policeCops.size).toBe(1);
+
+            // Removal and chase stop
+            const r2 = applyPoliceStateSnapshot(state, { sequence: 6, foot_cops: [], police_cars: [] });
+            expect(r2.applied).toBe(true);
+            expect(r2.removedCops.length).toBe(1);
+            expect(r2.removedCars.length).toBe(1);
+            expect(state.policeCops.size).toBe(0);
+            expect(state.policeCars.size).toBe(0);
+            expect(isLocalPlayerChased(state)).toBe(false);
+        });
+
+        test('police encounter lifecycle suspends gameplay input and gates resolution by username', () => {
+            const state = createGameState({ username: 'Вован-с-Чуркина' });
+            expect(isGameplayInputSuspended(state)).toBe(false);
+
+            // Mismatched user ignored
+            expect(startPoliceEncounterState(state, {
+                encounter_id: 'enc_1',
+                target_user: 'Чужой',
+                options: [{ index: 0, text: 'Оплатить', fine: 5000 }]
+            }).started).toBe(false);
+
+            const startRes = startPoliceEncounterState(state, {
+                encounter_id: 'enc_1',
+                cop_id: 'cop_0',
+                cop_name: 'Сержант Петров',
+                scenario_id: 'weed_shakedown',
+                title: 'Проверка',
+                opening: 'Что в карманах?',
+                options: [{ index: 0, text: 'Договориться', fine: 15000 }],
+                target_user: 'Вован-с-Чуркина'
+            });
+            expect(startRes.started).toBe(true);
+            expect(startRes.encounter.stage).toBe('opening');
+            expect(isGameplayInputSuspended(state)).toBe(true);
+
+            // Idempotent re-delivery preserves existing encounter
+            const dup = startPoliceEncounterState(state, {
+                encounter_id: 'enc_1',
+                options: [{ index: 0, text: 'Договориться', fine: 15000 }],
+                target_user: 'Вован-с-Чуркина'
+            });
+            expect(dup.idempotent).toBe(true);
+
+            // Wrong user cannot resolve
+            expect(resolvePoliceEncounterState(state, {
+                encounter_id: 'enc_1',
+                target_user: 'Чужой',
+                money: 0
+            }).resolved).toBe(false);
+
+            const res = resolvePoliceEncounterState(state, {
+                encounter_id: 'enc_1',
+                target_user: 'Вован-с-Чуркина',
+                option_index: 0,
+                reply_text: 'Свободен',
+                fine: 15000,
+                money: -4600
+            });
+            expect(res.resolved).toBe(true);
+            expect(res.moneyUpdated).toBe(true);
+            expect(state.money).toBe(-4600);
+            expect(state.activePoliceEncounter.stage).toBe('resolved');
+
+            clearPoliceEncounterState(state);
+            expect(state.activePoliceEncounter).toBeNull();
+        });
+
+        test('applyPoliceChaseEvent and resetPoliceState maintain chase status and reset cleanly', () => {
+            const state = createGameState({ username: 'Вован-с-Чуркина' });
+            const c1 = applyPoliceChaseEvent(state, {
+                police_car_id: 'police_car_0',
+                target_car_id: 'car_0',
+                target_user: 'Вован-с-Чуркина',
+                status: 'started',
+                reason: 'speeding'
+            });
+            expect(c1.isLocalTarget).toBe(true);
+            expect(c1.chased).toBe(true);
+            expect(isLocalPlayerChased(state)).toBe(true);
+
+            const c2 = applyPoliceChaseEvent(state, {
+                police_car_id: 'police_car_0',
+                target_car_id: 'car_0',
+                target_user: 'Вован-с-Чуркина',
+                status: 'stopped',
+                fine: 5000,
+                money: -1200
+            });
+            expect(c2.chased).toBe(false);
+            expect(c2.moneyUpdated).toBe(true);
+            expect(state.money).toBe(-1200);
+
+            resetPoliceState(state);
+            expect(state.policeStateSequence).toBe(-1);
+            expect(state.policeCops.size).toBe(0);
+            expect(state.policeCars.size).toBe(0);
+            expect(state.activePoliceChases.size).toBe(0);
+            expect(state.activePoliceEncounter).toBeNull();
+        });
+
+        test('applyPoliceChaseEvent clears stale policeCars chase state on stopped/evaded and handles multi-car chases', () => {
+            const state = createGameState({ username: 'Вован-с-Чуркина' });
+            applyPoliceStateSnapshot(state, {
+                sequence: 10,
+                foot_cops: [],
+                police_cars: [
+                    { id: 'police_car_0', x: 23, y: 0, z: 0, vx: 0, vz: 10, yaw: 0, state: 'chase', target_car_id: 'car_0', target_user: 'Вован-с-Чуркина', siren: true, lights: true },
+                    { id: 'police_car_1', x: 108, y: 0, z: 0, vx: 0, vz: 10, yaw: 0, state: 'chase', target_car_id: 'car_0', target_user: 'Вован-с-Чуркина', siren: true, lights: true }
+                ]
+            });
+            expect(isLocalPlayerChased(state)).toBe(true);
+
+            // One police car evaded -> other police_car_1 is still chasing
+            const ev0 = applyPoliceChaseEvent(state, {
+                police_car_id: 'police_car_0',
+                target_car_id: 'car_0',
+                target_user: 'Вован-с-Чуркина',
+                status: 'evaded',
+                reason: 'escaped'
+            });
+            expect(ev0.chased).toBe(true);
+            const pcar0 = state.policeCars.get('police_car_0');
+            expect(pcar0.state).toBe('cooldown');
+            expect(pcar0.target_user).toBe('');
+            expect(pcar0.target_car_id).toBe('');
+            expect(pcar0.siren).toBe(false);
+            expect(pcar0.lights).toBe(false);
+
+            // Second police car stopped -> chased immediately false
+            const st1 = applyPoliceChaseEvent(state, {
+                police_car_id: 'police_car_1',
+                target_car_id: 'car_0',
+                target_user: 'Вован-с-Чуркина',
+                status: 'stopped',
+                fine: 5000,
+                money: 120400
+            });
+            expect(st1.chased).toBe(false);
+            expect(isLocalPlayerChased(state)).toBe(false);
+            expect(state.policeCars.get('police_car_1').state).toBe('cooldown');
+        });
+
+        test('startPoliceEncounterState resets pending stage back to opening on re-delivered baseline', () => {
+            const state = createGameState({ username: 'Вован-с-Чуркина' });
+            startPoliceEncounterState(state, {
+                encounter_id: 'enc_reconnect',
+                cop_id: 'cop_0',
+                cop_name: 'Сержант',
+                title: 'Проверка',
+                opening: 'Документы?',
+                options: [{ index: 0, text: 'Показать', fine: 0 }],
+                target_user: 'Вован-с-Чуркина'
+            });
+            state.activePoliceEncounter.stage = 'pending';
+            state.activePoliceEncounter.chosenOptionIndex = 0;
+
+            const redelivered = startPoliceEncounterState(state, {
+                encounter_id: 'enc_reconnect',
+                options: [{ index: 0, text: 'Показать', fine: 0 }],
+                target_user: 'Вован-с-Чуркина'
+            });
+            expect(redelivered.started).toBe(true);
+            expect(redelivered.idempotent).toBe(true);
+            expect(redelivered.encounter.stage).toBe('opening');
+            expect(redelivered.encounter.chosenOptionIndex).toBeNull();
         });
     });
 });

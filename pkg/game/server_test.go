@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -82,6 +83,26 @@ func readNextMsg(t *testing.T, conn *websocket.Conn, timeout time.Duration) (map
 	return m, nil
 }
 
+// readNextMsgSkipPolice skips periodic/baseline police_state broadcasts for non-police protocol tests.
+func readNextMsgSkipPolice(t *testing.T, conn *websocket.Conn, timeout time.Duration) (map[string]any, error) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			rem = time.Millisecond
+		}
+		msg, err := readNextMsg(t, conn, rem)
+		if err != nil {
+			return nil, err
+		}
+		if msg["type"] == TypePoliceState {
+			continue
+		}
+		return msg, nil
+	}
+}
+
 func sendMsgPack(t *testing.T, conn *websocket.Conn, v any) error {
 	t.Helper()
 	b, err := msgpack.Marshal(v)
@@ -101,7 +122,7 @@ func TestJoinAndRegistrationQueryParam(t *testing.T) {
 	defer conn1.Close()
 
 	// Alice should receive join message for herself
-	msg1, err := readNextMsg(t, conn1, 2*time.Second)
+	msg1, err := readNextMsgSkipPolice(t, conn1, 2*time.Second)
 	if err != nil {
 		t.Fatalf("alice failed to read join: %v", err)
 	}
@@ -115,7 +136,7 @@ func TestJoinAndRegistrationQueryParam(t *testing.T) {
 	defer conn2.Close()
 
 	// Bob should receive his own join message
-	msgBob, err := readNextMsg(t, conn2, 2*time.Second)
+	msgBob, err := readNextMsgSkipPolice(t, conn2, 2*time.Second)
 	if err != nil {
 		t.Fatalf("bob failed to read join: %v", err)
 	}
@@ -124,7 +145,7 @@ func TestJoinAndRegistrationQueryParam(t *testing.T) {
 	}
 
 	// Alice should also receive Bob's join message
-	msgAliceSawBob, err := readNextMsg(t, conn1, 2*time.Second)
+	msgAliceSawBob, err := readNextMsgSkipPolice(t, conn1, 2*time.Second)
 	if err != nil {
 		t.Fatalf("alice failed to read bob join: %v", err)
 	}
@@ -189,21 +210,21 @@ func TestInactivityTimeout(t *testing.T) {
 	defer observerConn.Close()
 
 	// Read observer join
-	_, _ = readNextMsg(t, observerConn, time.Second)
+	_, _ = readNextMsgSkipPolice(t, observerConn, time.Second)
 
 	// Inactive client
 	inactiveConn := connectWS(t, baseURL+"?username=sleepy")
 	defer inactiveConn.Close()
 
 	// Read sleepy self-join to retrieve session token
-	sleepyJoin, err := readNextMsg(t, inactiveConn, time.Second)
+	sleepyJoin, err := readNextMsgSkipPolice(t, inactiveConn, time.Second)
 	if err != nil {
 		t.Fatalf("failed to receive sleepy self-join: %v", err)
 	}
 	sleepyToken, _ := sleepyJoin["token"].(string)
 
 	// Read sleepy join on observer
-	_, _ = readNextMsg(t, observerConn, time.Second)
+	_, _ = readNextMsgSkipPolice(t, observerConn, time.Second)
 
 	// Run a background keepalive for observer so only sleepy times out
 	stopKeepalive := make(chan struct{})
@@ -228,7 +249,7 @@ func TestInactivityTimeout(t *testing.T) {
 	var leaveMsg map[string]any
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		msg, err := readNextMsg(t, observerConn, time.Second)
+		msg, err := readNextMsgSkipPolice(t, observerConn, time.Second)
 		if err != nil {
 			t.Fatalf("failed to receive leave message: %v", err)
 		}
@@ -270,7 +291,7 @@ func TestPingKeepalive(t *testing.T) {
 	conn := connectWS(t, baseURL+"?username=pinger")
 	defer conn.Close()
 
-	joinMsg, err := readNextMsg(t, conn, time.Second)
+	joinMsg, err := readNextMsgSkipPolice(t, conn, time.Second)
 	if err != nil || joinMsg["type"] != "join" {
 		t.Fatalf("expected join, got %v (err %v)", joinMsg, err)
 	}
@@ -280,7 +301,7 @@ func TestPingKeepalive(t *testing.T) {
 		if err := sendMsgPack(t, conn, map[string]any{"type": "ping"}); err != nil {
 			t.Fatalf("failed to send ping: %v", err)
 		}
-		pongMsg, err := readNextMsg(t, conn, time.Second)
+		pongMsg, err := readNextMsgSkipPolice(t, conn, time.Second)
 		if err != nil {
 			t.Fatalf("failed to receive pong on ping %d: %v", i, err)
 		}
@@ -295,15 +316,15 @@ func TestNormalDisconnect(t *testing.T) {
 
 	observer := connectWS(t, baseURL+"?username=observer")
 	defer observer.Close()
-	_, _ = readNextMsg(t, observer, time.Second)
+	_, _ = readNextMsgSkipPolice(t, observer, time.Second)
 
 	leaver := connectWS(t, baseURL+"?username=quitter")
-	_, _ = readNextMsg(t, observer, time.Second)
+	_, _ = readNextMsgSkipPolice(t, observer, time.Second)
 
 	// Close quitter socket cleanly
 	leaver.Close()
 
-	leaveMsg, err := readNextMsg(t, observer, 2*time.Second)
+	leaveMsg, err := readNextMsgSkipPolice(t, observer, 2*time.Second)
 	if err != nil {
 		t.Fatalf("failed to receive leave: %v", err)
 	}
@@ -320,13 +341,13 @@ func TestPedestrianMovement(t *testing.T) {
 
 	p1 := connectWS(t, baseURL+"?username=vasya")
 	defer p1.Close()
-	_, _ = readNextMsg(t, p1, time.Second)
+	_, _ = readNextMsgSkipPolice(t, p1, time.Second)
 
 	p2 := connectWS(t, baseURL+"?username=kolya")
 	defer p2.Close()
-	_, _ = readNextMsg(t, p2, time.Second)
+	_, _ = readNextMsgSkipPolice(t, p2, time.Second)
 	// p1 reads p2 join
-	_, _ = readNextMsg(t, p1, time.Second)
+	_, _ = readNextMsgSkipPolice(t, p1, time.Second)
 
 	// Vasya sends pedestrian movement
 	// {"type":"move","mode":"pedestrian","x":0.5,"y":0.0,"z":18.2,"vx":0.0,"vz":8.2,"yaw":3.14,"anim":"run"}
@@ -346,7 +367,7 @@ func TestPedestrianMovement(t *testing.T) {
 	}
 
 	// Kolya receives movement
-	received, err := readNextMsg(t, p2, time.Second)
+	received, err := readNextMsgSkipPolice(t, p2, time.Second)
 	if err != nil {
 		t.Fatalf("kolya failed to receive move: %v", err)
 	}
@@ -362,10 +383,15 @@ func TestPedestrianMovement(t *testing.T) {
 	}
 
 	// Vasya should NOT receive his own movement
-	_ = p1.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
-	_, _, err = p1.ReadMessage()
-	if err == nil {
-		t.Fatal("vasya should not receive his own movement update")
+	deadline := time.Now().Add(60 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		msg, err := readNextMsg(t, p1, time.Until(deadline))
+		if err != nil {
+			break
+		}
+		if msg["type"] != TypePoliceState {
+			t.Fatalf("vasya should not receive his own movement update, got: %+v", msg)
+		}
 	}
 }
 
@@ -374,12 +400,12 @@ func TestDrivingMovement(t *testing.T) {
 
 	driver := connectWS(t, baseURL+"?username=vasya")
 	defer driver.Close()
-	_, _ = readNextMsg(t, driver, time.Second)
+	_, _ = readNextMsgSkipPolice(t, driver, time.Second)
 
 	spectator := connectWS(t, baseURL+"?username=spectator")
 	defer spectator.Close()
-	_, _ = readNextMsg(t, spectator, time.Second)
-	_, _ = readNextMsg(t, driver, time.Second)
+	_, _ = readNextMsgSkipPolice(t, spectator, time.Second)
+	_, _ = readNextMsgSkipPolice(t, driver, time.Second)
 
 	// Driving message:
 	// {"type":"move","mode":"driving","car_id":"car_0","x":19.5,"y":0.02,"z":14.0,"speed":22.4,"yaw":1.57,"drift":true,"lights":true}
@@ -399,7 +425,7 @@ func TestDrivingMovement(t *testing.T) {
 		t.Fatalf("failed to send driving move: %v", err)
 	}
 
-	received, err := readNextMsg(t, spectator, time.Second)
+	received, err := readNextMsgSkipPolice(t, spectator, time.Second)
 	if err != nil {
 		t.Fatalf("spectator failed to read driving move: %v", err)
 	}
@@ -420,12 +446,12 @@ func TestChatMessage(t *testing.T) {
 
 	p1 := connectWS(t, baseURL+"?username=vasya")
 	defer p1.Close()
-	_, _ = readNextMsg(t, p1, time.Second)
+	_, _ = readNextMsgSkipPolice(t, p1, time.Second)
 
 	p2 := connectWS(t, baseURL+"?username=kolya")
 	defer p2.Close()
-	_, _ = readNextMsg(t, p2, time.Second)
-	_, _ = readNextMsg(t, p1, time.Second)
+	_, _ = readNextMsgSkipPolice(t, p2, time.Second)
+	_, _ = readNextMsgSkipPolice(t, p1, time.Second)
 
 	// Vasya sends chat
 	// {"type":"chat","text":"Го дрифтить у фонтана!"}
@@ -438,7 +464,7 @@ func TestChatMessage(t *testing.T) {
 	}
 
 	// Kolya receives chat
-	msgKolya, err := readNextMsg(t, p2, time.Second)
+	msgKolya, err := readNextMsgSkipPolice(t, p2, time.Second)
 	if err != nil {
 		t.Fatalf("kolya failed to read chat: %v", err)
 	}
@@ -450,7 +476,7 @@ func TestChatMessage(t *testing.T) {
 	}
 
 	// Vasya ALSO receives his own chat (for display in chat and speech bubbles)
-	msgVasya, err := readNextMsg(t, p1, time.Second)
+	msgVasya, err := readNextMsgSkipPolice(t, p1, time.Second)
 	if err != nil {
 		t.Fatalf("vasya failed to read chat: %v", err)
 	}
@@ -464,12 +490,12 @@ func TestDisallowSpoofedUsername(t *testing.T) {
 
 	alice := connectWS(t, baseURL+"?username=alice")
 	defer alice.Close()
-	_, _ = readNextMsg(t, alice, time.Second)
+	_, _ = readNextMsgSkipPolice(t, alice, time.Second)
 
 	bob := connectWS(t, baseURL+"?username=bob")
 	defer bob.Close()
-	_, _ = readNextMsg(t, bob, time.Second)
-	_, _ = readNextMsg(t, alice, time.Second)
+	_, _ = readNextMsgSkipPolice(t, bob, time.Second)
+	_, _ = readNextMsgSkipPolice(t, alice, time.Second)
 
 	// Alice maliciously tries to send chat claiming to be "admin" or "bob"
 	spoofedChat := map[string]any{
@@ -482,7 +508,7 @@ func TestDisallowSpoofedUsername(t *testing.T) {
 	}
 
 	// Bob must receive chat with verified username and from = "alice"
-	received, err := readNextMsg(t, bob, time.Second)
+	received, err := readNextMsgSkipPolice(t, bob, time.Second)
 	if err != nil {
 		t.Fatalf("bob failed to receive chat: %v", err)
 	}
@@ -645,14 +671,14 @@ func TestMalformedMessageHandling(t *testing.T) {
 
 	client := connectWS(t, baseURL+"?username=tester")
 	defer client.Close()
-	_, _ = readNextMsg(t, client, time.Second)
+	_, _ = readNextMsgSkipPolice(t, client, time.Second)
 
 	// Send invalid msgpack data
 	_ = client.SetWriteDeadline(time.Now().Add(time.Second))
 	_ = client.WriteMessage(websocket.BinaryMessage, []byte{0xc1, 0x99, 0xff}) // invalid msgpack
 
 	// Client should receive an error message back
-	errResp, err := readNextMsg(t, client, time.Second)
+	errResp, err := readNextMsgSkipPolice(t, client, time.Second)
 	if err != nil {
 		t.Fatalf("expected error message from server, got err: %v", err)
 	}
@@ -668,7 +694,7 @@ func TestMalformedMessageHandling(t *testing.T) {
 	if err := sendMsgPack(t, client, chat); err != nil {
 		t.Fatalf("failed to send chat after malformed msg: %v", err)
 	}
-	chatEcho, err := readNextMsg(t, client, time.Second)
+	chatEcho, err := readNextMsgSkipPolice(t, client, time.Second)
 	if err != nil {
 		t.Fatalf("failed to read chat echo: %v", err)
 	}
@@ -683,15 +709,16 @@ func TestSlowConsumerEviction(t *testing.T) {
 
 	hub := NewHub(ctx)
 	defer hub.Stop()
+	hub.SetSimAutoTick(false)
 
-	// Client with buffer size 1
+	// Client with tight buffer (join + police_state baseline = 2 slots)
 	c1 := &Client{
 		Username: "fast",
-		send:     make(chan []byte, 10),
+		send:     make(chan []byte, 16),
 	}
 	c2 := &Client{
 		Username: "slow",
-		send:     make(chan []byte, 1),
+		send:     make(chan []byte, 2),
 	}
 
 	if !hub.Register(c1) {
@@ -701,9 +728,20 @@ func TestSlowConsumerEviction(t *testing.T) {
 		t.Fatal("failed to register c2")
 	}
 
+	readNonPoliceFromChan := func(ch <-chan []byte) []byte {
+		for {
+			b := <-ch
+			var m map[string]any
+			if err := msgpack.Unmarshal(b, &m); err == nil && m["type"] == TypePoliceState {
+				continue
+			}
+			return b
+		}
+	}
+
 	// Drain join messages from c1
-	<-c1.send // c1 join
-	<-c1.send // c2 join
+	readNonPoliceFromChan(c1.send) // c1 join
+	readNonPoliceFromChan(c1.send) // c2 join
 
 	// Give c2 a driving move before it gets evicted
 	hub.BroadcastDrivingMove(c2, &OutboundDrivingMoveMsg{
@@ -717,14 +755,14 @@ func TestSlowConsumerEviction(t *testing.T) {
 	}, []byte("car_move"))
 
 	// Drain messages
-	<-c1.send // car_move
+	readNonPoliceFromChan(c1.send) // car_move
 
 	// Now broadcast message from c1 to trigger eviction of c2
 	hub.Broadcast(c1, false, []byte("message 1"))
 
 	// c1 should receive its own broadcast, followed by a leave event for c2 with reason "slow consumer"
-	<-c1.send // message 1
-	leaveData := <-c1.send
+	readNonPoliceFromChan(c1.send) // message 1
+	leaveData := readNonPoliceFromChan(c1.send)
 
 	var leaveMsg map[string]any
 	if err := msgpack.Unmarshal(leaveData, &leaveMsg); err != nil {
@@ -926,7 +964,7 @@ func TestNewlyJoinedClientReceivesCarAndUserPositions(t *testing.T) {
 	aliceConn := connectWS(t, wsURL+"?username=alice")
 	defer aliceConn.Close()
 
-	joinAlice, err := readNextMsg(t, aliceConn, 2*time.Second)
+	joinAlice, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("failed reading alice join: %v", err)
 	}
@@ -993,7 +1031,7 @@ func TestNewlyJoinedClientReceivesCarAndUserPositions(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Alice receives authoritative confirmation of car_0 transition to parked
-	aliceParkedMsg, err := readNextMsg(t, aliceConn, 2*time.Second)
+	aliceParkedMsg, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("alice failed reading parked car msg: %v", err)
 	}
@@ -1025,7 +1063,7 @@ func TestNewlyJoinedClientReceivesCarAndUserPositions(t *testing.T) {
 	defer bobConn.Close()
 
 	// Alice sees bob join
-	aliceSawBob, err := readNextMsg(t, aliceConn, 2*time.Second)
+	aliceSawBob, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("alice failed reading bob join: %v", err)
 	}
@@ -1034,7 +1072,7 @@ func TestNewlyJoinedClientReceivesCarAndUserPositions(t *testing.T) {
 	}
 
 	// Bob receives messages
-	msg1, err := readNextMsg(t, bobConn, 2*time.Second)
+	msg1, err := readNextMsgSkipPolice(t, bobConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("bob failed reading msg1: %v", err)
 	}
@@ -1047,7 +1085,7 @@ func TestNewlyJoinedClientReceivesCarAndUserPositions(t *testing.T) {
 	receivedAlice := false
 
 	for i := 0; i < 2; i++ {
-		syncMsg, err := readNextMsg(t, bobConn, 2*time.Second)
+		syncMsg, err := readNextMsgSkipPolice(t, bobConn, 2*time.Second)
 		if err != nil {
 			t.Fatalf("bob failed reading sync msg %d: %v", i, err)
 		}
@@ -1080,7 +1118,7 @@ func TestNewlyJoinedClientReceivesCarAndUserPositions(t *testing.T) {
 	_ = aliceConn.Close()
 
 	// Bob sees alice leave
-	leaveAlice, err := readNextMsg(t, bobConn, 2*time.Second)
+	leaveAlice, err := readNextMsgSkipPolice(t, bobConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("bob failed reading alice leave: %v", err)
 	}
@@ -1096,7 +1134,7 @@ func TestNewlyJoinedClientReceivesCarAndUserPositions(t *testing.T) {
 	charlieConn := connectWS(t, wsURL+"?username=charlie")
 	defer charlieConn.Close()
 
-	charlieMsg1, err := readNextMsg(t, charlieConn, 2*time.Second)
+	charlieMsg1, err := readNextMsgSkipPolice(t, charlieConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("charlie failed reading msg1: %v", err)
 	}
@@ -1104,7 +1142,7 @@ func TestNewlyJoinedClientReceivesCarAndUserPositions(t *testing.T) {
 		t.Fatalf("expected charlie join, got: %+v", charlieMsg1)
 	}
 
-	charlieCarMsg, err := readNextMsg(t, charlieConn, 2*time.Second)
+	charlieCarMsg, err := readNextMsgSkipPolice(t, charlieConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("charlie failed reading car msg: %v", err)
 	}
@@ -1222,15 +1260,16 @@ func TestEmbeddedModularStaticAssetsHTTP(t *testing.T) {
 
 func TestHub_VehicleOccupancyAndValidation(t *testing.T) {
 	srv, wsURL := startTestServer(t, 30*time.Second)
+	srv.Hub().SetSimAutoTick(false)
 
 	aliceConn := connectWS(t, wsURL+"?username=alice")
 	defer aliceConn.Close()
-	_, _ = readNextMsg(t, aliceConn, 2*time.Second)
+	_, _ = readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 
 	bobConn := connectWS(t, wsURL+"?username=bob")
 	defer bobConn.Close()
-	_, _ = readNextMsg(t, bobConn, 2*time.Second)
-	_, _ = readNextMsg(t, aliceConn, 2*time.Second)
+	_, _ = readNextMsgSkipPolice(t, bobConn, 2*time.Second)
+	_, _ = readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 
 	// 1. Alice drives car_0
 	car0ID := "car_0"
@@ -1255,7 +1294,7 @@ func TestHub_VehicleOccupancyAndValidation(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Bob receives Alice's initial driving move
-	bobSawAliceDrive, err := readNextMsg(t, bobConn, 2*time.Second)
+	bobSawAliceDrive, err := readNextMsgSkipPolice(t, bobConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("bob failed reading alice drive move: %v", err)
 	}
@@ -1288,7 +1327,7 @@ func TestHub_VehicleOccupancyAndValidation(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Bob receives authoritative driving update rejecting his hijack and showing alice as driver
-	bobRejectionMsg, err := readNextMsg(t, bobConn, 2*time.Second)
+	bobRejectionMsg, err := readNextMsgSkipPolice(t, bobConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("bob failed reading rejection msg: %v", err)
 	}
@@ -1349,7 +1388,7 @@ func TestHub_VehicleOccupancyAndValidation(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Alice and Bob receive parked car broadcast
-	aliceParked, err := readNextMsg(t, aliceConn, 2*time.Second)
+	aliceParked, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil {
 		t.Fatalf("alice failed reading parked msg: %v", err)
 	}
@@ -1361,7 +1400,7 @@ func TestHub_VehicleOccupancyAndValidation(t *testing.T) {
 	// Drain or assert bob's queue
 	sawParkedOnBob := false
 	for i := 0; i < 2; i++ {
-		msg, err := readNextMsg(t, bobConn, 2*time.Second)
+		msg, err := readNextMsgSkipPolice(t, bobConn, 2*time.Second)
 		if err == nil && msg["type"] == TypeMove && msg["mode"] == ModeDriving && msg["car_id"] == "car_0" && msg["username"] == "" {
 			sawParkedOnBob = true
 		}
@@ -1407,12 +1446,12 @@ func TestCannonFire_ValidationAndBroadcast(t *testing.T) {
 
 	aliceConn := connectWS(t, wsURL+"?username=alice")
 	defer aliceConn.Close()
-	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // join
+	_, _ = readNextMsgSkipPolice(t, aliceConn, 2*time.Second) // join
 
 	bobConn := connectWS(t, wsURL+"?username=bob")
 	defer bobConn.Close()
-	_, _ = readNextMsg(t, bobConn, 2*time.Second)   // join
-	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // bob's join
+	_, _ = readNextMsgSkipPolice(t, bobConn, 2*time.Second)   // join
+	_, _ = readNextMsgSkipPolice(t, aliceConn, 2*time.Second) // bob's join
 
 	fireMsg, _ := msgpack.Marshal(map[string]any{"type": TypeCannonFire})
 
@@ -1420,7 +1459,7 @@ func TestCannonFire_ValidationAndBroadcast(t *testing.T) {
 	if err := aliceConn.WriteMessage(websocket.BinaryMessage, fireMsg); err != nil {
 		t.Fatalf("write error: %v", err)
 	}
-	errReply, err := readNextMsg(t, aliceConn, 2*time.Second)
+	errReply, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil || errReply["type"] != TypeError || !strings.Contains(fmt.Sprint(errReply["message"]), "position not established") {
 		t.Fatalf("expected position not established error, got: %+v (err: %v)", errReply, err)
 	}
@@ -1436,10 +1475,10 @@ func TestCannonFire_ValidationAndBroadcast(t *testing.T) {
 		"anim": AnimIdle,
 	})
 	_ = aliceConn.WriteMessage(websocket.BinaryMessage, farMove)
-	_, _ = readNextMsg(t, bobConn, 2*time.Second) // alice move
+	_, _ = readNextMsgSkipPolice(t, bobConn, 2*time.Second) // alice move
 
 	_ = aliceConn.WriteMessage(websocket.BinaryMessage, fireMsg)
-	errReply, err = readNextMsg(t, aliceConn, 2*time.Second)
+	errReply, err = readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil || errReply["type"] != TypeError || !strings.Contains(fmt.Sprint(errReply["message"]), "too far") {
 		t.Fatalf("expected too far error, got: %+v (err: %v)", errReply, err)
 	}
@@ -1455,26 +1494,26 @@ func TestCannonFire_ValidationAndBroadcast(t *testing.T) {
 		"anim": AnimIdle,
 	})
 	_ = aliceConn.WriteMessage(websocket.BinaryMessage, nearMove)
-	_, _ = readNextMsg(t, bobConn, 2*time.Second) // alice move
+	_, _ = readNextMsgSkipPolice(t, bobConn, 2*time.Second) // alice move
 
 	// 4. Valid cannon fire!
 	_ = aliceConn.WriteMessage(websocket.BinaryMessage, fireMsg)
 
 	// Alice receives confirmed shot
-	aliceShot, err := readNextMsg(t, aliceConn, 2*time.Second)
+	aliceShot, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil || aliceShot["type"] != TypeCannonShot || aliceShot["user"] != "alice" || aliceShot["reason"] != "fortress" {
 		t.Fatalf("expected confirmed cannon shot for alice, got: %+v (err: %v)", aliceShot, err)
 	}
 
 	// Bob also receives cannon shot
-	bobShot, err := readNextMsg(t, bobConn, 2*time.Second)
+	bobShot, err := readNextMsgSkipPolice(t, bobConn, 2*time.Second)
 	if err != nil || bobShot["type"] != TypeCannonShot || bobShot["user"] != "alice" || bobShot["reason"] != "fortress" {
 		t.Fatalf("expected confirmed cannon shot for bob, got: %+v (err: %v)", bobShot, err)
 	}
 
 	// 5. Immediate second shot -> cooldown error
 	_ = aliceConn.WriteMessage(websocket.BinaryMessage, fireMsg)
-	errReply, err = readNextMsg(t, aliceConn, 2*time.Second)
+	errReply, err = readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil || errReply["type"] != TypeError || !strings.Contains(fmt.Sprint(errReply["message"]), "cooling down") {
 		t.Fatalf("expected cooldown error, got: %+v (err: %v)", errReply, err)
 	}
@@ -1485,7 +1524,7 @@ func TestCannonShot_ServerReserved(t *testing.T) {
 
 	aliceConn := connectWS(t, wsURL+"?username=alice")
 	defer aliceConn.Close()
-	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // join
+	_, _ = readNextMsgSkipPolice(t, aliceConn, 2*time.Second) // join
 
 	reservedMsg, _ := msgpack.Marshal(map[string]any{
 		"type":   TypeCannonShot,
@@ -1494,7 +1533,7 @@ func TestCannonShot_ServerReserved(t *testing.T) {
 	})
 	_ = aliceConn.WriteMessage(websocket.BinaryMessage, reservedMsg)
 
-	errReply, err := readNextMsg(t, aliceConn, 2*time.Second)
+	errReply, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil || errReply["type"] != TypeError || !strings.Contains(fmt.Sprint(errReply["message"]), "server reserved") {
 		t.Fatalf("expected server reserved error, got: %+v (err: %v)", errReply, err)
 	}
@@ -1505,21 +1544,21 @@ func TestNoonCannonBroadcast(t *testing.T) {
 
 	aliceConn := connectWS(t, wsURL+"?username=alice")
 	defer aliceConn.Close()
-	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // join
+	_, _ = readNextMsgSkipPolice(t, aliceConn, 2*time.Second) // join
 
 	bobConn := connectWS(t, wsURL+"?username=bob")
 	defer bobConn.Close()
-	_, _ = readNextMsg(t, bobConn, 2*time.Second)   // join
-	_, _ = readNextMsg(t, aliceConn, 2*time.Second) // bob's join
+	_, _ = readNextMsgSkipPolice(t, bobConn, 2*time.Second)   // join
+	_, _ = readNextMsgSkipPolice(t, aliceConn, 2*time.Second) // bob's join
 
 	srv.Hub().TriggerNoonCannon()
 
-	aliceMsg, err := readNextMsg(t, aliceConn, 2*time.Second)
+	aliceMsg, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
 	if err != nil || aliceMsg["type"] != TypeCannonShot || aliceMsg["reason"] != "noon" {
 		t.Fatalf("expected noon cannon shot for alice, got: %+v (err: %v)", aliceMsg, err)
 	}
 
-	bobMsg, err := readNextMsg(t, bobConn, 2*time.Second)
+	bobMsg, err := readNextMsgSkipPolice(t, bobConn, 2*time.Second)
 	if err != nil || bobMsg["type"] != TypeCannonShot || bobMsg["reason"] != "noon" {
 		t.Fatalf("expected noon cannon shot for bob, got: %+v (err: %v)", bobMsg, err)
 	}
@@ -1562,5 +1601,593 @@ func TestNoonCannonSchedulingEligibility(t *testing.T) {
 	simTime = time.Date(2026, 10, 26, 2, 0, 30, 0, time.UTC)
 	if !hub.TickNoon() {
 		t.Fatal("expected tick within 60s grace window to fire")
+	}
+}
+
+func asInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int32:
+		return int64(n), true
+	case int16:
+		return int64(n), true
+	case int8:
+		return int64(n), true
+	case int:
+		return int64(n), true
+	case uint64:
+		return int64(n), true
+	case uint32:
+		return int64(n), true
+	case uint16:
+		return int64(n), true
+	case uint8:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	default:
+		return 0, false
+	}
+}
+
+func readMsgOfType(t *testing.T, conn *websocket.Conn, wantType string, timeout time.Duration) (map[string]any, error) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			return nil, fmt.Errorf("timed out waiting for message type %q", wantType)
+		}
+		msg, err := readNextMsg(t, conn, rem)
+		if err != nil {
+			return nil, err
+		}
+		if msg["type"] == wantType {
+			return msg, nil
+		}
+	}
+}
+
+func TestPoliceMessages_ServerReserved(t *testing.T) {
+	srv, wsURL := startTestServer(t, 5*time.Second)
+	srv.Hub().SetSimAutoTick(false)
+
+	aliceConn := connectWS(t, wsURL+"?username=alice")
+	defer aliceConn.Close()
+	_, _ = readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
+
+	reservedTypes := []string{
+		TypeBalanceUpdate,
+		TypePoliceState,
+		TypePoliceEncounterStart,
+		TypePoliceEncounterResult,
+		TypePoliceChase,
+		TypeVehicleImpulse,
+	}
+
+	for _, msgType := range reservedTypes {
+		if err := sendMsgPack(t, aliceConn, map[string]any{"type": msgType, "money": 999999}); err != nil {
+			t.Fatalf("write error for %s: %v", msgType, err)
+		}
+		errReply, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
+		if err != nil {
+			t.Fatalf("expected error reply for reserved type %s, got err: %v", msgType, err)
+		}
+		if errReply["type"] != TypeError || !strings.Contains(fmt.Sprint(errReply["message"]), "server reserved") {
+			t.Fatalf("expected server reserved error for %s, got: %+v", msgType, errReply)
+		}
+	}
+
+	snap := srv.Hub().Snapshot()
+	if snap.Accounts["alice"] != DefaultInitialMoney {
+		t.Fatalf("expected alice balance unchanged (%d), got %d", DefaultInitialMoney, snap.Accounts["alice"])
+	}
+}
+
+func TestPoliceCarHijackRejected(t *testing.T) {
+	srv, wsURL := startTestServer(t, 5*time.Second)
+	srv.Hub().SetSimAutoTick(false)
+
+	aliceConn := connectWS(t, wsURL+"?username=alice")
+	defer aliceConn.Close()
+	_, _ = readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
+
+	for _, carID := range []string{"police_car_0", "police_car_1"} {
+		x, y, z, speed, yaw := 23.0, 0.0, 10.0, 15.0, 0.0
+		drift, lights := false, true
+		payload, _ := msgpack.Marshal(InboundDrivingMoveMsg{
+			Type:   TypeMove,
+			Mode:   ModeDriving,
+			CarID:  &carID,
+			X:      &x,
+			Y:      &y,
+			Z:      &z,
+			Speed:  &speed,
+			Yaw:    &yaw,
+			Drift:  &drift,
+			Lights: &lights,
+		})
+		if err := aliceConn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
+			t.Fatalf("write error for %s: %v", carID, err)
+		}
+		errReply, err := readNextMsgSkipPolice(t, aliceConn, 2*time.Second)
+		if err != nil {
+			t.Fatalf("expected error rejecting %s hijack: %v", carID, err)
+		}
+		if errReply["type"] != TypeError || errReply["op"] != TypeMove {
+			t.Fatalf("expected error with op=move for %s, got %+v", carID, errReply)
+		}
+	}
+
+	snap := srv.Hub().Snapshot()
+	if _, exists := snap.Cars["police_car_0"]; exists {
+		t.Fatal("police_car_0 must never appear in tracked player cars map")
+	}
+	if _, exists := snap.Users["alice"]; exists {
+		t.Fatal("rejected police car move must not put alice into driving state")
+	}
+}
+
+func TestJoinAndReconnect_MoneyAndPoliceBaseline(t *testing.T) {
+	srv, wsURL := startTestServer(t, 30*time.Second)
+	srv.Hub().SetSimAutoTick(false)
+
+	// 1. Alice joins and receives self-join with default money and police_state baseline
+	alice1 := connectWS(t, wsURL+"?username=alice")
+	defer alice1.Close()
+
+	joinAlice, err := readNextMsg(t, alice1, 2*time.Second)
+	if err != nil || joinAlice["type"] != TypeJoin {
+		t.Fatalf("expected alice join, got %+v (err=%v)", joinAlice, err)
+	}
+	aliceTok, _ := joinAlice["token"].(string)
+	if m, ok := asInt64(joinAlice["money"]); !ok || m != DefaultInitialMoney {
+		t.Fatalf("expected alice initial money %d, got %v", DefaultInitialMoney, joinAlice["money"])
+	}
+	policeBaseline, err := readNextMsg(t, alice1, 2*time.Second)
+	if err != nil || policeBaseline["type"] != TypePoliceState {
+		t.Fatalf("expected police_state immediately after join, got %+v (err=%v)", policeBaseline, err)
+	}
+
+	// 2. Bob joins; Alice's broadcast of Bob's join must NOT leak Bob's token or money
+	bob := connectWS(t, wsURL+"?username=bob")
+	defer bob.Close()
+	bobJoin, err := readNextMsg(t, bob, 2*time.Second)
+	if err != nil || bobJoin["type"] != TypeJoin {
+		t.Fatalf("expected bob self-join, got %+v (err=%v)", bobJoin, err)
+	}
+	if m, ok := asInt64(bobJoin["money"]); !ok || m != DefaultInitialMoney {
+		t.Fatalf("expected bob initial money %d, got %v", DefaultInitialMoney, bobJoin["money"])
+	}
+	_, _ = readMsgOfType(t, bob, TypePoliceState, 2*time.Second)
+
+	aliceSeesBob, err := readNextMsgSkipPolice(t, alice1, 2*time.Second)
+	if err != nil || aliceSeesBob["type"] != TypeJoin || aliceSeesBob["user"] != "bob" {
+		t.Fatalf("expected bob join broadcast on alice1, got %+v (err=%v)", aliceSeesBob, err)
+	}
+	if _, hasTok := aliceSeesBob["token"]; hasTok {
+		t.Fatalf("broadcast join must omit token: %+v", aliceSeesBob)
+	}
+	if _, hasMoney := aliceSeesBob["money"]; hasMoney {
+		t.Fatalf("broadcast join must omit money: %+v", aliceSeesBob)
+	}
+
+	// 3. Drive Alice's balance negative via real speeding stops (26 * 5000 = 130000 -> -4600)
+	for i := 0; i < 26; i++ {
+		srv.Hub().StepSimulation(10.5) // clear grace/cooldowns
+		snap := srv.Hub().Snapshot()
+		pc := snap.Police.PoliceCars[0]
+		if err := sendMsgPack(t, alice1, map[string]any{
+			"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+			"x": pc.X, "y": 0.0, "z": pc.Z + 12.0, "speed": 18.0, "yaw": 0.0, "drift": false, "lights": true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+		srv.Hub().StepSimulation(0.05) // chase started
+
+		// Stop right next to police_car_0 for 0.6s -> fined 5000
+		snap2 := srv.Hub().Snapshot()
+		pc2 := snap2.Police.PoliceCars[0]
+		_ = sendMsgPack(t, alice1, map[string]any{
+			"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+			"x": pc2.X + 1.5, "y": 0.0, "z": pc2.Z + 1.5, "speed": 0.0, "yaw": 0.0, "drift": false, "lights": true,
+		})
+		_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+		for s := 0; s < 12; s++ {
+			snapLoop := srv.Hub().Snapshot()
+			pcLoop := snapLoop.Police.PoliceCars[0]
+			_ = sendMsgPack(t, alice1, map[string]any{
+				"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+				"x": pcLoop.X + 1.0, "y": 0.0, "z": pcLoop.Z + 1.0, "speed": 0.0, "yaw": 0.0, "drift": false, "lights": true,
+			})
+			_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+			srv.Hub().StepSimulation(0.05)
+		}
+	}
+
+	snapNeg := srv.Hub().Snapshot()
+	wantNegMoney := DefaultInitialMoney - 26*PoliceSpeedingFine // -4600
+	if snapNeg.Accounts["alice"] != wantNegMoney {
+		t.Fatalf("expected alice negative balance %d, got %d", wantNegMoney, snapNeg.Accounts["alice"])
+	}
+
+	// 4. Alice exits car and triggers an active foot-cop encounter while balance is negative
+	cop0 := snapNeg.Police.FootCops[0]
+	_ = sendMsgPack(t, alice1, map[string]any{
+		"type": TypeMove, "mode": ModePedestrian,
+		"x": cop0.X, "y": 0.0, "z": cop0.Z + 1.5, "vx": 0.0, "vz": 0.0, "yaw": 0.0, "anim": AnimIdle,
+	})
+	_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+	srv.Hub().StepSimulation(0.05) // approach
+	srv.Hub().StepSimulation(0.05) // dialogue starts
+
+	encOnOld, err := readMsgOfType(t, alice1, TypePoliceEncounterStart, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected active encounter on alice1 before 4408 reconnect: %v", err)
+	}
+	encID := fmt.Sprint(encOnOld["encounter_id"])
+
+	// 5. Alice reconnects with her session token (4408 replacement):
+	//    must receive join.money == -4600, tracked cars baseline, police_state, AND the unresolved police_encounter_start!
+	alice2 := connectWS(t, fmt.Sprintf("%s?username=alice&token=%s", wsURL, aliceTok))
+	defer alice2.Close()
+
+	join2, err := readNextMsg(t, alice2, 2*time.Second)
+	if err != nil || join2["type"] != TypeJoin {
+		t.Fatalf("expected alice2 join, got %+v (err=%v)", join2, err)
+	}
+	if m, ok := asInt64(join2["money"]); !ok || m != wantNegMoney {
+		t.Fatalf("expected reconnected alice2 money %d, got %v", wantNegMoney, join2["money"])
+	}
+	ps2, err := readMsgOfType(t, alice2, TypePoliceState, 2*time.Second)
+	if err != nil || ps2["type"] != TypePoliceState {
+		t.Fatalf("expected police_state after alice2 join, got %+v (err=%v)", ps2, err)
+	}
+	enc2, err := readNextMsg(t, alice2, 2*time.Second)
+	if err != nil || enc2["type"] != TypePoliceEncounterStart || fmt.Sprint(enc2["encounter_id"]) != encID {
+		t.Fatalf("expected unresolved police_encounter_start %q re-sent on 4408 reconnect, got %+v (err=%v)", encID, enc2, err)
+	}
+
+	// Old connection receives 4408
+	_, err = readNextMsgSkipPolice(t, alice1, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "4408") {
+		t.Fatalf("expected 4408 on replaced alice1, got: %v", err)
+	}
+
+	// 6. Alice resolves the preserved encounter on alice2; bob receives police_encounter_result
+	if err := sendMsgPack(t, alice2, map[string]any{
+		"type":         TypePoliceDialogueChoice,
+		"encounter_id": encID,
+		"option_index": 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resBob, err := readMsgOfType(t, bob, TypePoliceEncounterResult, 2*time.Second)
+	if err != nil || fmt.Sprint(resBob["encounter_id"]) != encID {
+		t.Fatalf("expected bob to observe encounter result %q, got %+v (err=%v)", encID, resBob, err)
+	}
+}
+
+func TestMultiplayer_PoliceEncounterAndFineSync(t *testing.T) {
+	srv, wsURL := startTestServer(t, 30*time.Second)
+	srv.Hub().SetSimAutoTick(false)
+
+	alice := connectWS(t, wsURL+"?username=alice")
+	defer alice.Close()
+	_, _ = readMsgOfType(t, alice, TypePoliceState, 2*time.Second)
+
+	bob := connectWS(t, wsURL+"?username=bob")
+	defer bob.Close()
+	_, _ = readMsgOfType(t, bob, TypePoliceState, 2*time.Second)
+	_, _ = readNextMsgSkipPolice(t, alice, 2*time.Second) // bob join
+
+	// Place alice near cop_0 (within 12m, > 2.4m)
+	snap0 := srv.Hub().Snapshot()
+	cop0 := snap0.Police.FootCops[0]
+	if err := sendMsgPack(t, alice, map[string]any{
+		"type": TypeMove, "mode": ModePedestrian,
+		"x": cop0.X, "y": 0.0, "z": cop0.Z + 6.0, "vx": 0.0, "vz": 0.0, "yaw": 0.0, "anim": AnimIdle,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+
+	// Step simulation without any client request until unsolicited encounter arrives
+	for i := 0; i < 40; i++ {
+		srv.Hub().StepSimulation(0.05)
+	}
+
+	enc, err := readMsgOfType(t, alice, TypePoliceEncounterStart, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected unsolicited police_encounter_start on alice: %v", err)
+	}
+	encID := fmt.Sprint(enc["encounter_id"])
+	if enc["target_user"] != "alice" || enc["cop_id"] != "cop_0" {
+		t.Fatalf("unexpected encounter target/cop: %+v", enc)
+	}
+
+	// Bob must NOT receive Alice's private encounter prompt, and trying to answer it must return error
+	if err := sendMsgPack(t, bob, map[string]any{
+		"type":         TypePoliceDialogueChoice,
+		"encounter_id": encID,
+		"option_index": 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bobErr, err := readMsgOfType(t, bob, TypeError, 2*time.Second)
+	if err != nil || bobErr["op"] != TypePoliceDialogueChoice {
+		t.Fatalf("expected error with op=police_dialogue_choice for unauthorized bob, got %+v (err=%v)", bobErr, err)
+	}
+
+	// Alice sends option 2 (person_search option 2 has fine=1500)
+	if err := sendMsgPack(t, alice, map[string]any{
+		"type":         TypePoliceDialogueChoice,
+		"encounter_id": encID,
+		"option_index": 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	aliceBal, err := readMsgOfType(t, alice, TypeBalanceUpdate, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected balance_update on alice: %v", err)
+	}
+	aliceRes, err := readMsgOfType(t, alice, TypePoliceEncounterResult, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected police_encounter_result on alice: %v", err)
+	}
+	bobRes, err := readMsgOfType(t, bob, TypePoliceEncounterResult, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected police_encounter_result on bob: %v", err)
+	}
+	fineA, _ := asInt64(aliceRes["fine"])
+	moneyA, _ := asInt64(aliceRes["money"])
+	moneyB, _ := asInt64(bobRes["money"])
+	if fineA <= 0 || moneyA != DefaultInitialMoney-fineA || moneyB != moneyA {
+		t.Fatalf("unexpected encounter result fine/money sync: alice=%+v bob=%+v", aliceRes, bobRes)
+	}
+
+	balMoney, _ := asInt64(aliceBal["money"])
+	balDelta, _ := asInt64(aliceBal["delta"])
+	if balMoney != moneyA || balDelta != -fineA {
+		t.Fatalf("balance_update mismatch: got money=%d delta=%d, want money=%d delta=%d", balMoney, balDelta, moneyA, -fineA)
+	}
+}
+
+func TestMultiplayer_SpeedingChaseCollisionAndStopFineSync(t *testing.T) {
+	srv, wsURL := startTestServer(t, 30*time.Second)
+	srv.Hub().SetSimAutoTick(false)
+
+	alice := connectWS(t, wsURL+"?username=alice")
+	defer alice.Close()
+	_, _ = readMsgOfType(t, alice, TypePoliceState, 2*time.Second)
+
+	bob := connectWS(t, wsURL+"?username=bob")
+	defer bob.Close()
+	_, _ = readMsgOfType(t, bob, TypePoliceState, 2*time.Second)
+	_, _ = readNextMsgSkipPolice(t, alice, 2*time.Second)
+
+	// 1. Alice drives car_0 > 40 km/h (18 m/s) in front of police_car_0
+	snap0 := srv.Hub().Snapshot()
+	pc0 := snap0.Police.PoliceCars[0]
+	if err := sendMsgPack(t, alice, map[string]any{
+		"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+		"x": pc0.X, "y": 0.0, "z": pc0.Z + 12.0, "speed": 18.0, "yaw": 0.0, "drift": false, "lights": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+	srv.Hub().StepSimulation(0.05)
+
+	chaseAlice, err := readMsgOfType(t, alice, TypePoliceChase, 2*time.Second)
+	if err != nil || chaseAlice["status"] != ChaseStatusStarted {
+		t.Fatalf("expected police_chase started on alice, got %+v (err=%v)", chaseAlice, err)
+	}
+	chaseBob, err := readMsgOfType(t, bob, TypePoliceChase, 2*time.Second)
+	if err != nil || chaseBob["status"] != ChaseStatusStarted || chaseBob["target_user"] != "alice" {
+		t.Fatalf("expected police_chase started on bob, got %+v (err=%v)", chaseBob, err)
+	}
+
+	// 2. Position car_0 directly ahead of chasing police_car_0 to verify heavy 3-circle vehicle_impulse sync
+	snapChase := srv.Hub().Snapshot()
+	pcChase := snapChase.Police.PoliceCars[0]
+	// Accelerate police_car_0 for a few steps so it carries momentum
+	for i := 0; i < 10; i++ {
+		srv.Hub().StepSimulation(0.05)
+	}
+	snapChase = srv.Hub().Snapshot()
+	pcChase = snapChase.Police.PoliceCars[0]
+	impactX := pcChase.X + math.Sin(pcChase.Yaw)*3.8
+	impactZ := pcChase.Z + math.Cos(pcChase.Yaw)*3.8
+	_ = sendMsgPack(t, alice, map[string]any{
+		"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+		"x": impactX, "y": 0.0, "z": impactZ, "speed": 0.0, "yaw": pcChase.Yaw, "drift": false, "lights": true,
+	})
+	_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+	srv.Hub().StepSimulation(0.05)
+
+	impAlice, err := readMsgOfType(t, alice, TypeVehicleImpulse, 2*time.Second)
+	if err != nil || impAlice["car_id"] != "car_0" {
+		t.Fatalf("expected vehicle_impulse on alice, got %+v (err=%v)", impAlice, err)
+	}
+	if pmass, _ := impAlice["police_mass"].(float64); pmass != PoliceCarMass {
+		t.Fatalf("expected police_mass %v, got %v", PoliceCarMass, impAlice["police_mass"])
+	}
+
+	// 3. Alice remains stopped near police_car_0 (within 7.5m stop dist, laterally clear of overlap) for >= 0.5s -> stopped & fined 5000
+	for i := 0; i < 16; i++ {
+		s := srv.Hub().Snapshot()
+		p := s.Police.PoliceCars[0]
+		if p.State != PoliceCarStateChase {
+			break
+		}
+		_ = sendMsgPack(t, alice, map[string]any{
+			"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+			"x": p.X + 4.5, "y": 0.0, "z": p.Z, "speed": 0.0, "yaw": 0.0, "drift": false, "lights": true,
+		})
+		_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+		srv.Hub().StepSimulation(0.05)
+	}
+
+	var balBob, stoppedMsg map[string]any
+	deadline := time.Now().Add(2 * time.Second)
+	for (balBob == nil || stoppedMsg == nil) && time.Now().Before(deadline) {
+		m, err := readNextMsg(t, bob, time.Until(deadline))
+		if err != nil {
+			t.Fatalf("expected balance_update and police_chase stopped on bob: %v", err)
+		}
+		if m["type"] == TypeBalanceUpdate {
+			balBob = m
+		} else if m["type"] == TypePoliceChase && m["status"] == ChaseStatusStopped {
+			stoppedMsg = m
+		}
+	}
+	if balBob == nil || stoppedMsg == nil {
+		t.Fatalf("missing balance_update (%v) or stopped chase (%v)", balBob, stoppedMsg)
+	}
+	fineVal, _ := asInt64(stoppedMsg["fine"])
+	moneyVal, _ := asInt64(stoppedMsg["money"])
+	if fineVal != PoliceSpeedingFine || moneyVal != DefaultInitialMoney-PoliceSpeedingFine {
+		t.Fatalf("unexpected stopped chase payload: %+v", stoppedMsg)
+	}
+
+	if bMoney, _ := asInt64(balBob["money"]); bMoney != DefaultInitialMoney-PoliceSpeedingFine {
+		t.Fatalf("expected synced balance %d on bob, got %+v", DefaultInitialMoney-PoliceSpeedingFine, balBob)
+	}
+
+	// 4. Late joiner Charlie sees current authoritative police_state and parked/moved world state
+	charlie := connectWS(t, wsURL+"?username=charlie")
+	defer charlie.Close()
+	psCharlie, err := readMsgOfType(t, charlie, TypePoliceState, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected police_state baseline on late joiner charlie: %v", err)
+	}
+	carsSlice, ok := psCharlie["police_cars"].([]any)
+	if !ok || len(carsSlice) != 2 {
+		t.Fatalf("expected 2 police cars on late joiner baseline, got %+v", psCharlie["police_cars"])
+	}
+}
+
+func TestMultiplayer_OpenRoadRealisticBrakingStopAndFineSync(t *testing.T) {
+	srv, wsURL := startTestServer(t, 30*time.Second)
+	srv.Hub().SetSimAutoTick(false)
+
+	alice := connectWS(t, wsURL+"?username=alice")
+	defer alice.Close()
+	_, _ = readMsgOfType(t, alice, TypePoliceState, 2*time.Second)
+
+	bob := connectWS(t, wsURL+"?username=bob")
+	defer bob.Close()
+	_, _ = readMsgOfType(t, bob, TypePoliceState, 2*time.Second)
+	_, _ = readNextMsgSkipPolice(t, alice, 2*time.Second)
+
+	// Alice drives car_0 at (23.0, 45.0) at 12.0 m/s (> 40 km/h) ahead of police_car_0 (23.0, 10.0)
+	carX, carZ := 23.0, 45.0
+	carVX, carVZ := 0.0, 12.0
+	if err := sendMsgPack(t, alice, map[string]any{
+		"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+		"x": carX, "y": 0.0, "z": carZ, "vx": carVX, "vz": carVZ, "speed": 12.0, "yaw": 0.0, "drift": false, "lights": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+	srv.Hub().StepSimulation(0.05)
+
+	chaseBob, err := readMsgOfType(t, bob, TypePoliceChase, 2*time.Second)
+	if err != nil || chaseBob["status"] != ChaseStatusStarted {
+		t.Fatalf("expected chase started on bob, got %+v (err=%v)", chaseBob, err)
+	}
+	if _, err := readMsgOfType(t, bob, TypePoliceState, 2*time.Second); err != nil {
+		t.Fatalf("expected police_state after chase start on bob: %v", err)
+	}
+	if _, err := readMsgOfType(t, alice, TypePoliceState, 2*time.Second); err != nil {
+		t.Fatalf("expected police_state after chase start on alice: %v", err)
+	}
+
+	// Simulate realistic 31.4 m/s^2 braking + aero drag without any lateral teleporting
+	const dt = 0.05
+	var stoppedBob, balBob map[string]any
+	maxZ := carZ
+
+	for tick := 0; tick < 300; tick++ {
+		spd := math.Hypot(carVX, carVZ)
+		if spd > 0.001 {
+			decel := (31.4 + 0.002*spd*spd) * dt
+			if decel >= spd {
+				carVX, carVZ = 0, 0
+			} else {
+				scale := (spd - decel) / spd
+				carVX *= scale
+				carVZ *= scale
+			}
+		} else {
+			carVX, carVZ = 0, 0
+		}
+		carX += carVX * dt
+		carZ += carVZ * dt
+		if carZ > maxZ {
+			maxZ = carZ
+		}
+
+		if err := sendMsgPack(t, alice, map[string]any{
+			"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+			"x": carX, "y": 0.0, "z": carZ, "vx": carVX, "vz": carVZ, "speed": carVZ, "yaw": 0.0, "drift": false, "lights": true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+		srv.Hub().StepSimulation(dt)
+
+		// Each StepSimulation ends with TypePoliceState; read until it arrives so no timeout breaks the WS conn
+		for {
+			m, err := readNextMsg(t, bob, 2*time.Second)
+			if err != nil {
+				t.Fatalf("bob read failed on tick %d: %v", tick, err)
+			}
+			switch m["type"] {
+			case TypeVehicleImpulse:
+				if dvx, ok := m["dvx"].(float64); ok {
+					carVX += dvx
+				}
+				if dvz, ok := m["dvz"].(float64); ok {
+					carVZ += dvz
+				}
+			case TypeBalanceUpdate:
+				balBob = m
+			case TypePoliceChase:
+				if m["status"] == ChaseStatusStopped || m["status"] == ChaseStatusEvaded {
+					stoppedBob = m
+				}
+			}
+			if m["type"] == TypePoliceState {
+				break
+			}
+		}
+		if _, err := readMsgOfType(t, alice, TypePoliceState, 2*time.Second); err != nil {
+			t.Fatalf("alice read failed on tick %d: %v", tick, err)
+		}
+		if stoppedBob != nil && balBob != nil {
+			break
+		}
+	}
+
+	if stoppedBob == nil {
+		t.Fatalf("expected police_chase stopped over WS without bulldozing (maxZ=%.2f)", maxZ)
+	}
+	if stoppedBob["status"] != ChaseStatusStopped || stoppedBob["reason"] != "fined" {
+		t.Fatalf("expected clean stop-and-fine, got %+v (maxZ=%.2f)", stoppedBob, maxZ)
+	}
+	fineVal, _ := asInt64(stoppedBob["fine"])
+	moneyVal, _ := asInt64(stoppedBob["money"])
+	if fineVal != PoliceSpeedingFine || moneyVal != DefaultInitialMoney-PoliceSpeedingFine {
+		t.Fatalf("unexpected fine/money in stopped chase: %+v", stoppedBob)
+	}
+	if balBob == nil {
+		t.Fatalf("expected balance_update broadcast to bob")
+	}
+	if maxZ >= 85.0 {
+		t.Fatalf("expected car_0 not to be bulldozed down the road (maxZ=%.2f)", maxZ)
 	}
 }

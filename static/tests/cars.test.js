@@ -5,12 +5,18 @@ import {
     resolveVehicleToVehicleCollisions,
     resolveVehicleWorldCollision,
     getVehicleCollisionCircles,
+    getMinVehicleCircleGap,
     createVehiclePhysicsWorld,
     stepWorldVehiclePhysics,
     crossYaw,
     rotationalVelocity,
-    CAR_SPECS
+    CAR_SPECS,
+    POLICE_SPEED_LIMIT_KMH,
+    POLICE_SPEED_LIMIT_MS,
+    POLICE_CAR_SPECS,
+    applyVehicleImpulse
 } from '../js/physics.js';
+import { applyPoliceStateSnapshot } from '../js/state.js';
 
 function createTestCar(overrides = {}) {
     const mass = overrides.mass || 1450;
@@ -31,8 +37,8 @@ function createTestCar(overrides = {}) {
         yawInertia,
         width,
         length,
-        axleOffset: overrides.axleOffset || 1.25,
-        collisionRadius: overrides.collisionRadius || 1.15,
+        axleOffset: overrides.axleOffset || CAR_SPECS.axleOffset,
+        collisionRadius: overrides.collisionRadius || CAR_SPECS.collisionRadius,
         isAwake: overrides.isAwake !== undefined ? overrides.isAwake : true,
         isDrifting: overrides.isDrifting || false,
         isBraking: overrides.isBraking || false,
@@ -400,27 +406,59 @@ describe('Rigid Body Impulse Collisions', () => {
 
 describe('Continuous 3-Circle Hull & World Collisions', () => {
     test('getVehicleCollisionCircles returns 3 overlapping circles covering the full chassis without gaps', () => {
-        const car = createTestCar({ x: 10, z: 20, yaw: 0, axleOffset: 1.25, collisionRadius: 1.15 });
+        const car = createTestCar({ x: 10, z: 20, yaw: 0 });
         const circles = getVehicleCollisionCircles(car);
         expect(circles.length).toBe(3);
         // Front circle along +Z (yaw = 0)
         expect(circles[0].x).toBeCloseTo(10, 4);
-        expect(circles[0].z).toBeCloseTo(21.25, 4);
-        expect(circles[0].radius).toBe(1.15);
+        expect(circles[0].z).toBeCloseTo(21.18, 4);
+        expect(circles[0].radius).toBe(0.96);
         // Center circle at chassis midpoint
         expect(circles[1].x).toBeCloseTo(10, 4);
         expect(circles[1].z).toBeCloseTo(20.0, 4);
-        expect(circles[1].radius).toBe(1.15);
+        expect(circles[1].radius).toBe(0.96);
         // Rear circle along -Z
         expect(circles[2].x).toBeCloseTo(10, 4);
-        expect(circles[2].z).toBeCloseTo(18.75, 4);
-        expect(circles[2].radius).toBe(1.15);
+        expect(circles[2].z).toBeCloseTo(18.82, 4);
+        expect(circles[2].radius).toBe(0.96);
+    });
+
+    test('minimum vehicle circle gap follows the visual collider positions and each car hull', () => {
+        const car = createTestCar({ x: 0, z: 0 });
+        const police = createTestCar({ x: 3, z: 0, axleOffset: POLICE_CAR_SPECS.axleOffset,
+            collisionRadius: POLICE_CAR_SPECS.collisionRadius });
+        expect(getMinVehicleCircleGap(car, police)).toBeCloseTo(1.08, 5);
+        police.x = 2;
+        expect(getMinVehicleCircleGap(car, police)).toBeCloseTo(0.08, 5);
+        police.x = 1.8;
+        expect(getMinVehicleCircleGap(car, police)).toBeLessThan(0);
+    });
+
+    test('incoming police snapshot preserves sampled collision pose until the next render sample', () => {
+        const police = createTestCar({ id: 'police_car_0', x: 3, z: 0, vx: 4,
+            axleOffset: POLICE_CAR_SPECS.axleOffset, collisionRadius: POLICE_CAR_SPECS.collisionRadius });
+        police._initialized = true;
+        police.snapshotBuffer = { samples: [{ x: 3, z: 0 }] };
+        const state = { policeCars: new Map([[police.id, police]]), policeStateSequence: 1 };
+        const playerCar = createTestCar({ x: 0, z: 0 });
+        const gapBefore = getMinVehicleCircleGap(playerCar, police);
+        const result = applyPoliceStateSnapshot(state, { sequence: 2, police_cars: [{
+            id: police.id, x: 1.5, y: 0.02, z: 0, vx: -2, vz: 0,
+            yaw: 0.5, yaw_rate: 0.2, speed: 2, state: 'chase'
+        }] });
+        expect(result.applied).toBe(true);
+        expect(police.serverX).toBe(1.5);
+        expect(police.serverVx).toBe(-2);
+        expect(police.serverYaw).toBe(0.5);
+        expect(police.x).toBe(3);
+        expect(police.vx).toBe(4);
+        expect(getMinVehicleCircleGap(playerCar, police)).toBeCloseTo(gapBefore, 5);
     });
 
     test('center circle detects obstacle positioned at car chassis waist', () => {
         const car = createTestCar({ x: 0, z: 0, yaw: 0, vx: 5, vz: 0 });
         const colliders = [
-            { type: 'circle', x: 1.5, z: 0, radius: 0.5, height: 2.0, climbable: false }
+            { type: 'circle', x: 1.4, z: 0, radius: 0.5, height: 2.0, climbable: false }
         ];
         const hit = resolveVehicleWorldCollision(car, colliders, null);
         expect(hit).toBe(true);
@@ -429,7 +467,7 @@ describe('Continuous 3-Circle Hull & World Collisions', () => {
     test('rotating car front bumper hitting a wall receives opposing angular impulse', () => {
         const car = createTestCar({ x: 1.0, z: 0, yaw: 0, vx: 0, vz: 0, yawRate: 4.0 });
         const colliders = [
-            { type: 'box', x: 3.0, z: 1.25, halfW: 1.0, halfD: 2.0, height: 4.0, climbable: false }
+            { type: 'box', x: 2.8, z: 1.25, halfW: 1.0, halfD: 2.0, height: 4.0, climbable: false }
         ];
         const initialYawRate = car.yawRate;
         const hit = resolveVehicleWorldCollision(car, colliders, null);
@@ -454,7 +492,7 @@ describe('Continuous 3-Circle Hull & World Collisions', () => {
         const colliders = [
             { type: 'box', x: 8.0, z: 10.0, halfW: 1.0, halfD: 5.0, height: 3.0, climbable: false }
         ];
-        // Wall left edge is at x = 7.0. Car circle radius is 1.15.
+        // Wall left edge is at x = 7.0. Car circle radius is 0.96.
         // Car must be separated so that circleX + radius <= 7.001
         resolveVehicleWorldCollision(car, colliders, null);
         const circles = getVehicleCollisionCircles(car);
@@ -552,6 +590,243 @@ describe('World Vehicle Physics & Fixed Timestep Solver', () => {
         expect(events.length).toBeGreaterThan(0);
         // Local car must bounce backward from head-on impact with moving remote car
         expect(localCar.vz).toBeLessThan(0);
+    });
+});
+
+describe('Police Car Specs & Heavy Collision Deflection', () => {
+    test('police speed limit and vehicle specs match contract', () => {
+        expect(POLICE_SPEED_LIMIT_KMH).toBe(40);
+        expect(POLICE_SPEED_LIMIT_MS).toBeCloseTo(40 / 3.6, 8);
+        expect(POLICE_CAR_SPECS.mass).toBe(4200);
+        expect(POLICE_CAR_SPECS.mass).toBeGreaterThan(CAR_SPECS.mass);
+        expect(POLICE_CAR_SPECS.maxSpeedForward).toBe(CAR_SPECS.maxSpeedForward);
+        expect(POLICE_CAR_SPECS.maxSpeedBoost).toBe(CAR_SPECS.maxSpeedBoost);
+        expect(POLICE_CAR_SPECS.length).toBe(4.8);
+        expect(POLICE_CAR_SPECS.width).toBe(2.3);
+        expect(POLICE_CAR_SPECS.axleOffset).toBe(1.18);
+        expect(POLICE_CAR_SPECS.collisionRadius).toBe(0.96);
+        expect(POLICE_CAR_SPECS.restitution).toBe(0.25);
+    });
+
+    test('heavy police car deflects standard player car significantly more than itself in head-on collision', () => {
+        const policeCar = createTestCar({
+            id: 'police_car_0',
+            x: 0,
+            z: 0,
+            yaw: 0,
+            vx: 0,
+            vz: 15,
+            speed: 15,
+            mass: POLICE_CAR_SPECS.mass,
+            length: POLICE_CAR_SPECS.length,
+            width: POLICE_CAR_SPECS.width,
+            axleOffset: POLICE_CAR_SPECS.axleOffset,
+            collisionRadius: POLICE_CAR_SPECS.collisionRadius
+        });
+        const playerCar = createTestCar({
+            id: 'car_0',
+            x: 0,
+            z: 3.5,
+            yaw: Math.PI,
+            vx: 0,
+            vz: -15,
+            speed: 15,
+            mass: CAR_SPECS.mass
+        });
+
+        const events = resolveVehicleToVehicleCollisions([policeCar, playerCar], 0.05);
+        expect(events.length).toBeGreaterThan(0);
+
+        const deltaVPolice = Math.abs(15 - policeCar.vz);
+        const deltaVPlayer = Math.abs(-15 - playerCar.vz);
+        expect(deltaVPlayer).toBeGreaterThan(deltaVPolice * 2.5);
+    });
+
+    test('isServerControlled police car keeps 4200kg finite mass without mutating its pose in stepWorldVehiclePhysics', () => {
+        const world = createVehiclePhysicsWorld({ fixedDt: 1 / 60 });
+        const policeCar = createTestCar({
+            id: 'police_car_0',
+            isPolice: true,
+            isServerControlled: true,
+            remoteDriver: null,
+            x: 0,
+            z: 0,
+            yaw: 0,
+            vx: 0,
+            vz: 16,
+            speed: 16,
+            mass: POLICE_CAR_SPECS.mass,
+            length: POLICE_CAR_SPECS.length,
+            width: POLICE_CAR_SPECS.width,
+            axleOffset: POLICE_CAR_SPECS.axleOffset,
+            collisionRadius: POLICE_CAR_SPECS.collisionRadius
+        });
+        const playerCar = createTestCar({
+            id: 'car_0',
+            x: 0,
+            z: 3.4,
+            yaw: Math.PI,
+            vx: 0,
+            vz: -16,
+            speed: 16,
+            mass: CAR_SPECS.mass
+        });
+
+        const events = world.step([policeCar, playerCar], 1 / 60, []);
+        expect(events.length).toBeGreaterThan(0);
+        // Server-controlled police car pose/velocity MUST NOT be locally mutated or damped
+        expect(policeCar.x).toBe(0);
+        expect(policeCar.z).toBe(0);
+        expect(policeCar.vx).toBe(0);
+        expect(policeCar.vz).toBe(16);
+        // Player car MUST be strongly deflected
+        expect(playerCar.vz).toBeGreaterThan(0);
+    });
+
+    test('applyVehicleImpulse validates inputs, rejects stale sequences, and updates velocity', () => {
+        const car = createTestCar({ id: 'car_0', yaw: 0, vx: 0, vz: 5, speed: 5, isAwake: false });
+
+        expect(applyVehicleImpulse(car, { dvx: NaN, dvz: 0 }).applied).toBe(false);
+        expect(applyVehicleImpulse(car, { dvx: 250, dvz: 0 }).applied).toBe(false);
+
+        const r1 = applyVehicleImpulse(car, {
+            police_car_id: 'police_car_0',
+            dvx: 3,
+            dvz: -10,
+            dyaw_rate: 0.4,
+            sequence: 5
+        }, 1000);
+        expect(r1.applied).toBe(true);
+        expect(car.vx).toBeCloseTo(3, 6);
+        expect(car.vz).toBeCloseTo(-5, 6);
+        expect(car.yawRate).toBeCloseTo(0.4, 6);
+        expect(car.speed).toBeCloseTo(-5, 6);
+        expect(car.isAwake).toBe(true);
+
+        // Stale sequence rejected
+        const rStale = applyVehicleImpulse(car, {
+            police_car_id: 'police_car_0',
+            dvx: 5,
+            dvz: 0,
+            sequence: 5
+        }, 1050);
+        expect(rStale.applied).toBe(false);
+        expect(rStale.reason).toBe('STALE_SEQUENCE');
+    });
+
+    test('reconciles local collision and vehicle_impulse within 250ms in both client-first and server-first order', () => {
+        // Order A: Client-first local collision then server vehicle_impulse
+        const policeA = createTestCar({
+            id: 'police_car_0',
+            isPolice: true,
+            isServerControlled: true,
+            x: 0, z: 0, yaw: 0, vx: 0, vz: 15, speed: 15,
+            mass: POLICE_CAR_SPECS.mass,
+            axleOffset: POLICE_CAR_SPECS.axleOffset,
+            collisionRadius: POLICE_CAR_SPECS.collisionRadius
+        });
+        const playerA = createTestCar({
+            id: 'car_0',
+            x: 0, z: 3.5, yaw: Math.PI, vx: 0, vz: -15, speed: 15,
+            mass: CAR_SPECS.mass
+        });
+
+        resolveVehicleToVehicleCollisions([policeA, playerA], 0.05, 1000);
+        const dvAfterLocal = playerA.vz - (-15);
+        expect(dvAfterLocal).toBeGreaterThan(10);
+
+        // Server sends same-magnitude impulse 50ms later -> must NOT double-apply (~2x)!
+        const srvAfterLocal = applyVehicleImpulse(playerA, {
+            police_car_id: 'police_car_0',
+            dvx: 0,
+            dvz: dvAfterLocal,
+            dyaw_rate: 0,
+            sequence: 1
+        }, 1050);
+        expect(srvAfterLocal.applied).toBe(true);
+        expect(srvAfterLocal.dvz).toBe(0);
+        expect(playerA.vz - (-15)).toBeCloseTo(dvAfterLocal, 6);
+
+        // Order B: Server-first vehicle_impulse then local collision 50ms later
+        const policeB = createTestCar({
+            id: 'police_car_0',
+            isPolice: true,
+            isServerControlled: true,
+            x: 0, z: 0, yaw: 0, vx: 0, vz: 15, speed: 15,
+            mass: POLICE_CAR_SPECS.mass,
+            axleOffset: POLICE_CAR_SPECS.axleOffset,
+            collisionRadius: POLICE_CAR_SPECS.collisionRadius
+        });
+        const playerB = createTestCar({
+            id: 'car_0',
+            x: 0, z: 3.5, yaw: Math.PI, vx: 0, vz: -15, speed: 15,
+            mass: CAR_SPECS.mass
+        });
+
+        const srvFirst = applyVehicleImpulse(playerB, {
+            police_car_id: 'police_car_0',
+            dvx: 0,
+            dvz: dvAfterLocal,
+            dyaw_rate: 0,
+            sequence: 1
+        }, 2000);
+        expect(srvFirst.dvz).toBeCloseTo(dvAfterLocal, 6);
+
+        resolveVehicleToVehicleCollisions([policeB, playerB], 0.05, 2050);
+        // Velocity change must NOT double-apply!
+        expect(playerB.vz - (-15)).toBeCloseTo(dvAfterLocal, 6);
+
+        // After > 250ms window expires, a subsequent impulse applies normally
+        const nextHit = applyVehicleImpulse(playerB, {
+            police_car_id: 'police_car_0',
+            dvx: 0,
+            dvz: 4,
+            sequence: 2
+        }, 2400);
+        expect(nextHit.applied).toBe(true);
+        expect(nextHit.dvz).toBe(4);
+    });
+
+    test('applyVehicleImpulse rejects extreme dyaw_rate and preserves orthogonal dvx on oblique client-first reconciliation', () => {
+        const car = createTestCar({ id: 'car_0', yaw: 0, vx: 0, vz: 0, yawRate: 0, speed: 0 });
+
+        const badYawHigh = applyVehicleImpulse(car, { dvx: 0, dvz: 0, dyaw_rate: 1e9, sequence: 1 }, 1000);
+        expect(badYawHigh).toEqual({ applied: false, reason: 'INVALID_IMPULSE' });
+        const badYawNeg = applyVehicleImpulse(car, { dvx: 0, dvz: 0, dyaw_rate: -50.1, sequence: 2 }, 1000);
+        expect(badYawNeg).toEqual({ applied: false, reason: 'INVALID_IMPULSE' });
+        expect(car.yawRate).toBe(0);
+
+        // Oblique client-first reconciliation: local collision gives (0, 18.58), server sends (6, 10)
+        const policeCar = createTestCar({
+            id: 'police_car_0',
+            isPolice: true,
+            isServerControlled: true,
+            x: 0, z: 0, yaw: 0, vx: 0, vz: 15, speed: 15,
+            mass: POLICE_CAR_SPECS.mass,
+            axleOffset: POLICE_CAR_SPECS.axleOffset,
+            collisionRadius: POLICE_CAR_SPECS.collisionRadius
+        });
+        const playerCar = createTestCar({
+            id: 'car_0',
+            x: 0, z: 3.5, yaw: 0, vx: 0, vz: -15, speed: -15,
+            mass: CAR_SPECS.mass
+        });
+        resolveVehicleToVehicleCollisions([policeCar, playerCar], 0.05, 3000);
+        const localDvz = playerCar.vz - (-15);
+        expect(localDvz).toBeGreaterThan(15);
+
+        const obliqueRes = applyVehicleImpulse(playerCar, {
+            police_car_id: 'police_car_0',
+            dvx: 6,
+            dvz: 10,
+            dyaw_rate: 0,
+            sequence: 10
+        }, 3050);
+        expect(obliqueRes.applied).toBe(true);
+        expect(obliqueRes.dvx).toBe(6);
+        expect(obliqueRes.dvz).toBe(0);
+        expect(playerCar.vx).toBeCloseTo(6, 6);
+        expect(playerCar.vz).toBeCloseTo(-15 + localDvz, 6);
     });
 });
 

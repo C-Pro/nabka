@@ -264,6 +264,22 @@ func (c *Client) ReadPump() {
 			_ = c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
 			c.hub.RequestCannonFire(c)
 
+		case TypePoliceDialogueChoice:
+			req, err := ParsePoliceDialogueChoice(payload)
+			if err != nil {
+				errMsg, _ := MarshalMsgPack(OutboundErrorMsg{
+					Type:    TypeError,
+					Message: err.Error(),
+					Op:      TypePoliceDialogueChoice,
+				})
+				c.sendDirect(errMsg)
+				continue
+			}
+
+			// Valid application message: refresh inactivity deadline
+			_ = c.conn.SetReadDeadline(time.Now().Add(c.inactivityTimeout))
+			c.hub.SubmitPoliceDialogueChoice(c, req)
+
 		case TypeRegister:
 			errMsg, _ := MarshalMsgPack(OutboundErrorMsg{
 				Type:    TypeError,
@@ -275,6 +291,14 @@ func (c *Client) ReadPump() {
 			errMsg, _ := MarshalMsgPack(OutboundErrorMsg{
 				Type:    TypeError,
 				Message: "cannon_shot, join, and leave message types are server reserved",
+			})
+			c.sendDirect(errMsg)
+
+		case TypeBalanceUpdate, TypePoliceState, TypePoliceEncounterStart,
+			TypePoliceEncounterResult, TypePoliceChase, TypeVehicleImpulse:
+			errMsg, _ := MarshalMsgPack(OutboundErrorMsg{
+				Type:    TypeError,
+				Message: env.Type + " message type is server reserved",
 			})
 			c.sendDirect(errMsg)
 

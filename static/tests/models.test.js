@@ -1110,6 +1110,8 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
             expect(loadedUrls).toContain('models/berik.glb');
             expect(loadedUrls).toContain('models/dunya.glb');
             expect(loadedUrls).toContain('models/player.glb');
+            expect(loadedUrls).toContain('models/police_officer.glb');
+            expect(loadedUrls).toContain('models/police_car.glb');
             for (const name of ['fish_kambala', 'fish_terpug', 'fish_okun', 'jellyfish', 'starfish_amur', 'starfish_patiria', 'laminaria']) {
                 expect(loadedUrls).toContain(`models/${name}.glb`);
             }
@@ -1283,6 +1285,52 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
             World.stadiumLightsActive = false;
             globalThis.document = originalDoc;
         }
+    });
+
+    test('police_officer model and exported GLB preserve articulated limb sub-nodes', async () => {
+        const { ModelBuilders } = await import('../js/models.js');
+        const built = ModelBuilders.police_officer();
+        for (const nodeName of ['torso', 'head', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg']) {
+            expect(built.getObjectByName(nodeName)).toBeTruthy();
+        }
+
+        const buf = readFileSync(join(MODELS_DIR, 'police_officer.glb'));
+        const parsed = await parseGLB(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+        for (const nodeName of ['torso', 'head', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg']) {
+            expect(parsed.getObjectByName(nodeName)).toBeTruthy();
+        }
+        expect(parsed.userData.boundingBox.minY).toBeCloseTo(0, 2);
+    });
+
+    test('police_car model and exported GLB preserve car nodes and emissive lightbar materials', async () => {
+        const { ModelBuilders } = await import('../js/models.js');
+        const built = ModelBuilders.police_car();
+        const requiredNodes = [
+            'chassis', 'cabin',
+            'headlight_0', 'headlight_1',
+            'taillight_0', 'taillight_1',
+            'wheel_0', 'wheel_1', 'wheel_2', 'wheel_3',
+            'lightbar_red', 'lightbar_blue'
+        ];
+        for (const nodeName of requiredNodes) {
+            expect(built.getObjectByName(nodeName)).toBeTruthy();
+        }
+
+        const buf = readFileSync(join(MODELS_DIR, 'police_car.glb'));
+        const parsed = await parseGLB(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+        for (const nodeName of requiredNodes) {
+            expect(parsed.getObjectByName(nodeName)).toBeTruthy();
+        }
+
+        const redBar = parsed.getObjectByName('lightbar_red');
+        const blueBar = parsed.getObjectByName('lightbar_blue');
+        expect(redBar.material.isMeshStandardMaterial).toBe(true);
+        expect(blueBar.material.isMeshStandardMaterial).toBe(true);
+        expect(redBar.material.emissive.getHex()).toBeGreaterThan(0);
+        expect(blueBar.material.emissive.getHex()).toBeGreaterThan(0);
+        expect(redBar.material.emissiveIntensity).toBeGreaterThan(1.0);
+        expect(blueBar.material.emissiveIntensity).toBeGreaterThan(1.0);
+        expect(parsed.userData.boundingBox.minY).toBeCloseTo(0, 2);
     });
 });
 

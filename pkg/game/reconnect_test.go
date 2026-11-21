@@ -87,7 +87,7 @@ func TestSessionTokenIssuedOnJoin(t *testing.T) {
 	}
 
 	// Alice receives bob's join WITHOUT bob's secret token
-	aliceSeesBob, err := readNextMsg(t, c1, time.Second)
+	aliceSeesBob, err := readNextMsgSkipPolice(t, c1, time.Second)
 	if err != nil {
 		t.Fatalf("alice failed to read bob join: %v", err)
 	}
@@ -134,8 +134,7 @@ func TestReconnectReplacesActiveConnectionWithout4409(t *testing.T) {
 	}
 
 	// 4. c1 should have been closed with terminal code 4408 ("session replaced from another connection"):
-	_ = c1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	_, _, err = c1.ReadMessage()
+	_, err = readNextMsgSkipPolice(t, c1, 500*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected old connection c1 to be closed by server replacement, but read succeeded")
 	}
@@ -178,8 +177,7 @@ func TestActiveSessionReplacementSurvivesPastTTL(t *testing.T) {
 	}
 
 	// 4. c1 should be terminated with 4408
-	_ = c1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	_, _, err = c1.ReadMessage()
+	_, err = readNextMsgSkipPolice(t, c1, 500*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected old connection c1 to be closed, but read succeeded")
 	}
@@ -330,7 +328,7 @@ func TestReconnectPreservesCarOccupancy(t *testing.T) {
 	// c2 should receive car_0 baseline showing alice is driver
 	foundCar0 := false
 	for i := 0; i < 10; i++ {
-		msg, err := readNextMsg(t, c2, 500*time.Millisecond)
+		msg, err := readNextMsgSkipPolice(t, c2, 500*time.Millisecond)
 		if err != nil {
 			break
 		}
@@ -404,21 +402,21 @@ func TestDisconnectedSessionReservationAndExpiry(t *testing.T) {
 	// Observer client to synchronize disconnect events without arbitrary sleeps
 	observer := connectWS(t, baseURL+"?username=observer")
 	defer observer.Close()
-	_, _ = readNextMsg(t, observer, time.Second)
+	_, _ = readNextMsgSkipPolice(t, observer, time.Second)
 
 	// 1. Alice connects and gets token
 	c1 := connectWS(t, baseURL+"?username=alice")
-	join1, err := readNextMsg(t, c1, time.Second)
+	join1, err := readNextMsgSkipPolice(t, c1, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	aliceToken := join1["token"].(string)
-	_, _ = readNextMsg(t, observer, time.Second) // consume alice join on observer
+	_, _ = readNextMsgSkipPolice(t, observer, time.Second) // consume alice join on observer
 
 	// 2. Alice disconnects; wait on observer for leave event
 	c1.Close()
 	for {
-		msg, err := readNextMsg(t, observer, time.Second)
+		msg, err := readNextMsgSkipPolice(t, observer, time.Second)
 		if err != nil {
 			t.Fatalf("failed to receive alice leave event: %v", err)
 		}
@@ -454,19 +452,19 @@ func TestDisconnectedSessionReservationAndExpiry(t *testing.T) {
 
 	// 4. Within session reservation: Alice reconnects with her valid token -> SUCCEEDS
 	cAlice := connectWS(t, fmt.Sprintf("%s?username=alice&token=%s", baseURL, aliceToken))
-	joinAlice, err := readNextMsg(t, cAlice, time.Second)
+	joinAlice, err := readNextMsgSkipPolice(t, cAlice, time.Second)
 	if err != nil {
 		t.Fatalf("alice failed to reclaim reserved session: %v", err)
 	}
 	if joinAlice["token"] != aliceToken {
 		t.Fatalf("expected token match on session reclaim, got: %v", joinAlice["token"])
 	}
-	_, _ = readNextMsg(t, observer, time.Second) // consume alice join on observer
+	_, _ = readNextMsgSkipPolice(t, observer, time.Second) // consume alice join on observer
 
 	// 5. Alice disconnects again; wait on observer for leave event
 	cAlice.Close()
 	for {
-		msg, err := readNextMsg(t, observer, time.Second)
+		msg, err := readNextMsgSkipPolice(t, observer, time.Second)
 		if err != nil {
 			t.Fatalf("failed to receive alice second leave event: %v", err)
 		}

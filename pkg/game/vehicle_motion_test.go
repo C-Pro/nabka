@@ -40,12 +40,12 @@ func TestDrivingMotionBaselineAndParking(t *testing.T) {
 	srv, url := startTestServer(t, 5*time.Second)
 	driver := connectWS(t, url+"?username=driver")
 	defer driver.Close()
-	if _, err := readNextMsg(t, driver, time.Second); err != nil {
+	if _, err := readNextMsgSkipPolice(t, driver, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	observer := connectWS(t, url+"?username=observer")
 	defer observer.Close()
-	if _, err := readNextMsg(t, observer, time.Second); err != nil {
+	if _, err := readNextMsgSkipPolice(t, observer, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	packet := drivingPacket()
@@ -56,7 +56,7 @@ func TestDrivingMotionBaselineAndParking(t *testing.T) {
 		if err := sendMsgPack(t, driver, packet); err != nil {
 			t.Fatal(err)
 		}
-		got, err := readNextMsg(t, observer, time.Second)
+		got, err := readNextMsgSkipPolice(t, observer, time.Second)
 		if err != nil || got["vx"] != 12.0 || got["vz"] != 0.0 || got["yaw_rate"] != 1.5 {
 			t.Fatalf("motion: %v, %v", got, err)
 		}
@@ -68,20 +68,20 @@ func TestDrivingMotionBaselineAndParking(t *testing.T) {
 	}
 	late := connectWS(t, url+"?username=late")
 	defer late.Close()
-	if _, err := readNextMsg(t, late, time.Second); err != nil {
+	if _, err := readNextMsgSkipPolice(t, late, time.Second); err != nil {
 		t.Fatal(err)
 	}
-	baseline, err := readNextMsg(t, late, time.Second)
+	baseline, err := readNextMsgSkipPolice(t, late, time.Second)
 	if err != nil || baseline["vx"] != 12.0 || baseline["yaw_rate"] != 1.5 {
 		t.Fatalf("baseline: %v, %v", baseline, err)
 	}
 	// Late join notification is next in the observer stream.
-	if _, err := readNextMsg(t, observer, time.Second); err != nil {
+	if _, err := readNextMsgSkipPolice(t, observer, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	driver.Close()
 	for i := 0; i < 2; i++ {
-		got, err := readNextMsg(t, observer, time.Second)
+		got, err := readNextMsgSkipPolice(t, observer, time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
