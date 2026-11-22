@@ -38,13 +38,38 @@ test('buffer follows lateral velocity, preserves timing through packet jitter an
     b.push(snapshot(2, 50, 0.5), 1090);
     b.push(snapshot(3, 100, 1), 1100);
     expect(b.push(snapshot(2, 50, 20), 1120)).toBe(false);
-    expect(b.sample(1175).x).toBeCloseTo(0.75);
-    expect(b.sample(1250).x).toBeCloseTo(1.5);
-    expect(b.sample(1250).yaw).toBeCloseTo(0.05);
+    expect(b.offset).toBeCloseTo(1004.224);
+    expect(b.sample(1175).x).toBeCloseTo(0.70776);
+    expect(b.sample(1250).x).toBeCloseTo(1.45776);
+    expect(b.sample(1250).yaw).toBeCloseTo(0.045776);
     expect(b.sample(9999).x).toBeCloseTo(2); // extrapolation capped at 100ms
     expect(b.sample(9999).vx).toBe(0); // a frozen proxy must not impart stale motion in collisions
     b.push(snapshot(4, 200, 100), 1200); // teleport resets interpolation history
     expect(b.sample(1200).x).toBe(100);
+});
+test('snapshot clock offset adapts gradually to jitter and snaps after a large change', () => {
+    const b = new VehicleSnapshotBuffer();
+    b.push(snapshot(1, 0, 0), 1000);
+    b.push(snapshot(2, 50, 0.5), 1070);
+    expect(b.offset).toBeCloseTo(1002.4);
+    b.push(snapshot(3, 100, 1), 1700);
+    expect(b.offset).toBe(1600);
+});
+test('physics advances six fixed steps at 10 FPS and caps catch-up after a frame spike', () => {
+    const world = createVehiclePhysicsWorld();
+    const c = car();
+    const reference = createVehiclePhysicsWorld();
+    const expected = car();
+    world.step([c], 0.012, []);
+    world.step([c], 0.1, []);
+    for (let i = 0; i < 6; i++) reference.step([expected], 1 / 60, []);
+    expect(c).toEqual(expected);
+    expect(world.accumulator).toBeCloseTo(0.012);
+
+    const overloaded = createVehiclePhysicsWorld({ fixedDt: 1 / 120 });
+    overloaded.step([car()], 0.1, []);
+    expect(overloaded.accumulator).toBeCloseTo(1 / 240);
+    expect(overloaded.alpha).toBeCloseTo(0.5);
 });
 test('remote bodies are immutable collision obstacles in either pair order', () => {
     for (const reversed of [false, true]) {

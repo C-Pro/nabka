@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { parseGLB, cloneModelHierarchy, ModelLoader, DEFAULT_LANDMARKS, computeModelBoundingBox } from '../js/models.js';
 import { exportObjectToGLB } from '../../editor/export_glb.js';
 import { createJDMCar } from '../js/entities.js';
+import { TextureFactory } from '../js/textures.js';
 
 const STATIC_DIR = resolve(import.meta.dir, '..');
 const MODELS_DIR = join(STATIC_DIR, 'models');
@@ -1122,6 +1123,8 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
 
     test('createJDMCar initializes simulation, group, and spawn height from configured y and resetToSpawn preserves it', () => {
         const car = createJDMCar('Suzuki Jimny', 0xf59e0b, 40.05, 10.5, 0, null, 'car_jimny', null, 0.27);
+        expect(car.headBeam.intensity).toBe(0);
+        expect(car.headBeam.visible).toBe(true);
         expect(car.y).toBe(0.27);
         expect(car.spawnY).toBe(0.27);
         expect(car.group.position.y).toBe(0.27);
@@ -1134,6 +1137,42 @@ describe('GLB 2.0 Exporter & Loader Interoperability', () => {
         car.resetToSpawn();
         expect(car.y).toBe(0.27);
         expect(car.group.position.y).toBe(0.27);
+    });
+
+    test('promenade lamps share one texture, geometry, and material per pool type', async () => {
+        const { World } = await import('../js/world.js');
+        const world = Object.create(World);
+        world.scene = new globalThis.THREE.Scene();
+        world.propGroups = [];
+        world.landmarkGroups = [];
+        const originalInstantiate = ModelLoader.instantiate;
+        const originalTexture = TextureFactory.createLightPoolTexture;
+        let textures = 0;
+        ModelLoader.instantiate = () => {
+            const obj = new globalThis.THREE.Group();
+            obj.userData.boundingBox = {};
+            return obj;
+        };
+        TextureFactory.createLightPoolTexture = () => ({ id: ++textures });
+        try {
+            world.buildPromenadeProps([
+                { type: 'street_lamp', x: 0, z: 0, hasCollider: false },
+                { type: 'street_lamp', x: 4, z: 0, hasCollider: false },
+                { type: 'road_lamp', x: 20, z: 0, hasCollider: false },
+                { type: 'road_lamp', x: 25, z: 0, hasCollider: false }
+            ]);
+            const pools = world.propGroups.map((obj, i) => obj.getObjectByName(i < 2 ? 'lamp_ground_pool' : 'road_lamp_ground_pool'));
+            expect(textures).toBe(2);
+            expect(pools.every(Boolean)).toBe(true);
+            expect(pools[0].geometry).toBe(pools[1].geometry);
+            expect(pools[0].material).toBe(pools[1].material);
+            expect(pools[2].geometry).toBe(pools[3].geometry);
+            expect(pools[2].material).toBe(pools[3].material);
+            expect(pools[0].geometry).not.toBe(pools[2].geometry);
+        } finally {
+            ModelLoader.instantiate = originalInstantiate;
+            TextureFactory.createLightPoolTexture = originalTexture;
+        }
     });
 
     test('buildVladivostokSopkiAndBayHorizon scales mountains with independent rx and rz axes', async () => {

@@ -126,11 +126,13 @@ function gameLoop() {
     const dt = Math.min(World.clock.getDelta(), 0.05);
     const elapsed = World.clock.getElapsedTime();
 
-    if (GAME_STATE.isConnected) {
+    if (GAME_STATE.isConnected || MultiplayerClient.isReconnecting || MultiplayerClient.hasEnteredWorld) {
         Player.update(dt, MultiplayerClient.remotePlayers);
         updatePoliceEntities(dt, elapsed, MultiplayerClient.remotePlayers);
         updateWorldVehicles(dt, activeWorldMap);
         Dunya.update(dt, elapsed, Player.position);
+    }
+    if (GAME_STATE.isConnected) {
         MultiplayerClient.update(dt);
     }
 
@@ -268,7 +270,7 @@ export async function startApp() {
     });
     activeNoonScheduler.start();
 
-    World.warmupShaders();
+    World.warmupShaders?.();
     gameLoop();
 }
 

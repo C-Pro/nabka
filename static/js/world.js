@@ -334,8 +334,7 @@ export const World = {
         this.registerPOIInteractables(worldMap);
         this.buildVladivostokSopkiAndBayHorizon(worldMap);
         this.initSeagullsAndDriftParticles();
-        this.initStreetLightPool(8);
-        this.warmupShaders();
+        this.initStreetLightPool(4);
     },
 
     buildSeabed() {
@@ -1051,6 +1050,18 @@ export const World = {
 
     buildPromenadeProps(propsList = null) {
         const props = Array.isArray(propsList) ? propsList : generateDefaultPromenadeProps();
+        const sharedGroundPools = {};
+        const groundPool = (kind, size, inner, outer) => {
+            if (sharedGroundPools[kind]) return sharedGroundPools[kind];
+            const tex = TextureFactory.createLightPoolTexture(inner, outer);
+            if (!tex) return null;
+            const geo = new THREE.PlaneGeometry(size, size);
+            geo.rotateX(-Math.PI / 2);
+            const mat = new THREE.MeshBasicMaterial({
+                map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+            });
+            return (sharedGroundPools[kind] = { tex, geo, mat });
+        };
         for (const p of props) {
             if (!p) continue;
             const isBench = p.type === 'bench' || (p.model && p.model.includes('bench'));
@@ -1093,17 +1104,9 @@ export const World = {
                 });
                 // Soft ground light pool decal
                 if (!obj.getObjectByName('lamp_ground_pool') && TextureFactory && TextureFactory.createLightPoolTexture) {
-                    const poolTex = TextureFactory.createLightPoolTexture('rgba(254, 240, 138, 0.45)', 'rgba(250, 204, 21, 0)');
-                    if (poolTex) {
-                        const poolGeo = new THREE.PlaneGeometry(8, 8);
-                        poolGeo.rotateX(-Math.PI / 2);
-                        const poolMat = new THREE.MeshBasicMaterial({
-                            map: poolTex,
-                            transparent: true,
-                            depthWrite: false,
-                            blending: THREE.AdditiveBlending
-                        });
-                        const poolMesh = new THREE.Mesh(poolGeo, poolMat);
+                    const pool = groundPool('street', 14, 'rgba(255, 212, 132, 0.45)', 'rgba(255, 212, 132, 0)');
+                    if (pool) {
+                        const poolMesh = new THREE.Mesh(pool.geo, pool.mat);
                         poolMesh.name = 'lamp_ground_pool';
                         poolMesh.position.set(0, 0.02, 0);
                         poolMesh.userData = { noCollide: true };
@@ -1121,17 +1124,9 @@ export const World = {
                 }
                 // Wide roadway light pool decal
                 if (!obj.getObjectByName('road_lamp_ground_pool') && TextureFactory && TextureFactory.createLightPoolTexture) {
-                    const poolTex = TextureFactory.createLightPoolTexture('rgba(255, 252, 235, 0.45)', 'rgba(254, 240, 138, 0)');
-                    if (poolTex) {
-                        const poolGeo = new THREE.PlaneGeometry(14, 14);
-                        poolGeo.rotateX(-Math.PI / 2);
-                        const poolMat = new THREE.MeshBasicMaterial({
-                            map: poolTex,
-                            transparent: true,
-                            depthWrite: false,
-                            blending: THREE.AdditiveBlending
-                        });
-                        const poolMesh = new THREE.Mesh(poolGeo, poolMat);
+                    const pool = groundPool('road', 20, 'rgba(255, 221, 153, 0.45)', 'rgba(255, 221, 153, 0)');
+                    if (pool) {
+                        const poolMesh = new THREE.Mesh(pool.geo, pool.mat);
                         poolMesh.name = 'road_lamp_ground_pool';
                         poolMesh.position.set(2.4, 0.02, 0);
                         poolMesh.userData = { noCollide: true };
@@ -1349,7 +1344,7 @@ export const World = {
         posAttr.needsUpdate = true;
     },
 
-    initStreetLightPool(capacity = 8) {
+    initStreetLightPool(capacity = 4) {
         if (!this.scene || !Array.isArray(this.propGroups) || typeof THREE === 'undefined') return;
 
         // Clean up previous pool if re-initializing
@@ -1362,6 +1357,8 @@ export const World = {
         }
         this.streetLightPoolSlots = [];
         this.streetLightSources = [];
+        this._forceStreetLightPoolRefresh = true;
+        this._streetLightPoolWasActive = false;
 
         if (typeof this.scene.updateMatrixWorld === 'function') {
             this.scene.updateMatrixWorld(true);
@@ -1421,9 +1418,12 @@ export const World = {
 
         // If streetlights are off or no player position, mute all slots to intensity 0
         if (!enabled || !playerPos) {
-            for (const slot of this.streetLightPoolSlots) {
-                if (slot) slot.intensity = 0;
+            if (this._streetLightPoolWasActive !== false) {
+                for (const slot of this.streetLightPoolSlots) {
+                    if (slot) slot.intensity = 0;
+                }
             }
+            this._streetLightPoolWasActive = false;
             return;
         }
 
@@ -1431,40 +1431,51 @@ export const World = {
         const pz = playerPos.z;
         const maxDistSq = 45 * 45; // 45m radius
 
-        for (const src of this.streetLightSources) {
-            const dx = src.x - px;
-            const dz = src.z - pz;
-            src.distanceSq = dx * dx + dz * dz;
-            src.selected = false;
-        }
-
-        for (const slot of this.streetLightPoolSlots) {
-            let nearest = null;
-            let nearestDistSq = maxDistSq;
-
+        if (this._streetLightPoolWasActive !== true || this._forceStreetLightPoolRefresh ||
+            Math.hypot(px - (this._lastPoolPx ?? 999999), pz - (this._lastPoolPz ?? 999999)) >= 1.5) {
             for (const src of this.streetLightSources) {
-                if (!src.selected && src.distanceSq < nearestDistSq) {
-                    nearest = src;
-                    nearestDistSq = src.distanceSq;
+                const dx = src.x - px;
+                const dz = src.z - pz;
+                src.distanceSq = dx * dx + dz * dz;
+                src.selected = false;
+            }
+
+            for (const slot of this.streetLightPoolSlots) {
+                let nearest = null;
+                let nearestDistSq = maxDistSq;
+                for (const src of this.streetLightSources) {
+                    if (!src.selected && src.distanceSq < nearestDistSq) {
+                        nearest = src;
+                        nearestDistSq = src.distanceSq;
+                    }
+                }
+                slot._poolSource = nearest;
+                slot.baseIntensity = nearest ? nearest.intensity : 0;
+                if (nearest) {
+                    nearest.selected = true;
+                    slot.position.copy(nearest.worldPos);
+                    slot.color.copy(nearest.color);
+                    slot.distance = nearest.distance;
+                    slot.decay = nearest.decay;
                 }
             }
-
-            if (!nearest) {
-                slot.intensity = 0;
-                continue;
-            }
-
-            nearest.selected = true;
-            slot.position.copy(nearest.worldPos);
-            slot.color.copy(nearest.color);
-            slot.distance = nearest.distance;
-            slot.decay = nearest.decay;
-            slot.intensity = nearest.intensity;
+            this._lastPoolPx = px;
+            this._lastPoolPz = pz;
+            this._forceStreetLightPoolRefresh = false;
         }
+        for (const slot of this.streetLightPoolSlots) {
+            const src = slot._poolSource;
+            if (!src) { slot.intensity = 0; continue; }
+            const dist = Math.hypot(src.x - px, src.z - pz);
+            const t = Math.max(0, Math.min(1, (45 - dist) / 15));
+            slot.intensity = slot.baseIntensity * (dist <= 30 ? 1 : t * t * (3 - 2 * t));
+        }
+        this._streetLightPoolWasActive = true;
     },
 
     setStreetLights(enabled) {
         this.streetLightsActive = Boolean(enabled);
+        this._forceStreetLightPoolRefresh = true;
         if (!Array.isArray(this.propGroups)) return;
 
         for (const obj of this.propGroups) {
@@ -1525,7 +1536,14 @@ export const World = {
 
     warmupShaders() {
         if (!this.renderer || typeof this.renderer.compile !== 'function' || !this.scene || !this.camera) return;
+        const culling = [];
+        const streetLightsActive = this.streetLightsActive;
+        const stadiumLightsActive = this.stadiumLightsActive;
         try {
+            this.scene.traverse((obj) => {
+                culling.push([obj, obj.frustumCulled]);
+                obj.frustumCulled = false;
+            });
             // Pre-compile day lighting state
             this.setStadiumFloodlights(false);
             this.setStreetLights(false);
@@ -1536,11 +1554,12 @@ export const World = {
             this.setStreetLights(true);
             this.renderer.compile(this.scene, this.camera);
 
-            // Restore current phase
-            this.setStadiumFloodlights(this.stadiumLightsActive);
-            this.setStreetLights(this.streetLightsActive);
         } catch (e) {
             console.warn('Shader warmup failed or skipped:', e);
+        } finally {
+            for (const [obj, wasCulled] of culling) obj.frustumCulled = wasCulled;
+            this.setStreetLights(streetLightsActive);
+            this.setStadiumFloodlights(stadiumLightsActive);
         }
     },
 
@@ -1567,9 +1586,13 @@ export const World = {
         }
 
         const clockEl = (typeof document !== 'undefined') ? document.getElementById('hud-clock') : null;
-        if (clockEl && timeString) {
+        if (clockEl && timeString && clockEl.textContent !== timeString) {
             clockEl.textContent = timeString;
         }
+        if (phase === this.currentTimePhase &&
+            this._appliedPhasePropCount === (this.propGroups?.length || 0) &&
+            this._appliedPhaseLandmarkCount === (this.landmarkGroups?.length || 0) &&
+            this._appliedPhaseScene === this.scene) return;
 
         const sunPos = new THREE.Vector3();
         let skyTopColor = 0x0284c7;
@@ -1824,6 +1847,10 @@ export const World = {
                 ambientIntensity: this.ambientLight?.intensity
             };
         }
+        this.currentTimePhase = phase;
+        this._appliedPhasePropCount = this.propGroups?.length || 0;
+        this._appliedPhaseLandmarkCount = this.landmarkGroups?.length || 0;
+        this._appliedPhaseScene = this.scene;
     },
 
     updateUnderwaterAtmosphere(camera) {

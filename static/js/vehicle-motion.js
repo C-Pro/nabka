@@ -33,6 +33,10 @@ export class VehicleSnapshotBuffer {
         if (this.offset === null || jump || (last && time - last.time > 1000)) {
             this.offset = receivedAt - time;
             this.samples = [];
+        } else {
+            const measuredOffset = receivedAt - time;
+            const drift = measuredOffset - this.offset;
+            this.offset = Math.abs(drift) < 500 ? this.offset + drift * 0.12 : measuredOffset;
         }
         this.samples.push({ ...message, time,
             vx: Number.isFinite(message.vx) ? message.vx : Math.sin(message.yaw) * message.speed,

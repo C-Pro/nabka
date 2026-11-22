@@ -755,7 +755,8 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
     group.position.set(x, initY, z);
     group.rotation.y = rotY;
 
-    const headBeam = new THREE.SpotLight(0xfef08a, 1.8, 36, Math.PI / 5, 0.45, 1.2);
+    const headBeam = new THREE.SpotLight(0xfef08a, 0, 36, Math.PI / 5, 0.45, 1.2);
+    headBeam.visible = true;
     headBeam.name = 'headBeam';
     headBeam.position.set(0, 0.85, 2.4);
     headBeam.target.position.set(0, 0.2, 16);
@@ -927,6 +928,7 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null, options = {}) 
             closeNpcDialogue();
         }
         GAME_STATE.inVehicle = carObj;
+        if (carObj.headBeam) carObj.headBeam.intensity = GAME_STATE.headlightsOn ? 1.8 : 0;
         hideLocalLabels();
         carObj.snapshotBuffer = null;
         carObj.remoteDriver = null;

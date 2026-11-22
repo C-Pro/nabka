@@ -63,6 +63,7 @@ export const MultiplayerClient = {
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,
     isReconnecting: false,
+    hasEnteredWorld: false,
     handledNoonDates: new Set(),
     lastPoliceStateSequence: 0,
     lastVehicleImpulseSequence: 0,
@@ -389,6 +390,7 @@ export const MultiplayerClient = {
     activateSessionUI(username, statusLabel = '') {
         this.setConnectingUI(false);
         GAME_STATE.isConnected = true;
+        this.hasEnteredWorld = true;
         GAME_STATE.lastActiveEventAt = performance.now();
         this.onlineUsers.clear();
         this.onlineUsers.add(username);
@@ -550,6 +552,7 @@ export const MultiplayerClient = {
     cleanupOnDisconnect() {
         this.setConnectingUI(false);
         GAME_STATE.isConnected = false;
+        this.hasEnteredWorld = false;
         GAME_STATE.isCannonFirePending = false;
         this.lastPoliceStateSequence = 0;
         this.lastVehicleImpulseSequence = 0;
@@ -841,8 +844,10 @@ export const MultiplayerClient = {
             case 'join': {
                 const user = String(msg.user || '');
                 if (!user) break;
-                this.onlineUsers.add(user);
-                this.updateOnlineRosterUI();
+                if (!this.onlineUsers.has(user)) {
+                    this.onlineUsers.add(user);
+                    this.updateOnlineRosterUI();
+                }
                 if (user === GAME_STATE.username) {
                     if (this.ws) {
                         this.ws.isRegistered = true;
@@ -995,8 +1000,10 @@ export const MultiplayerClient = {
 
                 const user = String(msg.username || '');
                 if (!user || user === GAME_STATE.username) break;
-                this.onlineUsers.add(user);
-                this.updateOnlineRosterUI();
+                if (!this.onlineUsers.has(user)) {
+                    this.onlineUsers.add(user);
+                    this.updateOnlineRosterUI();
+                }
                 const rp = this.getOrCreateRemotePlayer(user);
                 rp.applyNetworkMove(msg);
                 break;
@@ -1005,8 +1012,10 @@ export const MultiplayerClient = {
                 const sender = String(msg.from || msg.username || 'Игрок');
                 const text = String(msg.text || '');
                 if (!text) break;
-                this.onlineUsers.add(sender);
-                this.updateOnlineRosterUI();
+                if (!this.onlineUsers.has(sender)) {
+                    this.onlineUsers.add(sender);
+                    this.updateOnlineRosterUI();
+                }
                 this.appendChatMessage(sender, text);
                 SoundManager.playActionSound('cash');
 
@@ -1530,8 +1539,12 @@ export const MultiplayerClient = {
 
         const bar = document.getElementById('mp-online-users-bar');
         if (!bar) return;
+        const users = Array.from(this.onlineUsers);
+        const rosterKey = `${GAME_STATE.username || ''}::${users.join(',')}`;
+        if (this._lastRenderedRosterKey === rosterKey && bar.childElementCount === users.length) return;
+        this._lastRenderedRosterKey = rosterKey;
         bar.innerHTML = '';
-        this.onlineUsers.forEach(user => {
+        users.forEach(user => {
             const chip = document.createElement('button');
             chip.type = 'button';
             const isMe = user === GAME_STATE.username;

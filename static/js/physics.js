@@ -960,7 +960,7 @@ export function stepVehicleDynamics(car, input, dt) {
     }
 }
 
-const POLICE_IMPULSE_WINDOW_MS = 250;
+const IMPULSE_LEDGER_TTL_MS = 650;
 
 function defaultNowMs() {
     return (typeof performance !== 'undefined' && typeof performance.now === 'function')
@@ -971,7 +971,7 @@ function defaultNowMs() {
 function pruneImpulseLedger(ledger, nowMs) {
     if (!(ledger instanceof Map)) return;
     for (const [k, entry] of ledger.entries()) {
-        if (!entry || (nowMs - entry.timestamp) > POLICE_IMPULSE_WINDOW_MS) {
+        if (!entry || (nowMs - entry.timestamp) > IMPULSE_LEDGER_TTL_MS) {
             ledger.delete(k);
         }
     }
@@ -1511,7 +1511,9 @@ export function createVehiclePhysicsWorld(options = {}) {
             const allEvents = [];
 
             const isExternalVehicle = (v) => Boolean(v.remoteDriver || v.isServerControlled || v.isPolice);
-            while (accumulator >= fixedDt) {
+            let subSteps = 0;
+            const maxSubSteps = 6;
+            while (accumulator >= fixedDt && subSteps < maxSubSteps) {
                 for (const v of vehicles) { if (!isExternalVehicle(v)) resetVehiclePose(v); }
                 // 1. Advance individual vehicle dynamics for local non-remote vehicles
                 for (const v of vehicles) {
@@ -1533,7 +1535,9 @@ export function createVehiclePhysicsWorld(options = {}) {
                 }
 
                 accumulator -= fixedDt;
+                subSteps++;
             }
+            if (accumulator >= fixedDt) accumulator = fixedDt * 0.5;
 
             return allEvents;
         }

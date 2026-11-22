@@ -942,13 +942,20 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
         const dist = camera.position.distanceTo(pos);
         const metrics = getLabelDistanceMetrics(dist);
         if (!metrics.visible) {
-            item.labelEl.style.opacity = '0';
-            item.labelEl.style.display = 'none';
+            if (!item._isHidden) {
+                item.labelEl.style.opacity = '0';
+                item.labelEl.style.display = 'none';
+                item._isHidden = true;
+            }
             return;
         }
         if (isCar && item.labelTextEl) {
             const chasing = item.state === 'chase';
-            item.labelTextEl.textContent = chasing ? '🚓 ДПС • ПОГОНЯ!' : '🚓 ДПС';
+            const labelText = chasing ? '🚓 ДПС • ПОГОНЯ!' : '🚓 ДПС';
+            if (item._lastLabelText !== labelText) {
+                item.labelTextEl.textContent = labelText;
+                item._lastLabelText = labelText;
+            }
         }
         let worldAnchor;
         if (hasFullScratch) {
@@ -961,6 +968,7 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
             worldAnchor = { x: 0, y: 0, z: 0.5 };
         }
         if (worldAnchor.z < 1) {
+            item._isHidden = false;
             const sx = (worldAnchor.x * 0.5 + 0.5) * width;
             const sy = (-worldAnchor.y * 0.5 + 0.5) * height;
             item.labelEl.style.display = '';
@@ -968,8 +976,11 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
             item.labelEl.style.opacity = metrics.opacity;
             item.labelEl.style.zIndex = metrics.zIndex;
         } else {
-            item.labelEl.style.opacity = '0';
-            item.labelEl.style.display = 'none';
+            if (!item._isHidden) {
+                item.labelEl.style.opacity = '0';
+                item.labelEl.style.display = 'none';
+                item._isHidden = true;
+            }
         }
     };
 

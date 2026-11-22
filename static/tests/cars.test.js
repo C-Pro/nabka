@@ -714,7 +714,7 @@ describe('Police Car Specs & Heavy Collision Deflection', () => {
         expect(rStale.reason).toBe('STALE_SEQUENCE');
     });
 
-    test('reconciles local collision and vehicle_impulse within 250ms in both client-first and server-first order', () => {
+    test('reconciles local collision and vehicle_impulse in both client-first and server-first order', () => {
         // Order A: Client-first local collision then server vehicle_impulse
         const policeA = createTestCar({
             id: 'police_car_0',
@@ -776,7 +776,7 @@ describe('Police Car Specs & Heavy Collision Deflection', () => {
         // Velocity change must NOT double-apply!
         expect(playerB.vz - (-15)).toBeCloseTo(dvAfterLocal, 6);
 
-        // After > 250ms window expires, a subsequent impulse applies normally
+        // A distinct subsequent impulse still applies normally.
         const nextHit = applyVehicleImpulse(playerB, {
             police_car_id: 'police_car_0',
             dvx: 0,
@@ -785,6 +785,19 @@ describe('Police Car Specs & Heavy Collision Deflection', () => {
         }, 2400);
         expect(nextHit.applied).toBe(true);
         expect(nextHit.dvz).toBe(4);
+    });
+
+    test('local collision ledger absorbs a matching server impulse after 600ms', () => {
+        const car = createTestCar({ id: 'car_0', vx: 0, vz: 4, speed: 4 });
+        car._recentLocalPoliceImpulses = new Map([['police_car_0', {
+            timestamp: 1000, dvx: 0, dvz: 4, dyawRate: 0
+        }]]);
+        const result = applyVehicleImpulse(car, {
+            police_car_id: 'police_car_0', dvx: 0, dvz: 4, sequence: 1
+        }, 1600);
+        expect(result.reason).toBe('ALREADY_APPLIED_LOCALLY');
+        expect(result.dvz).toBe(0);
+        expect(car.vz).toBe(4);
     });
 
     test('applyVehicleImpulse rejects extreme dyaw_rate and preserves orthogonal dvx on oblique client-first reconciliation', () => {

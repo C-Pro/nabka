@@ -170,12 +170,17 @@ async function steerCarTowardPoint(page, telemetry, targetX, targetZ, { stuckSta
 
     await page.keyboard.up('KeyS');
     await page.keyboard.down('KeyW');
-    await page.keyboard.down('ShiftLeft');
 
+    const distToTarget = Math.hypot(targetX - telemetry.x, targetZ - telemetry.z);
     const desiredYaw = Math.atan2(targetX - telemetry.x, targetZ - telemetry.z);
     let yawDiff = desiredYaw - telemetry.yaw;
     while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
     while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+    if (distToTarget > 22 && Math.abs(yawDiff) < 0.35) {
+        await page.keyboard.down('ShiftLeft');
+    } else {
+        await page.keyboard.up('ShiftLeft');
+    }
     if (yawDiff > 0.1) {
         await page.keyboard.up('KeyD');
         await page.keyboard.down('KeyA');

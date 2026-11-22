@@ -1484,7 +1484,38 @@ func (pm *PoliceManager) stepPoliceCars(dt float64, users map[string]*UserState,
 					Inertia: pMass * (CarWidth*CarWidth + CarLength*CarLength) / 12.0,
 				}
 				prevVX, prevVZ, prevYawRate := bodyB.VX, bodyB.VZ, bodyB.YawRate
-				if ResolveVehiclePairCollision(&bodyA, &bodyB) {
+				collided := ResolveVehiclePairCollision(&bodyA, &bodyB)
+				dvx, dvz, dyr := 0.0, 0.0, 0.0
+				if collided {
+					dvx = bodyB.VX - prevVX
+					dvz = bodyB.VZ - prevVZ
+					dyr = bodyB.YawRate - prevYawRate
+				}
+				if car.Driver != "" && math.Hypot(dvx, dvz) <= 0.05 {
+					minCircleDist, nx, nz := closestVehicleCircleContact(&bodyA, &bodyB)
+					if collided || (minCircleDist < CarCollisionRadius*2.0+0.26 &&
+						(math.Hypot(bodyA.VX, bodyA.VZ) > 0.4 || math.Hypot(bodyB.VX, bodyB.VZ) > 0.4)) {
+						relN := math.Abs((prevVX-bodyA.VX)*nx + (prevVZ-bodyA.VZ)*nz)
+						if relN < 1.2 {
+							relN = math.Max(1.2, math.Hypot(bodyA.VX, bodyA.VZ)*0.5+math.Hypot(prevVX, prevVZ)*0.35)
+						}
+						invMA := 1.0 / bodyA.Mass
+						invMB := 1.0 / bodyB.Mass
+						jMag := (1.0 + CarRestitution) * relN / (invMA + invMB)
+						dvx = jMag * nx * invMB
+						dvz = jMag * nz * invMB
+						if !collided {
+							bodyB.VX = prevVX + dvx
+							bodyB.VZ = prevVZ + dvz
+							bodyB.Speed = bodyB.VX*math.Sin(bodyB.Yaw) + bodyB.VZ*math.Cos(bodyB.Yaw)
+							bodyA.VX -= jMag * nx * invMA
+							bodyA.VZ -= jMag * nz * invMA
+							bodyA.Speed = bodyA.VX*math.Sin(bodyA.Yaw) + bodyA.VZ*math.Cos(bodyA.Yaw)
+							collided = true
+						}
+					}
+				}
+				if collided {
 					pc.applyBody(bodyA)
 					car.X = bodyB.X
 					car.Z = bodyB.Z
@@ -1510,9 +1541,6 @@ func (pm *PoliceManager) stepPoliceCars(dt float64, users map[string]*UserState,
 							u.YawRate = car.YawRate
 							u.Speed = car.Speed
 						}
-						dvx := bodyB.VX - prevVX
-						dvz := bodyB.VZ - prevVZ
-						dyr := bodyB.YawRate - prevYawRate
 						key := impulsePairKey{policeCarID: pc.id, carID: cid}
 						acc := accum[key]
 						if acc == nil {
@@ -2280,6 +2308,41 @@ func (pc *policeCarEntity) applyBody(b VehicleBody) {
 	pc.vz = b.VZ
 	pc.yawRate = b.YawRate
 	pc.speed = b.Speed
+}
+
+// closestVehicleCircleContact finds the nearest pair of vehicle collision circles.
+func closestVehicleCircleContact(carA, carB *VehicleBody) (minCircleDist, nx, nz float64) {
+	sinA, cosA := math.Sin(carA.Yaw), math.Cos(carA.Yaw)
+	sinB, cosB := math.Sin(carB.Yaw), math.Cos(carB.Yaw)
+	circlesA := [3][2]float64{
+		{carA.X + CarAxleOffset*sinA, carA.Z + CarAxleOffset*cosA},
+		{carA.X, carA.Z},
+		{carA.X - CarAxleOffset*sinA, carA.Z - CarAxleOffset*cosA},
+	}
+	circlesB := [3][2]float64{
+		{carB.X + CarAxleOffset*sinB, carB.Z + CarAxleOffset*cosB},
+		{carB.X, carB.Z},
+		{carB.X - CarAxleOffset*sinB, carB.Z - CarAxleOffset*cosB},
+	}
+	minCircleDist = math.Inf(1)
+	for _, cA := range circlesA {
+		for _, cB := range circlesB {
+			dx, dz := cB[0]-cA[0], cB[1]-cA[1]
+			dist := math.Hypot(dx, dz)
+			if dist < minCircleDist {
+				minCircleDist = dist
+				nx, nz = dx, dz
+			}
+		}
+	}
+	if minCircleDist > 1e-4 {
+		return minCircleDist, nx / minCircleDist, nz / minCircleDist
+	}
+	dx, dz := carB.X-carA.X, carB.Z-carA.Z
+	if dist := math.Hypot(dx, dz); dist > 1e-4 {
+		return minCircleDist, dx / dist, dz / dist
+	}
+	return minCircleDist, 1, 0
 }
 
 // ResolveVehiclePairCollision executes the exact 3-circle rigid-body vehicle-to-vehicle collision

@@ -2,6 +2,63 @@ import { expect, test } from 'bun:test';
 import { MultiplayerClient } from '../js/network.js';
 import { GAME_STATE } from '../js/state.js';
 
+test('move and chat update roster only when a sender first appears', () => {
+    const previousUsername = GAME_STATE.username;
+    GAME_STATE.username = 'alice';
+    let rosterUpdates = 0;
+    const remote = { applyNetworkMove() {}, triggerSpeech() {} };
+    const client = Object.assign(Object.create(MultiplayerClient), {
+        onlineUsers: new Set(['alice']),
+        remotePlayers: new Map(),
+        updateOnlineRosterUI() { rosterUpdates++; },
+        getOrCreateRemotePlayer() { return remote; },
+        appendChatMessage() {}
+    });
+    try {
+        client.handleServerMessage({ type: 'move', username: 'bob', x: 0, z: 0 });
+        client.handleServerMessage({ type: 'move', username: 'bob', x: 1, z: 0 });
+        client.handleServerMessage({ type: 'chat', from: 'bob', text: 'Привет' });
+        expect(rosterUpdates).toBe(1);
+        client.handleServerMessage({ type: 'chat', from: 'charlie', text: 'Привет' });
+        expect(rosterUpdates).toBe(2);
+    } finally {
+        GAME_STATE.username = previousUsername;
+    }
+});
+
+test('unchanged online roster retains existing chip DOM', () => {
+    const previousDocument = globalThis.document;
+    const previousUsername = GAME_STATE.username;
+    GAME_STATE.username = 'alice';
+    let rebuilds = 0;
+    const bar = {
+        children: [],
+        get childElementCount() { return this.children.length; },
+        set innerHTML(_value) { rebuilds++; this.children = []; },
+        appendChild(child) { this.children.push(child); }
+    };
+    globalThis.document = {
+        getElementById(id) { return id === 'mp-online-users-bar' ? bar : null; },
+        createElement() { return { addEventListener() {} }; }
+    };
+    const client = Object.assign(Object.create(MultiplayerClient), {
+        onlineUsers: new Set(['alice', 'bob']),
+        _lastRenderedRosterKey: null
+    });
+    try {
+        client.updateOnlineRosterUI();
+        client.updateOnlineRosterUI();
+        expect(rebuilds).toBe(1);
+        client.onlineUsers.add('charlie');
+        client.updateOnlineRosterUI();
+        expect(rebuilds).toBe(2);
+    } finally {
+        GAME_STATE.username = previousUsername;
+        if (previousDocument === undefined) delete globalThis.document;
+        else globalThis.document = previousDocument;
+    }
+});
+
 test('UI initialization connects to the serving origin without a localhost opt-in', () => {
     const previousWindow = globalThis.window;
     const previousDocument = globalThis.document;
