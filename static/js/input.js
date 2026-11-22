@@ -218,7 +218,7 @@ export function bindInputControls(worldMap = {}) {
                 if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
                     document.activeElement.blur();
                 }
-                if (GAME_STATE.activeNpcChat || GAME_STATE.activePoliceEncounter) {
+                if (GAME_STATE.activeNpcChat || GAME_STATE.activePoliceEncounter || (GAME_STATE.policeFineSequence && GAME_STATE.policeFineSequence.active)) {
                     e.preventDefault?.();
                     closeNpcDialogue();
                 }
@@ -802,6 +802,11 @@ export function bindInputControls(worldMap = {}) {
     if (helpModal) {
         if (btnHelp) {
             btnHelp.addEventListener('click', () => {
+                if ((GAME_STATE.activePoliceEncounter && GAME_STATE.activePoliceEncounter.stage !== 'resolved') ||
+                    (GAME_STATE.policeFineSequence && GAME_STATE.policeFineSequence.active)) {
+                    showToast('👮 Сначала ответьте полицейскому!', 'amber', 1500);
+                    return;
+                }
                 clearMovementInput();
                 helpModal.classList.remove('hidden');
             });

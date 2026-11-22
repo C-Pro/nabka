@@ -1893,6 +1893,9 @@ export const World = {
     },
 
     cycleCameraMode() {
+        if (GAME_STATE.policeFineSequence && GAME_STATE.policeFineSequence.active) {
+            return;
+        }
         GAME_STATE.cameraMode = (GAME_STATE.cameraMode + 1) % GAME_STATE.cameraModes.length;
         const mode = GAME_STATE.cameraModes[GAME_STATE.cameraMode];
         GAME_STATE.cameraDistance = mode.dist;

@@ -428,6 +428,7 @@ func TestPoliceMsgPackZeroAndNegativeValues(t *testing.T) {
 		SampleTimeMS: 0,
 		FootCops:     make([]PoliceFootCopState, 0),
 		PoliceCars:   make([]PoliceCarState, 0),
+		VehicleBans:  make([]VehicleBanState, 0),
 	})
 	var psMap map[string]any
 	_ = msgpack.Unmarshal(psBytes, &psMap)
@@ -445,43 +446,77 @@ func TestPoliceMsgPackZeroAndNegativeValues(t *testing.T) {
 	if !ok || pcSlice == nil {
 		t.Fatalf("expected police_cars encoded as non-nil empty array, got %#v", psMap["police_cars"])
 	}
+	vbSlice, ok := psMap["vehicle_bans"].([]any)
+	if !ok || vbSlice == nil {
+		t.Fatalf("expected vehicle_bans encoded as non-nil empty array, got %#v", psMap["vehicle_bans"])
+	}
 
-	// 4. OutboundPoliceEncounterStartMsg with Russian UTF-8 (str16 >255 bytes) and fine=0
+	// 4. OutboundPoliceEncounterStartMsg with Russian UTF-8 (str16 >255 bytes), traffic kind, blocks_vehicle, and fine=0
 	longRussian := "Здравия желаю, сержант ППС Дробышев. Ориентировка по Спортивной набережной: не видели ли вы тут молодого человека в чёрной ветровке и тёмных спортивных штанах? Говорят, ушёл от Юбилейного пляжа в сторону кинотеатра Океан и улицы Адмирала Фокина на Набке."
 	encBytes, _ := MarshalMsgPack(OutboundPoliceEncounterStartMsg{
-		Type:        TypePoliceEncounterStart,
-		EncounterID: "enc_1",
-		CopID:       "cop_0",
-		CopName:     "Сержант ППС Дробышев",
-		ScenarioID:  "person_search",
-		Title:       "Ориентировка на Набке",
-		Opening:     longRussian,
-		Options:     []PoliceDialogueOptionView{{Index: 0, Text: "Не видел", Fine: 0}},
-		TargetUser:  "vasya",
+		Type:          TypePoliceEncounterStart,
+		EncounterID:   "enc_1",
+		CopID:         "dps_police_car_0",
+		CopName:       "Инспектор ДПС Соколов",
+		ScenarioID:    "traffic_speeding",
+		Title:         "Остановка ДПС: превышение скорости",
+		Opening:       longRussian,
+		Options:       []PoliceDialogueOptionView{{Index: 0, Text: "Оформляйте", Fine: 5000, BlocksVehicle: true}},
+		TargetUser:    "vasya",
+		EncounterKind: EncounterKindTraffic,
+		CarID:         "car_0",
 	})
 	var encMap map[string]any
 	_ = msgpack.Unmarshal(encBytes, &encMap)
-	if encMap["opening"] != longRussian {
-		t.Fatalf("Russian UTF-8 str16 round-trip mismatch: %v", encMap["opening"])
+	if encMap["opening"] != longRussian || encMap["encounter_kind"] != EncounterKindTraffic || encMap["car_id"] != "car_0" {
+		t.Fatalf("traffic police_encounter_start round-trip mismatch: %+v", encMap)
 	}
 
-	// 5. OutboundPoliceEncounterResultMsg, OutboundPoliceChaseMsg, OutboundVehicleImpulseMsg zero/negative fields
+	// 5. OutboundPoliceEncounterResultMsg, OutboundPoliceFineStopMsg, OutboundPoliceChaseMsg, OutboundVehicleImpulseMsg zero/negative fields
 	resBytes, _ := MarshalMsgPack(OutboundPoliceEncounterResultMsg{
-		Type:        TypePoliceEncounterResult,
-		EncounterID: "enc_1",
-		CopID:       "cop_0",
-		CopName:     "Сержант ППС Дробышев",
-		ScenarioID:  "weed_shakedown",
-		TargetUser:  "vasya",
-		OptionIndex: 0,
-		ReplyText:   "Свободен",
-		Fine:        0,
-		Money:       -2500,
+		Type:           TypePoliceEncounterResult,
+		EncounterID:    "enc_1",
+		CopID:          "dps_police_car_0",
+		CopName:        "Инспектор ДПС Соколов",
+		ScenarioID:     "traffic_speeding",
+		TargetUser:     "vasya",
+		OptionIndex:    0,
+		ReplyText:      "Запрет",
+		Fine:           0,
+		Money:          -2500,
+		CarID:          "car_0",
+		VehicleBlocked: true,
+		VehicleBanSec:  300,
 	})
 	var resMap map[string]any
 	_ = msgpack.Unmarshal(resBytes, &resMap)
-	if fmt.Sprint(resMap["option_index"]) != "0" || fmt.Sprint(resMap["fine"]) != "0" || fmt.Sprint(resMap["money"]) != "-2500" {
-		t.Fatalf("expected zero option_index/fine and negative money, got %+v", resMap)
+	if fmt.Sprint(resMap["option_index"]) != "0" || fmt.Sprint(resMap["fine"]) != "0" || fmt.Sprint(resMap["money"]) != "-2500" ||
+		resMap["vehicle_blocked"] != true || fmt.Sprint(resMap["vehicle_ban_sec"]) != "300" {
+		t.Fatalf("expected zero option_index/fine, negative money, and ban fields, got %+v", resMap)
+	}
+
+	fsBytes, _ := MarshalMsgPack(OutboundPoliceFineStopMsg{
+		Type:        TypePoliceFineStop,
+		Stage:       "approaching",
+		PoliceCarID: "police_car_0",
+		CarID:       "car_0",
+		OfficerID:   "dps_police_car_0",
+		OfficerName: "Инспектор ДПС Соколов",
+		TargetUser:  "vasya",
+		ExitX:       0,
+		ExitZ:       0,
+		ExitYaw:     0,
+		Reason:      "speeding",
+	})
+	var fsMap map[string]any
+	_ = msgpack.Unmarshal(fsBytes, &fsMap)
+	for _, k := range []string{"stage", "police_car_id", "car_id", "officer_id", "officer_name", "target_user", "exit_x", "exit_z", "exit_yaw", "reason"} {
+		if _, ok := fsMap[k]; !ok {
+			t.Fatalf("expected key %q present on zero-coord police_fine_stop, got %+v", k, fsMap)
+		}
+	}
+	if fsMap["officer_name"] != "Инспектор ДПС Соколов" {
+		t.Fatalf("expected Russian officer_name preserved, got %v", fsMap["officer_name"])
 	}
 
 	chaseBytes, _ := MarshalMsgPack(OutboundPoliceChaseMsg{

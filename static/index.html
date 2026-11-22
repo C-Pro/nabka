@@ -374,8 +374,11 @@
             </div>
         </div>
 
+        <!-- Backdrop Blocker during non-dismissible Police Encounters -->
+        <div id="police-modal-blocker" class="hidden fixed inset-0 z-[45] pointer-events-auto"></div>
+
         <!-- Interactive NPC Dialogue Modal (Authentic Vladivostok Locals) -->
-        <div id="npc-dialogue-modal" role="dialog" aria-modal="true" aria-labelledby="npc-modal-name" class="hidden absolute left-1/2 -translate-x-1/2 z-40 w-full max-w-xl px-3 pointer-events-auto">
+        <div id="npc-dialogue-modal" role="dialog" aria-modal="true" aria-labelledby="npc-modal-name" class="hidden absolute left-1/2 -translate-x-1/2 z-50 w-full max-w-xl px-3 pointer-events-auto">
             <div class="hud-glass rounded-2xl p-4 border border-sky-400/50 shadow-2xl flex flex-col gap-3">
                 <!-- NPC Header -->
                 <div class="flex items-center justify-between border-b border-slate-700/80 pb-2.5">
@@ -398,6 +401,11 @@
                         <i class="fa-solid fa-xmark" aria-hidden="true"></i>
                     </button>
                 </div>
+
+                <!-- Non-dismissible police notice -->
+                <p id="police-dialogue-lock-notice" class="hidden text-[11px] font-semibold text-amber-200 bg-amber-950/70 border border-amber-500/40 rounded-lg px-2.5 py-1.5">
+                    👮 Диалог с полицией нельзя закрыть — выберите вариант ответа.
+                </p>
 
                 <!-- Chat Messages History -->
                 <div id="npc-chat-history" class="max-h-48 overflow-y-auto space-y-2 pr-1 text-xs sm:text-sm"></div>

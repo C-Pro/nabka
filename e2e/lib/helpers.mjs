@@ -14,6 +14,7 @@ export const RESERVED_POLICE_TYPES = [
     'police_state',
     'police_encounter_start',
     'police_encounter_result',
+    'police_fine_stop',
     'police_chase',
     'vehicle_impulse'
 ];
@@ -245,8 +246,32 @@ export async function startChaseAndCollide(client, { carId = 'car_0', timeoutMs 
     throw new Error(`Timed out after ${timeoutMs}ms waiting for vehicle_impulse on ${carId}`);
 }
 
+export async function completeTrafficFineStop(client, { optionIndex = 3, fromIndex = 0, timeoutMs = 10000 } = {}) {
+    const startCur = fromIndex || 0;
+    const fineStop = await client.waitForType('police_fine_stop', {
+        fromIndex: startCur,
+        timeoutMs,
+        predicate: (m) => m.target_user === client.username
+    });
+    const enc = await client.waitForType('police_encounter_start', {
+        fromIndex: startCur,
+        timeoutMs,
+        predicate: (m) => m.target_user === client.username && m.encounter_kind === 'traffic'
+    });
+    const opts = enc.options || [];
+    const opt = opts.find((o) => o.index === optionIndex) || opts[0];
+    const resCur = client.cursor();
+    client.sendPoliceChoice(enc.encounter_id, opt.index ?? 0);
+    const res = await client.waitForType('police_encounter_result', {
+        fromIndex: resCur,
+        timeoutMs: 5000,
+        predicate: (m) => m.encounter_id === enc.encounter_id
+    });
+    return { fineStop, encounter: enc, result: res };
+}
+
 /**
- * Repeatedly incurs genuine police fines (combining foot cops and speeding stops, respecting cooldowns)
+ * Repeatedly incurs genuine police fines (combining foot cops and traffic fine-stops, respecting cooldowns)
  * until client.latestMoney < targetMoney.
  */
 export async function incurFinesUntilBelow(client, targetMoney = 0, { timeoutMs = 240000 } = {}) {
@@ -263,6 +288,63 @@ export async function incurFinesUntilBelow(client, targetMoney = 0, { timeoutMs 
             return client.latestMoney;
         }
         const ps = client.latestPoliceState || (await waitForPoliceState(client, null, 4000));
+
+        // Prefer unblocked 66666 traffic stops first when far above targetMoney (only takes 2 stops to go < 0!)
+        const activeBans = new Set((ps.vehicle_bans || []).map((b) => b.car_id));
+        const unbannedCar = ['car_0', 'car_1', 'car_2', 'car_3'].find((cid) => !activeBans.has(cid));
+        const patrolCar = (ps.police_cars || []).find((pc) => pc.state === 'patrol');
+        if (unbannedCar && patrolCar && Date.now() - lastCarStopAt >= 6200) {
+            try {
+                const cur = client.cursor();
+                const { chase, policeCarId } = await driveNearPatrolPoliceCar(client, {
+                    carId: unbannedCar,
+                    speedMs: 24.0,
+                    durationMs: 3000
+                });
+                if (chase) {
+                    const stopDeadline = Date.now() + 8000;
+                    let stopped = false;
+                    while (Date.now() < stopDeadline) {
+                        const ended = client
+                            .messagesSince(cur)
+                            .find(
+                                (m) =>
+                                    m.type === 'police_chase' &&
+                                    m.target_user === client.username &&
+                                    (m.status === 'stopped' || m.status === 'evaded')
+                            );
+                        if (ended) {
+                            stopped = ended.status === 'stopped';
+                            break;
+                        }
+                        const pc = (client.latestPoliceState?.police_cars || []).find((c) => c.id === policeCarId) || patrolCar;
+                        client.sendMoveDriving({
+                            car_id: unbannedCar,
+                            x: pc.x + 2.0,
+                            y: 0,
+                            z: pc.z + 1.0,
+                            speed: 0,
+                            vx: 0,
+                            vz: 0,
+                            yaw: 0,
+                            yaw_rate: 0,
+                            drift: false,
+                            lights: true
+                        });
+                        await sleep(50);
+                    }
+                    if (stopped) {
+                        await completeTrafficFineStop(client, { optionIndex: 3, fromIndex: cur, timeoutMs: 8000 });
+                    }
+                    lastCarStopAt = Date.now();
+                    movePedestrianOffPromenade(client);
+                    continue;
+                }
+            } catch {
+                movePedestrianOffPromenade(client);
+            }
+        }
+
         const patrolCop = (ps.foot_cops || []).find((c) => c.state === 'patrol');
         if (patrolCop && Date.now() - lastFootDoneAt >= 15500) {
             try {
@@ -286,51 +368,6 @@ export async function incurFinesUntilBelow(client, targetMoney = 0, { timeoutMs 
             }
         }
 
-        const patrolCar = (ps.police_cars || []).find((pc) => pc.state === 'patrol');
-        if (patrolCar && Date.now() - lastCarStopAt >= 6200) {
-            try {
-                const cur = client.cursor();
-                const { chase, policeCarId } = await driveNearPatrolPoliceCar(client, {
-                    carId: 'car_0',
-                    speedMs: 24.0,
-                    durationMs: 3000
-                });
-                if (chase) {
-                    const stopDeadline = Date.now() + 8000;
-                    while (Date.now() < stopDeadline) {
-                        const ended = client
-                            .messagesSince(cur)
-                            .find(
-                                (m) =>
-                                    m.type === 'police_chase' &&
-                                    m.target_user === client.username &&
-                                    (m.status === 'stopped' || m.status === 'evaded')
-                            );
-                        if (ended) break;
-                        const pc = (client.latestPoliceState?.police_cars || []).find((c) => c.id === policeCarId) || patrolCar;
-                        client.sendMoveDriving({
-                            car_id: 'car_0',
-                            x: pc.x + 1.0,
-                            y: 0,
-                            z: pc.z + 1.0,
-                            speed: 0,
-                            vx: 0,
-                            vz: 0,
-                            yaw: 0,
-                            yaw_rate: 0,
-                            drift: false,
-                            lights: true
-                        });
-                        await sleep(50);
-                    }
-                    lastCarStopAt = Date.now();
-                    movePedestrianOffPromenade(client);
-                    continue;
-                }
-            } catch {
-                movePedestrianOffPromenade(client);
-            }
-        }
         await sleep(150);
     }
     throw new Error(`Did not reach balance < ${targetMoney} within ${timeoutMs}ms (current=${client.latestMoney})`);
@@ -361,20 +398,27 @@ export async function drainBalanceToSmallPositive(
         }
 
         const ps = client.latestPoliceState || (await waitForPoliceState(client, null, 4000));
+        const activeBans = new Set((ps.vehicle_bans || []).map((b) => b.car_id));
+        const unbannedCar = ['car_0', 'car_1', 'car_2', 'car_3'].find((cid) => !activeBans.has(cid));
 
-        // Use police car stops (5000 ₽) while safe (> 5000 + minMoney - 1), avoiding 7501..8500 if we can land directly
-        const safeCarStop = typeof money === 'number' && money >= 5000 + minMoney && !(money > 7500 && money <= 8500);
+        // Use 66666 unblocked stop first if money >= 66666 + minMoney, or 25k/15k/5k stops on available cars
+        const safeCarStop =
+            unbannedCar &&
+            typeof money === 'number' &&
+            money >= 5000 + minMoney &&
+            !(money > 7500 && money <= 8500);
         const patrolCar = (ps.police_cars || []).find((pc) => pc.state === 'patrol');
         if (safeCarStop && patrolCar && Date.now() - lastCarStopAt >= 6200) {
             try {
                 const cur = client.cursor();
                 const { chase, policeCarId } = await driveNearPatrolPoliceCar(client, {
-                    carId: 'car_0',
+                    carId: unbannedCar,
                     speedMs: 24.0,
                     durationMs: 3000
                 });
                 if (chase) {
                     const stopDeadline = Date.now() + 8000;
+                    let stopped = false;
                     while (Date.now() < stopDeadline) {
                         const ended = client
                             .messagesSince(cur)
@@ -384,11 +428,14 @@ export async function drainBalanceToSmallPositive(
                                     m.target_user === client.username &&
                                     (m.status === 'stopped' || m.status === 'evaded')
                             );
-                        if (ended) break;
+                        if (ended) {
+                            stopped = ended.status === 'stopped';
+                            break;
+                        }
                         const pc = (client.latestPoliceState?.police_cars || []).find((c) => c.id === policeCarId) || patrolCar;
                         client.sendMoveDriving({
-                            car_id: 'car_0',
-                            x: pc.x + 1.0,
+                            car_id: unbannedCar,
+                            x: pc.x + 2.0,
                             y: 0,
                             z: pc.z + 1.0,
                             speed: 0,
@@ -400,6 +447,27 @@ export async function drainBalanceToSmallPositive(
                             lights: true
                         });
                         await sleep(50);
+                    }
+                    if (stopped) {
+                        await client.waitForType('police_fine_stop', {
+                            fromIndex: cur,
+                            timeoutMs: 4000,
+                            predicate: (m) => m.target_user === client.username
+                        });
+                        const enc = await client.waitForType('police_encounter_start', {
+                            fromIndex: cur,
+                            timeoutMs: 8000,
+                            predicate: (m) => m.target_user === client.username && m.encounter_kind === 'traffic'
+                        });
+                        const opts = [...(enc.options || [])].filter((o) => money - o.fine >= minMoney);
+                        const chosen = opts.sort((a, b) => (b.fine || 0) - (a.fine || 0))[0] || enc.options[0];
+                        const resCur = client.cursor();
+                        client.sendPoliceChoice(enc.encounter_id, chosen.index ?? 0);
+                        await client.waitForType('police_encounter_result', {
+                            fromIndex: resCur,
+                            timeoutMs: 4000,
+                            predicate: (m) => m.encounter_id === enc.encounter_id
+                        });
                     }
                     lastCarStopAt = Date.now();
                     movePedestrianOffPromenade(client);

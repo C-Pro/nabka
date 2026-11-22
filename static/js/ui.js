@@ -6,7 +6,9 @@ import {
     resolveZoneName,
     startPoliceEncounterState,
     resolvePoliceEncounterState,
-    clearPoliceEncounterState
+    clearPoliceEncounterState,
+    endPoliceFineSequenceState,
+    getVehicleBanRemainingSec
 } from './state.js';
 import { SoundManager } from './audio.js';
 import { getQuestById, canAcceptQuest, acceptQuest, consumeAbility, hasQuestAbility, isQuestCompleted } from './quests.js';
@@ -14,6 +16,7 @@ import { triggerCameraShake } from './camera-effects.js';
 import { MultiplayerClient } from './network.js';
 import { clearMovementInput } from './input.js';
 import { Player } from './entities.js';
+import { World } from './world.js';
 
 export function substitutePlayerMentions(text, username = (typeof GAME_STATE !== 'undefined' ? GAME_STATE.username : 'Игрок')) {
     if (!text) return '';
@@ -138,6 +141,11 @@ export function completePOI(poiId, message, cashReward) {
 }
 
 export function openNpcDialogue(npc, playerPos) {
+    if ((GAME_STATE.activePoliceEncounter && GAME_STATE.activePoliceEncounter.stage !== 'resolved') ||
+        (GAME_STATE.policeFineSequence && GAME_STATE.policeFineSequence.active)) {
+        showToast('👮 Сначала ответьте полицейскому!', 'amber', 1500);
+        return false;
+    }
     SoundManager.ensureInit();
     SoundManager.playActionSound('cash');
     GAME_STATE.activeNpcChat = npc;
@@ -160,20 +168,26 @@ export function openNpcDialogue(npc, playerPos) {
         const badgeEl = document.getElementById('npc-modal-badge');
         const roleEl = document.getElementById('npc-modal-role');
         const closeBtn = document.getElementById('btn-close-npc-chat');
+        const lockNotice = document.getElementById('police-dialogue-lock-notice');
+        const blocker = document.getElementById('police-modal-blocker');
+        const modal = document.getElementById('npc-dialogue-modal');
         if (avatarEl) avatarEl.textContent = npc.persona.emoji;
         if (nameEl) nameEl.textContent = npc.persona.name;
         if (badgeEl) badgeEl.textContent = 'Местный • 25 RUS';
         if (roleEl) roleEl.textContent = npc.persona.role;
         if (closeBtn) {
             closeBtn.disabled = false;
-            closeBtn.classList?.remove('opacity-40', 'pointer-events-none');
+            closeBtn.classList?.remove('hidden', 'opacity-40', 'pointer-events-none');
             closeBtn.removeAttribute?.('aria-disabled');
         }
+        if (lockNotice) lockNotice.classList?.add('hidden');
+        if (blocker) blocker.classList?.add('hidden');
+        if (modal) modal.removeAttribute?.('aria-describedby');
 
         renderNpcChatHistory(npc);
         renderNpcDialogueOptions(npc);
 
-        document.getElementById('npc-dialogue-modal').classList.remove('hidden');
+        modal?.classList?.remove('hidden');
     }
     const poiKey = 'npc_' + (npc.persona.id || npc.persona.name);
     if (!GAME_STATE.completedPOIs.has(poiKey)) {
@@ -183,25 +197,52 @@ export function openNpcDialogue(npc, playerPos) {
 
 export function closeNpcDialogue(options = {}) {
     const force = options === true || Boolean(options && options.force);
-    if (!force && GAME_STATE.activePoliceEncounter && GAME_STATE.activePoliceEncounter.stage !== 'resolved') {
+    const enc = GAME_STATE.activePoliceEncounter;
+    const fineActive = Boolean(GAME_STATE.policeFineSequence && GAME_STATE.policeFineSequence.active);
+    if (!force && ((enc && enc.stage !== 'resolved') || (fineActive && (!enc || enc.stage !== 'resolved')))) {
         showToast('👮 Сначала ответьте полицейскому!', 'amber', 1500);
         return false;
     }
 
+    const prevEncounter = enc;
     GAME_STATE.activeNpcChat = null;
     clearPoliceEncounterState(GAME_STATE);
+    const seqEnd = endPoliceFineSequenceState(GAME_STATE);
     GAME_STATE.keys.w = GAME_STATE.keys.a = GAME_STATE.keys.s = GAME_STATE.keys.d = GAME_STATE.keys.shift = GAME_STATE.keys.space = false;
+
+    if (prevEncounter && prevEncounter.stage === 'resolved' && prevEncounter.encounter_kind === 'traffic' &&
+        !prevEncounter.vehicle_blocked && prevEncounter.car_id && Array.isArray(World?.vehicles)) {
+        const targetCar = World.vehicles.find(v => v && v.id === prevEncounter.car_id);
+        if (targetCar) {
+            targetCar._lastExitTime = 0;
+        }
+    }
+
     if (typeof document !== 'undefined') {
         const modal = document.getElementById('npc-dialogue-modal');
-        if (modal) modal.classList.add('hidden');
+        if (modal) {
+            modal.classList?.add('hidden');
+            modal.removeAttribute?.('aria-describedby');
+        }
+        const blocker = document.getElementById('police-modal-blocker');
+        if (blocker) blocker.classList?.add('hidden');
+        const lockNotice = document.getElementById('police-dialogue-lock-notice');
+        if (lockNotice) lockNotice.classList?.add('hidden');
         const closeBtn = document.getElementById('btn-close-npc-chat');
         if (closeBtn) {
             closeBtn.disabled = false;
-            closeBtn.classList?.remove('opacity-40', 'pointer-events-none');
+            closeBtn.classList?.remove('hidden', 'opacity-40', 'pointer-events-none');
             closeBtn.removeAttribute?.('aria-disabled');
         }
         const badgeEl = document.getElementById('npc-modal-badge');
         if (badgeEl) badgeEl.textContent = 'Местный • 25 RUS';
+        if (seqEnd.ended) {
+            const camLabel = document.getElementById('cam-mode-label');
+            const activeMode = GAME_STATE.cameraModes?.[GAME_STATE.cameraMode];
+            if (camLabel && activeMode) {
+                camLabel.textContent = `Камера: ${activeMode.name}`;
+            }
+        }
     }
     return true;
 }
@@ -266,7 +307,9 @@ function renderPoliceEncounterOptions(encounter, onSelectOption) {
         numBadge.textContent = '1';
 
         const labelSpan = document.createElement('span');
-        labelSpan.textContent = 'Понятно, иду дальше';
+        labelSpan.textContent = (encounter.encounter_kind === 'traffic' && !encounter.vehicle_blocked)
+            ? 'Понятно, еду дальше'
+            : 'Понятно, иду дальше';
 
         closeOptBtn.appendChild(numBadge);
         closeOptBtn.appendChild(labelSpan);
@@ -275,6 +318,7 @@ function renderPoliceEncounterOptions(encounter, onSelectOption) {
         return;
     }
 
+    const isTraffic = encounter.encounter_kind === 'traffic';
     encounter.options.forEach((opt, idx) => {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -286,9 +330,13 @@ function renderPoliceEncounterOptions(encounter, onSelectOption) {
         numBadge.textContent = String(idx + 1);
 
         const labelSpan = document.createElement('span');
-        labelSpan.textContent = opt.fine > 0
+        let labelText = opt.fine > 0
             ? `${opt.text} (−${Math.abs(opt.fine).toLocaleString('ru-RU')} ₽)`
             : opt.text;
+        if (isTraffic) {
+            labelText += opt.blocks_vehicle ? ' • запрет авто 5 мин' : ' • без запрета авто';
+        }
+        labelSpan.textContent = labelText;
 
         btn.appendChild(numBadge);
         btn.appendChild(labelSpan);
@@ -357,6 +405,8 @@ export function openPoliceEncounterModal(msg, onSelectOption = null) {
         const badgeEl = document.getElementById('npc-modal-badge');
         const roleEl = document.getElementById('npc-modal-role');
         const closeBtn = document.getElementById('btn-close-npc-chat');
+        const lockNotice = document.getElementById('police-dialogue-lock-notice');
+        const blocker = document.getElementById('police-modal-blocker');
         const modal = document.getElementById('npc-dialogue-modal');
 
         if (avatarEl) avatarEl.textContent = '👮';
@@ -366,19 +416,32 @@ export function openPoliceEncounterModal(msg, onSelectOption = null) {
         if (closeBtn) {
             if (encounter.stage !== 'resolved') {
                 closeBtn.disabled = true;
-                closeBtn.classList?.add('opacity-40', 'pointer-events-none');
+                closeBtn.classList?.add('hidden', 'opacity-40', 'pointer-events-none');
                 closeBtn.setAttribute?.('aria-disabled', 'true');
             } else {
                 closeBtn.disabled = false;
-                closeBtn.classList?.remove('opacity-40', 'pointer-events-none');
+                closeBtn.classList?.remove('hidden', 'opacity-40', 'pointer-events-none');
                 closeBtn.removeAttribute?.('aria-disabled');
             }
+        }
+        if (lockNotice) {
+            lockNotice.classList?.toggle('hidden', encounter.stage === 'resolved');
+        }
+        if (blocker) {
+            blocker.classList?.remove('hidden');
         }
 
         renderPoliceEncounterHistory(encounter);
         renderPoliceEncounterOptions(encounter, onSelectOption);
 
-        if (modal) modal.classList.remove('hidden');
+        if (modal) {
+            modal.classList?.remove('hidden');
+            if (encounter.stage !== 'resolved') {
+                modal.setAttribute?.('aria-describedby', 'police-dialogue-lock-notice');
+            } else {
+                modal.removeAttribute?.('aria-describedby');
+            }
+        }
     }
 
     return true;
@@ -395,15 +458,26 @@ export function resolvePoliceEncounterModal(msg) {
         showToast(`🚨 Штраф полиции: -₽ ${Math.abs(Number(msg.fine)).toLocaleString('ru-RU')}`, 'amber', 3500);
         SoundManager.playPoliceChime?.('fine');
     }
+    if (isLocalTarget && msg) {
+        if (msg.vehicle_blocked) {
+            showToast('🚫 Наложен запрет на эксплуатацию транспортного средства на 5 минут!', 'red', 4500);
+        } else if (res.encounter && res.encounter.encounter_kind === 'traffic') {
+            showToast('✅ Максимальный штраф оплачен — запрет не наложен, можете уезжать!', 'emerald', 3500);
+        }
+    }
 
     if (res.resolved && res.encounter && typeof document !== 'undefined') {
         renderPoliceEncounterHistory(res.encounter);
         const closeBtn = document.getElementById('btn-close-npc-chat');
         if (closeBtn) {
             closeBtn.disabled = false;
-            closeBtn.classList?.remove('opacity-40', 'pointer-events-none');
+            closeBtn.classList?.remove('hidden', 'opacity-40', 'pointer-events-none');
             closeBtn.removeAttribute?.('aria-disabled');
         }
+        const lockNotice = document.getElementById('police-dialogue-lock-notice');
+        if (lockNotice) lockNotice.classList?.add('hidden');
+        const modal = document.getElementById('npc-dialogue-modal');
+        if (modal) modal.removeAttribute?.('aria-describedby');
         renderPoliceEncounterOptions(res.encounter, null);
     }
     return res;
@@ -950,8 +1024,12 @@ export function updateScreenProjections({ camera, playerPos, dunya, worldLabels,
             return;
         }
         if (isCar && item.labelTextEl) {
-            const chasing = item.state === 'chase';
-            const labelText = chasing ? '🚓 ДПС • ПОГОНЯ!' : '🚓 ДПС';
+            let labelText = '🚓 ДПС';
+            if (item.state === 'chase') {
+                labelText = '🚓 ДПС • ПОГОНЯ!';
+            } else if (item.state === 'fine_stop') {
+                labelText = '🚓 ДПС • ОФОРМЛЕНИЕ';
+            }
             if (item._lastLabelText !== labelText) {
                 item.labelTextEl.textContent = labelText;
                 item._lastLabelText = labelText;
@@ -1068,7 +1146,8 @@ export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlay
     interactables.forEach(poi => {
         const bx = (poi.x - px) * scale;
         const bz = (poi.z - pz) * scale;
-        ctx.fillStyle = poi.isCar ? '#10b981' : (GAME_STATE.completedPOIs.has(poi.id) ? '#94a3b8' : '#fbbf24');
+        const isBannedCar = Boolean(poi.isCar && getVehicleBanRemainingSec(GAME_STATE, poi.id) > 0);
+        ctx.fillStyle = poi.isCar ? (isBannedCar ? '#ef4444' : '#10b981') : (GAME_STATE.completedPOIs.has(poi.id) ? '#94a3b8' : '#fbbf24');
         ctx.beginPath();
         ctx.arc(bx, bz, poi.isCar ? 4.5 : 5, 0, Math.PI * 2);
         ctx.fill();
@@ -1110,15 +1189,17 @@ export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlay
         ctx.stroke();
     });
 
+    const flashRed = Math.floor(now / 150) % 2 === 0;
     if (policeCops && typeof policeCops.forEach === 'function') {
         policeCops.forEach(cop => {
             const pos = (cop.group && cop.group.position) || cop.renderPosition || cop;
             if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.z)) return;
             const cxBlip = (pos.x - px) * scale;
             const czBlip = (pos.z - pz) * scale;
-            ctx.fillStyle = '#2563eb';
+            const chasingFoot = cop.state === 'chase';
+            ctx.fillStyle = chasingFoot ? (flashRed ? '#ef4444' : '#3b82f6') : '#2563eb';
             ctx.beginPath();
-            ctx.arc(cxBlip, czBlip, 4, 0, Math.PI * 2);
+            ctx.arc(cxBlip, czBlip, chasingFoot ? 4.8 : 4, 0, Math.PI * 2);
             ctx.fill();
             ctx.strokeStyle = '#ffffff';
             ctx.lineWidth = 1.4;
@@ -1127,13 +1208,12 @@ export function drawGTARadar({ playerPos, interactables, npcs, dunya, remotePlay
     }
 
     if (policeCars && typeof policeCars.forEach === 'function') {
-        const flashRed = Math.floor(now / 150) % 2 === 0;
         policeCars.forEach(car => {
             const pos = (car.group && car.group.position) || car;
             if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.z)) return;
             const vxBlip = (pos.x - px) * scale;
             const vzBlip = (pos.z - pz) * scale;
-            const activePursuit = Boolean(car.state === 'chase' || car.siren);
+            const activePursuit = Boolean(car.state === 'chase' || car.state === 'fine_stop' || car.siren);
             ctx.fillStyle = activePursuit ? (flashRed ? '#ef4444' : '#3b82f6') : '#1d4ed8';
             ctx.beginPath();
             ctx.arc(vxBlip, vzBlip, activePursuit ? 6 : 5.5, 0, Math.PI * 2);

@@ -187,6 +187,19 @@ describe('MsgPackCodec', () => {
                 reason: 'speeding_over_40kmh',
                 fine: 5000,
                 money: -20000
+            },
+            {
+                type: 'police_fine_stop',
+                stage: 'approaching',
+                police_car_id: 'police_car_0',
+                car_id: 'car_0',
+                officer_id: 'dps_police_car_0',
+                officer_name: 'Инспектор ДПС Соколов',
+                target_user: 'Саня-из-Центра',
+                exit_x: 0,
+                exit_z: 0,
+                exit_yaw: 0,
+                reason: 'speeding'
             }
         ];
 
@@ -195,6 +208,14 @@ describe('MsgPackCodec', () => {
             const decoded = MsgPackCodec.decode(buf);
             expect(decoded).toEqual(msg);
         }
+
+        // Explicitly confirm exit_x/exit_z/exit_yaw encode as 0xcb float64 even at zero
+        const zeroFineStopBuf = new Uint8Array(MsgPackCodec.encode(messages[messages.length - 1]));
+        let fsFloatCount = 0;
+        for (const b of zeroFineStopBuf) {
+            if (b === 0xcb) fsFloatCount++;
+        }
+        expect(fsFloatCount).toBe(3);
 
         // Explicitly verify Go-style 0xd3 negative int64 and 0xcf uint64 binary decoding
         const raw = [];

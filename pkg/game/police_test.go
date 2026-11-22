@@ -247,29 +247,43 @@ func TestPoliceManager_FootCopApproachAndUnsolicitedDialogueAllScenarios(t *test
 		}
 	}
 
-	// Verify dialogue timeout and vehicle entry cleanup
+	// Verify police dialogue CANNOT time out and CANNOT be dismissed by entering a vehicle
 	pm.Step(16.0, map[string]*UserState{}, cars)
 	users["vasya"].X = pm.footCops[0].x
 	users["vasya"].Z = pm.footCops[0].z + 1.5
 	pm.Step(0.1, users, cars) // approach -> dialogue
-	if pm.ActiveEncounterFor("vasya") == nil {
-		t.Fatal("expected active encounter before timeout test")
+	encPersist := pm.ActiveEncounterFor("vasya")
+	if encPersist == nil {
+		t.Fatal("expected active encounter before non-dismissible check")
 	}
-	pm.Step(FootCopDialogueTimeout+0.5, users, cars)
+	pm.Step(120.0, users, cars)
+	if pm.ActiveEncounterFor("vasya") == nil || pm.footCops[0].state != CopStateDialogue {
+		t.Fatal("expected foot police encounter NOT to expire over time")
+	}
+	pm.OnPlayerEnteredVehicle("vasya", "car_0")
+	if pm.ActiveEncounterFor("vasya") == nil || pm.footCops[0].state != CopStateDialogue {
+		t.Fatal("expected foot police encounter NOT to be dismissed when entering vehicle")
+	}
+	if _, err := pm.HandleDialogueChoice("vasya", encPersist.EncounterID, 0); err != nil {
+		t.Fatalf("expected dialogue choice to still succeed: %v", err)
+	}
 	if pm.ActiveEncounterFor("vasya") != nil {
-		t.Fatal("expected encounter to expire after FootCopDialogueTimeout")
+		t.Fatal("expected encounter resolved after HandleDialogueChoice")
 	}
 
+	// Verify disconnect cleans up active encounter
 	pm.Step(16.0, map[string]*UserState{}, cars)
+	users["vasya"].Mode = ModePedestrian
+	users["vasya"].CarID = ""
 	users["vasya"].X = pm.footCops[0].x
 	users["vasya"].Z = pm.footCops[0].z + 1.5
 	pm.Step(0.1, users, cars)
 	if pm.ActiveEncounterFor("vasya") == nil {
-		t.Fatal("expected active encounter before vehicle-entry cancellation test")
+		t.Fatal("expected active encounter before disconnect check")
 	}
-	pm.OnPlayerEnteredVehicle("vasya", "car_0")
-	if pm.ActiveEncounterFor("vasya") != nil || pm.footCops[0].state != CopStateCooldown {
-		t.Fatalf("expected vehicle entry to cancel active encounter and set cop cooldown")
+	pm.OnPlayerDisconnected("vasya")
+	if pm.ActiveEncounterFor("vasya") != nil {
+		t.Fatal("expected disconnect to clear active encounter")
 	}
 }
 
@@ -305,11 +319,17 @@ func TestPoliceManager_PoliceCarIgnoresUnder40KmhAndChasesOver40Kmh(t *testing.T
 	users["vasya"].VZ = 15.0
 
 	out := pm.Step(0.05, users, cars)
-	if len(out.ChaseEvents) != 1 || out.ChaseEvents[0].Status != ChaseStatusStarted || out.ChaseEvents[0].TargetCarID != "car_0" {
-		t.Fatalf("expected police chase started on > 40 km/h, got %+v", out.ChaseEvents)
+	if len(out.ChaseEvents) != 2 {
+		t.Fatalf("expected both police cars to join chase on single speeder, got %+v", out.ChaseEvents)
 	}
-	if !pm.policeCars[0].siren || !pm.policeCars[0].lights || pm.policeCars[0].state != PoliceCarStateChase {
-		t.Fatalf("expected siren/lights/chase active on police_car_0: %+v", pm.policeCars[0])
+	for _, ev := range out.ChaseEvents {
+		if ev.Status != ChaseStatusStarted || ev.TargetCarID != "car_0" {
+			t.Fatalf("unexpected chase start event: %+v", ev)
+		}
+	}
+	if !pm.policeCars[0].siren || !pm.policeCars[0].lights || pm.policeCars[0].state != PoliceCarStateChase ||
+		!pm.policeCars[1].siren || !pm.policeCars[1].lights || pm.policeCars[1].state != PoliceCarStateChase {
+		t.Fatalf("expected siren/lights/chase active on both police cars: %+v / %+v", pm.policeCars[0], pm.policeCars[1])
 	}
 
 	// Place target far ahead on straight road to verify police car matches standard car top speed (>= 44.0 m/s)
@@ -331,7 +351,7 @@ func TestPoliceManager_PoliceCarIgnoresUnder40KmhAndChasesOver40Kmh(t *testing.T
 		t.Fatalf("expected chasing police car to reach >= 44.0 m/s (matching standard car top speed), got %v", maxSeenSpeed)
 	}
 
-	// Stop target car right next to police_car_0 -> should end chase as "stopped" & apply fine
+	// Stop target car right next to police_car_0 -> triggers animated fine_stop, forced exit, officer walk, and traffic dialog
 	cars["car_0"].X = pm.policeCars[0].x + 3.0
 	cars["car_0"].Z = pm.policeCars[0].z + 3.0
 	cars["car_0"].Speed = 0.0
@@ -344,8 +364,8 @@ func TestPoliceManager_PoliceCarIgnoresUnder40KmhAndChasesOver40Kmh(t *testing.T
 	users["vasya"].VZ = 0.0
 
 	var stoppedEvent *PoliceChaseEvent
+	var approachingStop *OutboundPoliceFineStopMsg
 	for i := 0; i < 20; i++ {
-		// Keep target pinned next to police car for stop hold duration
 		cars["car_0"].X = pm.policeCars[0].x + 2.5
 		cars["car_0"].Z = pm.policeCars[0].z + 2.5
 		cars["car_0"].VX, cars["car_0"].VZ, cars["car_0"].Speed = 0, 0, 0
@@ -356,19 +376,55 @@ func TestPoliceManager_PoliceCarIgnoresUnder40KmhAndChasesOver40Kmh(t *testing.T
 			if ev.Status == ChaseStatusStopped {
 				e := ev
 				stoppedEvent = &e
-				break
+			}
+		}
+		for _, fs := range res.FineStopEvents {
+			if fs.Stage == "approaching" {
+				f := fs
+				approachingStop = &f
 			}
 		}
 		if stoppedEvent != nil {
 			break
 		}
 	}
-	if stoppedEvent == nil || stoppedEvent.Fine != PoliceSpeedingFine || stoppedEvent.Reason != "fined" {
-		t.Fatalf("expected chase stopped with fine %d, got %+v", PoliceSpeedingFine, stoppedEvent)
+	if stoppedEvent == nil || stoppedEvent.Fine != 0 || stoppedEvent.Reason != "caught" {
+		t.Fatalf("expected chase stopped with caught reason & fine=0 (dialog pending), got %+v", stoppedEvent)
+	}
+	if approachingStop == nil || cars["car_0"].Driver != "" || users["vasya"].Mode != ModePedestrian || !pm.IsUserInFineStop("vasya") {
+		t.Fatalf("expected forced exit & approaching fine_stop, stop=%+v driver=%q mode=%s", approachingStop, cars["car_0"].Driver, users["vasya"].Mode)
+	}
+	if pm.policeCars[0].state != PoliceCarStateFineStop || pm.policeCars[0].siren || !pm.policeCars[0].lights {
+		t.Fatalf("expected police_car_0 parked in fine_stop with lights=true siren=false: %+v", pm.policeCars[0])
 	}
 
-	// Advance past grace/cooldown and verify distance evasion (> 90m for 5s)
-	pm.Step(10.0, map[string]*UserState{}, map[string]*CarState{})
+	// Step while officer walks up to detained vasya and starts traffic encounter
+	var trafficEnc *OutboundPoliceEncounterStartMsg
+	for i := 0; i < 120; i++ {
+		res := pm.Step(0.05, users, cars)
+		if len(res.EncounterStarts) > 0 {
+			m := res.EncounterStarts[0].Msg
+			trafficEnc = &m
+			break
+		}
+	}
+	if trafficEnc == nil || trafficEnc.EncounterKind != EncounterKindTraffic || trafficEnc.CarID != "car_0" {
+		t.Fatalf("expected traffic encounter start for car_0, got %+v", trafficEnc)
+	}
+	choiceRes, err := pm.HandleDialogueChoice("vasya", trafficEnc.EncounterID, 0)
+	if err != nil {
+		t.Fatalf("HandleDialogueChoice traffic failed: %v", err)
+	}
+	if choiceRes.Fine <= 0 || !choiceRes.VehicleBlocked || choiceRes.VehicleBanSec != int(VehicleBanDurationSec) || !pm.IsVehicleBanned("car_0") {
+		t.Fatalf("expected regular traffic option to impose 5-min car ban, got %+v", choiceRes)
+	}
+
+	// Advance past officer return, grace & cooldown and verify distance evasion (> 90m for 5s) with an unbanned car
+	pm.SetVehicleBan("car_0", 0)
+	pm.Step(10.0, map[string]*UserState{}, cars)
+	users["vasya"].Mode = ModeDriving
+	users["vasya"].CarID = "car_0"
+	cars["car_0"].Driver = "vasya"
 	cars["car_0"].X = pm.policeCars[0].x
 	cars["car_0"].Z = pm.policeCars[0].z + 12.0
 	cars["car_0"].Speed = 20.0
@@ -380,26 +436,24 @@ func TestPoliceManager_PoliceCarIgnoresUnder40KmhAndChasesOver40Kmh(t *testing.T
 		t.Fatalf("expected second chase to start, got %+v", startOut.ChaseEvents)
 	}
 
-	var evadedEvent *PoliceChaseEvent
-	for i := 0; i < 120; i++ {
-		cars["car_0"].X = pm.policeCars[0].x + 120.0
+	evadedCount := 0
+	for i := 0; i < 360; i++ {
+		cars["car_0"].X = pm.policeCars[0].x + 250.0
 		cars["car_0"].Z = pm.policeCars[0].z
 		users["vasya"].X = cars["car_0"].X
 		users["vasya"].Z = cars["car_0"].Z
 		res := pm.Step(0.05, users, cars)
 		for _, ev := range res.ChaseEvents {
-			if ev.Status == ChaseStatusEvaded {
-				e := ev
-				evadedEvent = &e
-				break
+			if ev.Status == ChaseStatusEvaded && ev.Fine == 0 {
+				evadedCount++
 			}
 		}
-		if evadedEvent != nil {
+		if len(pm.activeChases) == 0 {
 			break
 		}
 	}
-	if evadedEvent == nil || evadedEvent.Fine != 0 {
-		t.Fatalf("expected evasion event with fine=0, got %+v", evadedEvent)
+	if evadedCount == 0 || len(pm.activeChases) != 0 {
+		t.Fatalf("expected evasion event with fine=0 and cleared activeChases, got evadedCount=%d", evadedCount)
 	}
 }
 
@@ -613,10 +667,10 @@ func TestPoliceManager_OpenRoadRealisticBrakingStopAndFine(t *testing.T) {
 				},
 			}
 
-			// Tick 1 triggers chase
+			// Tick 1 triggers chase (both cars join single speeder)
 			out0 := pm.Step(0.05, users, cars)
-			if len(out0.ChaseEvents) != 1 || out0.ChaseEvents[0].Status != ChaseStatusStarted {
-				t.Fatalf("expected chase started on tick 1, got %+v", out0.ChaseEvents)
+			if len(out0.ChaseEvents) != 2 || out0.ChaseEvents[0].Status != ChaseStatusStarted {
+				t.Fatalf("expected chase started on tick 1 for both police cars, got %+v", out0.ChaseEvents)
 			}
 
 			var finalChase *PoliceChaseEvent
@@ -661,9 +715,9 @@ func TestPoliceManager_OpenRoadRealisticBrakingStopAndFine(t *testing.T) {
 				t.Fatalf("chase did not terminate within 45s (maxZ=%.2f, car=(%.2f,%.2f), police=(%.2f,%.2f))",
 					maxZ, cars["car_0"].X, cars["car_0"].Z, pm.policeCars[0].x, pm.policeCars[0].z)
 			}
-			if finalChase.Status != ChaseStatusStopped || finalChase.Reason != "fined" || finalChase.Fine != PoliceSpeedingFine {
-				t.Fatalf("expected clean stop-and-fine, got %+v (maxZ=%.2f, car=(%.2f,%.2f), police=(%.2f,%.2f))",
-					finalChase, maxZ, cars["car_0"].X, cars["car_0"].Z, pm.policeCars[0].x, pm.policeCars[0].z)
+			if finalChase.Status != ChaseStatusStopped || finalChase.Reason != "caught" || finalChase.Fine != 0 || !pm.IsUserInFineStop("vasya") {
+				t.Fatalf("expected clean stop initiating fine_stop, got %+v (inFineStop=%v maxZ=%.2f car=(%.2f,%.2f) police=(%.2f,%.2f))",
+					finalChase, pm.IsUserInFineStop("vasya"), maxZ, cars["car_0"].X, cars["car_0"].Z, pm.policeCars[0].x, pm.policeCars[0].z)
 			}
 			if maxZ >= tc.maxAllowedZ || maxZ >= 165.0 {
 				t.Fatalf("car_0 was bulldozed too far (maxZ=%.2f >= %.2f)", maxZ, tc.maxAllowedZ)
@@ -686,7 +740,7 @@ func TestPoliceManager_FleeingHighSpeedTargetChasedAndDeflected(t *testing.T) {
 	}
 
 	out0 := pm.Step(0.05, users, cars)
-	if len(out0.ChaseEvents) != 1 || out0.ChaseEvents[0].Status != ChaseStatusStarted {
+	if len(out0.ChaseEvents) != 2 || out0.ChaseEvents[0].Status != ChaseStatusStarted {
 		t.Fatalf("expected chase started, got %+v", out0.ChaseEvents)
 	}
 
@@ -872,5 +926,248 @@ func TestPoliceManager_UnstuckRecoveryWhenPinnedAgainstWall(t *testing.T) {
 	if !movedAwayFromWall {
 		t.Fatalf("expected police_car_0 to reverse/steer away from wall during unstuck recovery (z=%.2f, vx=%.2f, vz=%.2f)",
 			pm.policeCars[0].z, pm.policeCars[0].vx, pm.policeCars[0].vz)
+	}
+}
+
+func TestPoliceManager_TwoCarsSplitBetweenMultipleSpeeders(t *testing.T) {
+	pm, err := NewPoliceManager(loadWorldMapConfig())
+	if err != nil {
+		t.Fatalf("NewPoliceManager failed: %v", err)
+	}
+
+	users := map[string]*UserState{
+		"vasya": {Username: "vasya", Mode: ModeDriving, CarID: "car_0", X: pm.policeCars[0].x, Z: pm.policeCars[0].z + 15.0, Speed: 16.0, VZ: 16.0},
+		"petya": {Username: "petya", Mode: ModeDriving, CarID: "car_1", X: pm.policeCars[1].x, Z: pm.policeCars[1].z + 15.0, Speed: 16.0, VZ: 16.0},
+	}
+	cars := map[string]*CarState{
+		"car_0": {CarID: "car_0", Driver: "vasya", X: pm.policeCars[0].x, Z: pm.policeCars[0].z + 15.0, Speed: 16.0, VZ: 16.0},
+		"car_1": {CarID: "car_1", Driver: "petya", X: pm.policeCars[1].x, Z: pm.policeCars[1].z + 15.0, Speed: 16.0, VZ: 16.0},
+	}
+
+	pm.Step(0.05, users, cars)
+	if pm.policeCars[0].state != PoliceCarStateChase || pm.policeCars[1].state != PoliceCarStateChase {
+		t.Fatalf("expected both police cars chasing, got %s and %s", pm.policeCars[0].state, pm.policeCars[1].state)
+	}
+	if pm.policeCars[0].targetUser == "" || pm.policeCars[1].targetUser == "" ||
+		pm.policeCars[0].targetUser == pm.policeCars[1].targetUser {
+		t.Fatalf("expected 2 police cars to split across vasya and petya, got %q and %q",
+			pm.policeCars[0].targetUser, pm.policeCars[1].targetUser)
+	}
+
+	// Once petya disconnects, the freed police car immediately converges onto vasya
+	pm.OnPlayerDisconnected("petya")
+	delete(users, "petya")
+	cars["car_1"].Driver = ""
+	cars["car_1"].Speed, cars["car_1"].VZ = 0, 0
+	pm.Step(0.05, users, cars)
+	if pm.policeCars[0].targetUser != "vasya" || pm.policeCars[1].targetUser != "vasya" {
+		t.Fatalf("expected both police cars to converge on remaining speeder vasya, got %q and %q",
+			pm.policeCars[0].targetUser, pm.policeCars[1].targetUser)
+	}
+}
+
+func TestPoliceManager_BumpPatrollingPoliceCarTriggersChase(t *testing.T) {
+	pm, err := NewPoliceManager(loadWorldMapConfig())
+	if err != nil {
+		t.Fatalf("NewPoliceManager failed: %v", err)
+	}
+
+	// Even during post-evasion grace and <= 40 km/h speed, bumping a patrolling police car triggers chase!
+	pm.chaseGraceUntil["vasya"] = pm.simTimeSec + 10.0
+	pm.policeCars[0].x = 23.0
+	pm.policeCars[0].z = 10.0
+	pm.policeCars[0].yaw = 0.0
+	pm.policeCars[0].vx = 0.0
+	pm.policeCars[0].vz = 2.0
+	pm.policeCars[0].speed = 2.0
+
+	users := map[string]*UserState{
+		"vasya": {Username: "vasya", Mode: ModeDriving, CarID: "car_0", X: 23.0, Z: 13.8, VZ: -5.0, Speed: -5.0},
+	}
+	cars := map[string]*CarState{
+		"car_0": {CarID: "car_0", Driver: "vasya", X: 23.0, Z: 13.8, Yaw: 0.0, VZ: -5.0, Speed: -5.0},
+	}
+
+	out := pm.Step(0.05, users, cars)
+	foundCollisionChase := false
+	for _, ev := range out.ChaseEvents {
+		if ev.Status == ChaseStatusStarted && ev.Reason == "collision" && ev.TargetUser == "vasya" {
+			foundCollisionChase = true
+		}
+	}
+	if !foundCollisionChase {
+		t.Fatalf("expected low-speed bump into patrolling police car to start collision chase, got %+v", out.ChaseEvents)
+	}
+
+	// Stopping leads to traffic_collision dialogue scenario
+	for i := 0; i < 15; i++ {
+		cars["car_0"].X = pm.policeCars[0].x + 2.5
+		cars["car_0"].Z = pm.policeCars[0].z + 2.5
+		cars["car_0"].VX, cars["car_0"].VZ, cars["car_0"].Speed = 0, 0, 0
+		users["vasya"].X, users["vasya"].Z = cars["car_0"].X, cars["car_0"].Z
+		pm.Step(0.05, users, cars)
+		if pm.IsUserInFineStop("vasya") {
+			break
+		}
+	}
+	if !pm.IsUserInFineStop("vasya") {
+		t.Fatal("expected collision chase stop to enter fine_stop")
+	}
+	var colEnc *OutboundPoliceEncounterStartMsg
+	for i := 0; i < 120; i++ {
+		res := pm.Step(0.05, users, cars)
+		if len(res.EncounterStarts) > 0 {
+			m := res.EncounterStarts[0].Msg
+			colEnc = &m
+			break
+		}
+	}
+	if colEnc == nil || colEnc.ScenarioID != "traffic_collision" || colEnc.EncounterKind != EncounterKindTraffic {
+		t.Fatalf("expected traffic_collision scenario after collision stop, got %+v", colEnc)
+	}
+}
+
+func TestPoliceManager_FootPursuitOnChasedCarExit(t *testing.T) {
+	pm, err := NewPoliceManager(loadWorldMapConfig())
+	if err != nil {
+		t.Fatalf("NewPoliceManager failed: %v", err)
+	}
+
+	cop := pm.footCops[0]
+	// Place player car near police_car_0 AND within 75m of cop[0]
+	cars := map[string]*CarState{
+		"car_0": {CarID: "car_0", Driver: "vasya", X: pm.policeCars[0].x, Z: pm.policeCars[0].z + 14.0, Speed: 18.0, VZ: 18.0},
+	}
+	users := map[string]*UserState{
+		"vasya": {Username: "vasya", Mode: ModeDriving, CarID: "car_0", X: cars["car_0"].X, Z: cars["car_0"].Z, Speed: 18.0, VZ: 18.0},
+	}
+	pm.Step(0.05, users, cars) // Start car chase
+
+	// Player exits the chased car ~12m away from foot cop 0
+	exitX, exitZ := cop.x+12.0, cop.z
+	cars["car_0"].Driver = ""
+	cars["car_0"].Speed, cars["car_0"].VX, cars["car_0"].VZ = 0, 0, 0
+	users["vasya"].Mode = ModePedestrian
+	users["vasya"].CarID = ""
+	users["vasya"].X = exitX
+	users["vasya"].Z = exitZ
+	exitEvents := pm.OnPlayerExitedVehicle("vasya", "car_0", exitX, exitZ)
+	if len(exitEvents) == 0 || exitEvents[0].Reason != "target_exited" {
+		t.Fatalf("expected car chase ended with target_exited, got %+v", exitEvents)
+	}
+
+	pm.Step(0.05, users, cars)
+	if cop.state != CopStateChase || cop.targetUser != "vasya" || cop.anim != AnimRun {
+		t.Fatalf("expected nearby foot cop to pursue on foot (chase/run), got state=%s target=%q anim=%s", cop.state, cop.targetUser, cop.anim)
+	}
+
+	// Step until foot cop catches stationary vasya and opens traffic_foot_escape dialogue
+	var footFineStop *OutboundPoliceFineStopMsg
+	var footEnc *OutboundPoliceEncounterStartMsg
+	for i := 0; i < 60; i++ {
+		res := pm.Step(0.05, users, cars)
+		for _, fs := range res.FineStopEvents {
+			f := fs
+			footFineStop = &f
+		}
+		if len(res.EncounterStarts) > 0 {
+			m := res.EncounterStarts[0].Msg
+			footEnc = &m
+			break
+		}
+	}
+	if footFineStop == nil || footFineStop.Stage != "dialogue" || footFineStop.CarID != "car_0" {
+		t.Fatalf("expected foot-pursuit catch fine_stop dialogue stage for car_0, got %+v", footFineStop)
+	}
+	if footEnc == nil || footEnc.ScenarioID != "traffic_foot_escape" || footEnc.EncounterKind != EncounterKindTraffic {
+		t.Fatalf("expected traffic_foot_escape scenario, got %+v", footEnc)
+	}
+
+	// Choosing 66666 leaves car_0 unblocked
+	res, err := pm.HandleDialogueChoice("vasya", footEnc.EncounterID, 3)
+	if err != nil {
+		t.Fatalf("66666 choice failed: %v", err)
+	}
+	if res.Fine != PoliceMaxFineNoBan || res.VehicleBlocked || pm.IsVehicleBanned("car_0") {
+		t.Fatalf("expected 66666 option to keep car_0 unblocked, got %+v", res)
+	}
+
+	// Second exit pursuit: verify 1-minute max foot pursuit duration timeout gives up cleanly
+	pm.Step(16.0, map[string]*UserState{}, cars)
+	cars["car_0"].Driver = "petya"
+	cars["car_0"].X, cars["car_0"].Z = pm.policeCars[0].x, pm.policeCars[0].z+12.0
+	cars["car_0"].Speed, cars["car_0"].VZ = 18.0, 18.0
+	users["petya"] = &UserState{Username: "petya", Mode: ModeDriving, CarID: "car_0", X: cars["car_0"].X, Z: cars["car_0"].Z, Speed: 18.0, VZ: 18.0}
+	pm.Step(0.05, users, cars)
+
+	cars["car_0"].Driver = ""
+	cars["car_0"].Speed, cars["car_0"].VZ = 0, 0
+	users["petya"].Mode = ModePedestrian
+	users["petya"].CarID = ""
+	users["petya"].X = cop.x + 15.0
+	users["petya"].Z = cop.z
+	pm.OnPlayerExitedVehicle("petya", "car_0", users["petya"].X, users["petya"].Z)
+	pm.Step(0.05, users, cars)
+	if cop.state != CopStateChase {
+		t.Fatalf("expected cop chasing petya before 60s expiry, got %s", cop.state)
+	}
+	// Keep petya out of reach past 60s
+	for i := 0; i < 121; i++ {
+		users["petya"].X = cop.x + 25.0
+		users["petya"].Z = cop.z
+		pm.Step(0.5, users, cars)
+	}
+	if cop.state != CopStatePatrol || pm.ActiveEncounterFor("petya") != nil {
+		t.Fatalf("expected 1-minute foot pursuit to expire cleanly back to patrol, got state=%s enc=%v", cop.state, pm.ActiveEncounterFor("petya"))
+	}
+}
+
+func TestPoliceManager_FineStopOfficerWalk66666Vs5MinBanAndDisconnectBan(t *testing.T) {
+	pm, err := NewPoliceManager(loadWorldMapConfig())
+	if err != nil {
+		t.Fatalf("NewPoliceManager failed: %v", err)
+	}
+
+	users := map[string]*UserState{
+		"vasya": {Username: "vasya", Mode: ModeDriving, CarID: "car_0", X: pm.policeCars[0].x, Z: pm.policeCars[0].z + 12.0, Speed: 18.0, VZ: 18.0},
+	}
+	cars := map[string]*CarState{
+		"car_0": {CarID: "car_0", Driver: "vasya", X: pm.policeCars[0].x, Z: pm.policeCars[0].z + 12.0, Speed: 18.0, VZ: 18.0},
+	}
+	pm.Step(0.05, users, cars)
+	for i := 0; i < 15; i++ {
+		cars["car_0"].X, cars["car_0"].Z = pm.policeCars[0].x+3.5, pm.policeCars[0].z+1.0
+		cars["car_0"].VX, cars["car_0"].VZ, cars["car_0"].Speed = 0, 0, 0
+		users["vasya"].X, users["vasya"].Z = cars["car_0"].X, cars["car_0"].Z
+		pm.Step(0.05, users, cars)
+		if pm.IsUserInFineStop("vasya") {
+			break
+		}
+	}
+	if !pm.IsUserInFineStop("vasya") {
+		t.Fatal("expected fine_stop to start")
+	}
+
+	// Before choice, disconnect must impose 5-min car ban and remove spawned DPS officer
+	snapMid := pm.Snapshot()
+	hasCarOfficer := false
+	for _, c := range snapMid.FootCops {
+		if strings.HasPrefix(c.ID, "dps_") {
+			hasCarOfficer = true
+		}
+	}
+	if !hasCarOfficer {
+		t.Fatal("expected dynamic dps officer spawned during fine_stop")
+	}
+
+	pm.OnPlayerDisconnected("vasya")
+	if !pm.IsVehicleBanned("car_0") || pm.IsUserInFineStop("vasya") {
+		t.Fatalf("expected disconnect mid-fine-stop to ban car_0 and clear activeFineStop")
+	}
+	snapAfterDisc := pm.Snapshot()
+	for _, c := range snapAfterDisc.FootCops {
+		if strings.HasPrefix(c.ID, "dps_") {
+			t.Fatalf("expected dynamic dps officer removed on disconnect, still found %+v", c)
+		}
 	}
 }

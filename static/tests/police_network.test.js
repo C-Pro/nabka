@@ -535,4 +535,55 @@ describe('Police Multiplayer Network Sync & Isolation', () => {
         expect(isGameplayInputSuspended()).toBe(false);
         expect(mockEls['toast-container'].children.length).toBeGreaterThan(0);
     });
+
+    test('police_fine_stop forces vehicle exit, activates GTA1 top-down state, and handles move ban errors', () => {
+        const camLabel = makeMockElement('cam-mode-label');
+        mockEls['cam-mode-label'] = camLabel;
+        mockEls['police-modal-blocker'] = makeMockElement('police-modal-blocker');
+        mockEls['police-modal-blocker'].classList.add('hidden');
+        mockEls['police-dialogue-lock-notice'] = makeMockElement('police-dialogue-lock-notice');
+        mockEls['police-dialogue-lock-notice'].classList.add('hidden');
+
+        const sent = [];
+        const client = createClientStub(sent);
+        const car = {
+            id: 'car_0',
+            name: 'Toyota Mark II',
+            group: { position: { x: 23, y: 0, z: 30 }, rotation: { y: 0 } },
+            vx: 5, vz: 5, yawRate: 0.2, speed: 7, isAwake: true
+        };
+        World.vehicles = [car];
+        GAME_STATE.inVehicle = car;
+        GAME_STATE.cameraMode = 2;
+
+        client.handleServerMessage({
+            type: 'police_fine_stop',
+            stage: 'approaching',
+            police_car_id: 'police_car_0',
+            car_id: 'car_0',
+            officer_id: 'dps_police_car_0',
+            officer_name: 'Инспектор ДПС Соколов',
+            target_user: 'Лёха-со-Спортивки',
+            exit_x: 19.5,
+            exit_z: 30.2,
+            exit_yaw: 1.5,
+            reason: 'speeding'
+        });
+
+        expect(GAME_STATE.inVehicle).toBeNull();
+        expect(GAME_STATE.policeFineSequence.active).toBe(true);
+        expect(GAME_STATE.policeFineSequence.topDownActive).toBe(true);
+        expect(GAME_STATE.policeFineSequence.savedCamera.cameraMode).toBe(2);
+        expect(camLabel.textContent).toBe('Камера: ДПС (Вид сверху)');
+        expect(isGameplayInputSuspended()).toBe(true);
+
+        // Ban error on op='move' forces exit if locally seated
+        GAME_STATE.inVehicle = car;
+        client.handleServerMessage({
+            type: 'error',
+            op: 'move',
+            message: 'наложен запрет на эксплуатацию транспортного средства (4:59)'
+        });
+        expect(GAME_STATE.inVehicle).toBeNull();
+    });
 });

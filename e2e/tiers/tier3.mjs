@@ -16,6 +16,7 @@ import { connectWs, uniqueUsername } from '../lib/ws-client.mjs';
 import {
     INITIAL_PLAYER_MONEY,
     RESERVED_POLICE_TYPES,
+    completeTrafficFineStop,
     driveNearPatrolPoliceCar,
     incurFinesUntilBelow,
     sleep,
@@ -53,7 +54,7 @@ export function getTier3Tests() {
                         assertEqual(impulse.police_mass, 4200);
                         assertGreater(Math.hypot(impulse.dvx, impulse.dvz), 0.1);
 
-                        // Stop to take fine while already negative
+                        // Stop to enter fine_stop and complete traffic fine while already negative
                         let stopped = null;
                         const deadline = Date.now() + 10000;
                         while (Date.now() < deadline) {
@@ -65,7 +66,7 @@ export function getTier3Tests() {
                             if (pc) {
                                 driver.sendMoveDriving({
                                     car_id: 'car_1',
-                                    x: pc.x + 1.0,
+                                    x: pc.x + 2.0,
                                     y: 0,
                                     z: pc.z + 1.0,
                                     speed: 0,
@@ -79,17 +80,25 @@ export function getTier3Tests() {
                             }
                             await sleep(50);
                         }
-                        assert(stopped, 'chase stopped');
-                        assertGreater(stopped.fine, 0);
-                        assertEqual(stopped.money, balBefore - stopped.fine);
-                        assertLess(stopped.money, 0);
+                        assert(stopped, 'chase stopped into fine_stop');
+                        assertEqual(stopped.reason, 'caught');
+                        assertEqual(stopped.fine, 0);
 
-                        const obsStopped = await obs.waitForType('police_chase', {
+                        const { result: res } = await completeTrafficFineStop(driver, {
+                            optionIndex: 0,
+                            fromIndex: drvCur,
+                            timeoutMs: 10000
+                        });
+                        assertGreater(res.fine, 0);
+                        assertEqual(res.money, balBefore - res.fine);
+                        assertLess(res.money, 0);
+
+                        const obsRes = await obs.waitForType('police_encounter_result', {
                             fromIndex: obsCur,
                             timeoutMs: 4000,
-                            predicate: (m) => m.target_user === driver.username && m.status === 'stopped'
+                            predicate: (m) => m.target_user === driver.username
                         });
-                        assertEqual(obsStopped.money, stopped.money);
+                        assertEqual(obsRes.money, res.money);
                     } finally {
                         await driver?.close();
                         await obs?.close();
@@ -243,7 +252,7 @@ export function getTier3Tests() {
                             if (pc) {
                                 c2.sendMoveDriving({
                                     car_id: 'car_0',
-                                    x: pc.x + 1.0,
+                                    x: pc.x + 2.0,
                                     y: 0,
                                     z: pc.z + 1.0,
                                     speed: 0,
@@ -258,7 +267,12 @@ export function getTier3Tests() {
                             await sleep(50);
                         }
                         assert(stopped, 'stopped after rejoin');
-                        assertLess(stopped.money, negMoney);
+                        const { result: res } = await completeTrafficFineStop(c2, {
+                            optionIndex: 0,
+                            fromIndex: cur,
+                            timeoutMs: 10000
+                        });
+                        assertLess(res.money, negMoney);
                     } finally {
                         await c2?.close();
                     }
@@ -330,10 +344,13 @@ export function getTier3Tests() {
                         });
                         assert(chase, 'speeding chase started');
 
-                        // Evade chase
-                        const pc = (client.latestPoliceState?.police_cars || []).find((c) => c.id === policeCarId);
-                        const farX = pc && pc.x > 100 ? -10 : 285;
-                        const farZ = pc && pc.z > 0 ? -160 : 160;
+                        // Evade chase (keep >90m from both chasing police cars)
+                        const evadeCorners = [
+                            { x: -10, z: -160 },
+                            { x: -10, z: 160 },
+                            { x: 285, z: -160 },
+                            { x: 285, z: 160 }
+                        ];
                         const cur = client.cursor();
                         let evaded = null;
                         const deadline = Date.now() + 20000;
@@ -342,6 +359,20 @@ export function getTier3Tests() {
                                 .messagesSince(cur)
                                 .find((m) => m.type === 'police_chase' && m.status === 'evaded' && m.target_user === client.username);
                             if (evaded) break;
+                            const pcs = client.latestPoliceState?.police_cars || [];
+                            let farX = 285;
+                            let farZ = 160;
+                            if (pcs.length > 0) {
+                                let bestMinDist = -1;
+                                for (const corner of evadeCorners) {
+                                    const minD = Math.min(...pcs.map((p) => Math.hypot(corner.x - p.x, corner.z - p.z)));
+                                    if (minD > bestMinDist) {
+                                        bestMinDist = minD;
+                                        farX = corner.x;
+                                        farZ = corner.z;
+                                    }
+                                }
+                            }
                             client.sendMoveDriving({
                                 car_id: 'car_1',
                                 x: farX,
@@ -408,7 +439,7 @@ export function getTier3Tests() {
                         );
                         assertEqual(rejectMsg.username, alice.username);
 
-                        // Alice stops and takes fine cleanly
+                        // Alice stops cleanly and resolves fine_stop dialogue
                         let stopped = null;
                         const deadline = Date.now() + 10000;
                         while (Date.now() < deadline) {
@@ -420,7 +451,7 @@ export function getTier3Tests() {
                             if (pc) {
                                 alice.sendMoveDriving({
                                     car_id: 'car_0',
-                                    x: pc.x + 1.0,
+                                    x: pc.x + 2.0,
                                     y: 0,
                                     z: pc.z + 1.0,
                                     speed: 0,
@@ -434,8 +465,13 @@ export function getTier3Tests() {
                             }
                             await sleep(50);
                         }
-                        assert(stopped, 'alice chase still resolves cleanly with stop fine');
-                        assertGreater(stopped.fine, 0);
+                        assert(stopped, 'alice chase initiated fine_stop');
+                        const { result: res } = await completeTrafficFineStop(alice, {
+                            optionIndex: 0,
+                            fromIndex: alCur,
+                            timeoutMs: 10000
+                        });
+                        assertGreater(res.fine, 0);
                     } finally {
                         await alice?.close();
                         await bob?.close();
@@ -490,6 +526,204 @@ export function getTier3Tests() {
                             predicate: (m) => m.encounter_id === enc.encounter_id
                         });
                         assertEqual(res.money, startBal - validOpt.fine);
+                    } finally {
+                        await client.close();
+                    }
+                });
+            }
+        },
+        {
+            id: 'T3-09',
+            name: 'Pairwise: Single speeder attracts 2 police cars; 2 concurrent speeders split 1 police car each',
+            tier: 3,
+            async run({ binaryPath }) {
+                await withServer({ binaryPath }, async (srv) => {
+                    let s1 = null;
+                    let s2 = null;
+                    try {
+                        ({ client: s1 } = await connectWs(srv.wsUrl, uniqueUsername('t3_sp1')));
+                        ({ client: s2 } = await connectWs(srv.wsUrl, uniqueUsername('t3_sp2')));
+                        const ps0 = await waitForPoliceState(s1, (m) => (m.police_cars || []).length >= 2, 4000);
+                        const pc0 = ps0.police_cars[0];
+                        const pc1 = ps0.police_cars[1];
+
+                        // Single speeder -> both police cars chase s1
+                        s1.sendMoveDriving({
+                            car_id: 'car_0',
+                            x: pc0.x,
+                            y: 0,
+                            z: pc0.z + 12.0,
+                            speed: 18.0,
+                            vx: 0,
+                            vz: 18.0,
+                            yaw: 0,
+                            yaw_rate: 0,
+                            drift: false,
+                            lights: true
+                        });
+                        const bothPs = await waitForPoliceState(
+                            s1,
+                            (m) => (m.police_cars || []).filter((c) => c.state === 'chase' && c.target_user === s1.username).length === 2,
+                            4000
+                        );
+                        assertEqual(bothPs.police_cars.filter((c) => c.target_user === s1.username).length, 2);
+
+                        // Second speeder enters -> cars split across s1 and s2
+                        s2.sendMoveDriving({
+                            car_id: 'car_1',
+                            x: pc1.x,
+                            y: 0,
+                            z: pc1.z + 12.0,
+                            speed: 18.0,
+                            vx: 0,
+                            vz: 18.0,
+                            yaw: 0,
+                            yaw_rate: 0,
+                            drift: false,
+                            lights: true
+                        });
+                        const splitPs = await waitForPoliceState(
+                            s1,
+                            (m) => {
+                                const cars = m.police_cars || [];
+                                const users = new Set(cars.filter((c) => c.state === 'chase').map((c) => c.target_user));
+                                return users.has(s1.username) && users.has(s2.username);
+                            },
+                            4000
+                        );
+                        const targets = splitPs.police_cars.filter((c) => c.state === 'chase').map((c) => c.target_user);
+                        assertEqual(new Set(targets).size, 2, 'police cars split between two speeders');
+                    } finally {
+                        await s1?.close();
+                        await s2?.close();
+                    }
+                });
+            }
+        },
+        {
+            id: 'T3-10',
+            name: 'Pairwise: Bump into patrolling police car starts collision chase, 5-min car ban vs 66666 unblock',
+            tier: 3,
+            async run({ binaryPath }) {
+                await withServer({ binaryPath }, async (srv) => {
+                    let c1 = null;
+                    try {
+                        ({ client: c1 } = await connectWs(srv.wsUrl, uniqueUsername('t3_bmp')));
+                        const ps = await waitForPoliceState(c1, (m) => m.police_cars?.some((c) => c.state === 'patrol'), 4000);
+                        const pc = ps.police_cars.find((c) => c.state === 'patrol');
+                        const cur = c1.cursor();
+                        c1.sendMoveDriving({
+                            car_id: 'car_0',
+                            x: pc.x,
+                            y: 0,
+                            z: pc.z + 3.6,
+                            speed: -5.0,
+                            vx: 0,
+                            vz: -5.0,
+                            yaw: 0,
+                            yaw_rate: 0,
+                            drift: false,
+                            lights: true
+                        });
+                        const bumpChase = await c1.waitForType('police_chase', {
+                            fromIndex: cur,
+                            timeoutMs: 4000,
+                            predicate: (m) => m.target_user === c1.username && m.status === 'started' && m.reason === 'collision'
+                        });
+                        assertEqual(bumpChase.reason, 'collision');
+
+                        // Stop to enter traffic_collision dialogue -> choose option 0 -> car_0 banned
+                        const deadline = Date.now() + 8000;
+                        while (Date.now() < deadline) {
+                            const fin = c1
+                                .messagesSince(cur)
+                                .find((m) => m.type === 'police_chase' && m.target_user === c1.username && m.status === 'stopped');
+                            if (fin) break;
+                            const latestPc = (c1.latestPoliceState?.police_cars || []).find((c) => c.id === bumpChase.police_car_id);
+                            if (latestPc) {
+                                c1.sendMoveDriving({
+                                    car_id: 'car_0',
+                                    x: latestPc.x + 2.0,
+                                    y: 0,
+                                    z: latestPc.z + 1.0,
+                                    speed: 0,
+                                    vx: 0,
+                                    vz: 0,
+                                    yaw: 0,
+                                    yaw_rate: 0,
+                                    drift: false,
+                                    lights: true
+                                });
+                            }
+                            await sleep(50);
+                        }
+                        const { encounter, result } = await completeTrafficFineStop(c1, {
+                            optionIndex: 0,
+                            fromIndex: cur,
+                            timeoutMs: 8000
+                        });
+                        assertEqual(encounter.scenario_id, 'traffic_collision');
+                        assertEqual(result.vehicle_blocked, true);
+                        assertEqual(result.vehicle_ban_sec, 300);
+
+                        // Driving banned car_0 must be rejected with error
+                        const errCur = c1.cursor();
+                        c1.sendMoveDriving({
+                            car_id: 'car_0',
+                            x: 23.0,
+                            y: 0,
+                            z: 25.0,
+                            speed: 0,
+                            yaw: 0,
+                            drift: false,
+                            lights: false
+                        });
+                        const err = await c1.waitForType('error', { fromIndex: errCur, timeoutMs: 3000 });
+                        assertIncludes(err.message, 'запрет');
+                    } finally {
+                        await c1?.close();
+                    }
+                });
+            }
+        },
+        {
+            id: 'T3-11',
+            name: 'Pairwise: Exiting chased car triggers nearby foot-cop chase pursuit and traffic_foot_escape dialogue',
+            tier: 3,
+            async run({ binaryPath }) {
+                await withServer({ binaryPath }, async (srv) => {
+                    const { client } = await connectWs(srv.wsUrl, uniqueUsername('t3_foot'));
+                    try {
+                        const { chase } = await driveNearPatrolPoliceCar(client, {
+                            carId: 'car_0',
+                            speedMs: 22.0,
+                            durationMs: 3000
+                        });
+                        assert(chase, 'car chase started before foot bailout');
+
+                        const ps = client.latestPoliceState || (await waitForPoliceState(client, null, 3000));
+                        const cop = (ps.foot_cops || [])[0];
+                        assert(cop, 'foot cop available');
+
+                        // Exit chased car ~8m from foot cop 0
+                        const cur = client.cursor();
+                        client.sendMovePedestrian({ x: cop.x + 8.0, y: 0, z: cop.z, yaw: 0, anim: 'idle' });
+                        const evaded = await client.waitForType('police_chase', {
+                            fromIndex: cur,
+                            timeoutMs: 4000,
+                            predicate: (m) => m.target_user === client.username && m.status === 'evaded' && m.reason === 'target_exited'
+                        });
+                        assertEqual(evaded.reason, 'target_exited');
+
+                        const { fineStop, encounter, result } = await completeTrafficFineStop(client, {
+                            optionIndex: 3, // 66666 unblocked
+                            fromIndex: cur,
+                            timeoutMs: 10000
+                        });
+                        assertEqual(fineStop.car_id, 'car_0');
+                        assertEqual(encounter.scenario_id, 'traffic_foot_escape');
+                        assertEqual(result.fine, 66666);
+                        assertEqual(Boolean(result.vehicle_blocked), false);
                     } finally {
                         await client.close();
                     }

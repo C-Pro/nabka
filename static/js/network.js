@@ -9,6 +9,8 @@ import {
     applyJoinBalance,
     applyBalanceUpdate,
     applyPoliceChaseEvent,
+    startPoliceFineSequenceState,
+    endPoliceFineSequenceState,
     resetPoliceState
 } from './state.js';
 import { SoundManager } from './audio.js';
@@ -862,11 +864,16 @@ export const MultiplayerClient = {
                     this.lastPoliceStateSequence = 0;
                     this.lastVehicleImpulseSequence = 0;
                     GAME_STATE.policeStateSequence = -1;
-                    if (GAME_STATE.activePoliceEncounter) {
+                    if (GAME_STATE.activePoliceEncounter || (GAME_STATE.policeFineSequence && GAME_STATE.policeFineSequence.active)) {
                         closeNpcDialogue({ force: true });
+                    } else {
+                        endPoliceFineSequenceState(GAME_STATE);
                     }
                     if (GAME_STATE.activePoliceChases instanceof Map) {
                         GAME_STATE.activePoliceChases.clear();
+                    }
+                    if (GAME_STATE.vehicleBans instanceof Map) {
+                        GAME_STATE.vehicleBans.clear();
                     }
                     GAME_STATE.activePoliceChase = null;
                     updatePolicePursuitBanner(false);
@@ -1073,6 +1080,14 @@ export const MultiplayerClient = {
                     break;
                 }
 
+                if (op === 'move' && (errText.includes('запрет') || errText.includes('полицией') || errText.includes('ДПС'))) {
+                    if (GAME_STATE.inVehicle) {
+                        toggleVehicleDrive(GAME_STATE.inVehicle, null, { force: true, silent: true, skipSnapshot: true });
+                    }
+                    showToast(`🚫 ${errText}`, 'red', 3500);
+                    break;
+                }
+
                 if (errText.includes('unknown message type')) {
                     if (GAME_STATE.isCannonFirePending) {
                         GAME_STATE.isCannonFirePending = false;
@@ -1122,13 +1137,81 @@ export const MultiplayerClient = {
                 resolvePoliceEncounterModal(msg);
                 break;
             }
+            case 'police_fine_stop': {
+                if (msg.target_user && GAME_STATE.username && String(msg.target_user) !== String(GAME_STATE.username)) {
+                    break;
+                }
+                const seqRes = startPoliceFineSequenceState(GAME_STATE, msg);
+                if (!seqRes.active) break;
+
+                if (GAME_STATE.keys) {
+                    GAME_STATE.keys.w = GAME_STATE.keys.a = GAME_STATE.keys.s = GAME_STATE.keys.d = GAME_STATE.keys.shift = GAME_STATE.keys.space = false;
+                }
+                if (GAME_STATE.joystickVector) {
+                    GAME_STATE.joystickVector.x = 0;
+                    GAME_STATE.joystickVector.y = 0;
+                }
+                GAME_STATE.joystickSprint = false;
+
+                if (GAME_STATE.inVehicle) {
+                    toggleVehicleDrive(GAME_STATE.inVehicle, null, {
+                        force: true,
+                        silent: true,
+                        skipSnapshot: true,
+                        exitPos: { x: msg.exit_x, z: msg.exit_z, yaw: msg.exit_yaw }
+                    });
+                } else if (Number.isFinite(Number(msg.exit_x)) && Number.isFinite(Number(msg.exit_z)) && Player && Player.position) {
+                    const ex = Number(msg.exit_x);
+                    const ez = Number(msg.exit_z);
+                    if (typeof Player.position.set === 'function') {
+                        Player.position.set(ex, 0, ez);
+                    } else {
+                        Player.position.x = ex;
+                        Player.position.y = 0;
+                        Player.position.z = ez;
+                    }
+                    if (Player.velocity) {
+                        if (typeof Player.velocity.set === 'function') Player.velocity.set(0, 0, 0);
+                        else { Player.velocity.x = 0; Player.velocity.y = 0; Player.velocity.z = 0; }
+                    }
+                    if (Number.isFinite(Number(msg.exit_yaw))) {
+                        Player.rotationY = Number(msg.exit_yaw);
+                    }
+                    if (Player.group) {
+                        Player.group.visible = true;
+                        if (Player.group.position && typeof Player.group.position.set === 'function') {
+                            Player.group.position.set(ex, 0, ez);
+                        }
+                        if (Player.group.rotation) {
+                            Player.group.rotation.y = Player.rotationY || 0;
+                        }
+                    }
+                }
+
+                if (typeof document !== 'undefined') {
+                    const camLabel = document.getElementById('cam-mode-label');
+                    if (camLabel) camLabel.textContent = 'Камера: ДПС (Вид сверху)';
+                }
+                updatePolicePursuitBanner(false);
+                SoundManager.stopPoliceSiren?.();
+                if (msg.stage === 'approaching') {
+                    SoundManager.ensureInit?.();
+                    SoundManager.playPoliceChime?.('stop');
+                    showToast('🚔 Вас остановил патруль ДПС! Выйдите из машины и дождитесь инспектора.', 'red', 4500);
+                }
+                break;
+            }
             case 'police_chase': {
                 const chaseRes = applyPoliceChaseEvent(GAME_STATE, msg);
                 if (chaseRes.isLocalTarget) {
                     renderMoneyHUD(GAME_STATE.money);
                     updatePolicePursuitBanner(chaseRes.chased);
                     if (chaseRes.status === 'started') {
-                        showToast('🚨 Полиция начала погоню! Сбавьте скорость (<= 40 км/ч) или остановитесь.', 'amber', 3500);
+                        if (msg.reason === 'collision') {
+                            showToast('🚨 Столкновение с патрулём! Полиция начала погоню!', 'amber', 3500);
+                        } else {
+                            showToast('🚨 Полиция начала погоню! Сбавьте скорость (<= 40 км/ч) или остановитесь.', 'amber', 3500);
+                        }
                     } else if (chaseRes.status === 'stopped') {
                         if (!chaseRes.chased) SoundManager.stopPoliceSiren?.();
                         if (Number(msg.fine) > 0) {
@@ -1138,8 +1221,12 @@ export const MultiplayerClient = {
                         }
                     } else if (chaseRes.status === 'evaded') {
                         if (!chaseRes.chased) SoundManager.stopPoliceSiren?.();
-                        SoundManager.playPoliceChime?.('evade');
-                        showToast('🚓 Вы ушли от погони ДПС!', 'emerald', 3000);
+                        if (msg.reason === 'target_exited') {
+                            showToast('🏃 Вы выскочили из машины! Поблизости могут быть пешие полицейские!', 'amber', 4000);
+                        } else {
+                            SoundManager.playPoliceChime?.('evade');
+                            showToast('🚓 Вы ушли от погони ДПС!', 'emerald', 3000);
+                        }
                     }
                 }
                 break;

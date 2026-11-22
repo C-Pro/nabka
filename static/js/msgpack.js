@@ -9,7 +9,8 @@ export const MsgPackCodec = {
 
     encode(obj, floatKeys = new Set([
         'x', 'y', 'z', 'vx', 'vz', 'yaw', 'speed', 'yaw_rate', 'sample_time_ms',
-        'dvx', 'dvz', 'dyaw_rate', 'police_mass', 'player_mass', 'mass'
+        'dvx', 'dvz', 'dyaw_rate', 'police_mass', 'player_mass', 'mass',
+        'exit_x', 'exit_z', 'exit_yaw'
     ])) {
         const bytes = [];
         this._encodeValue(obj, bytes, null, floatKeys);

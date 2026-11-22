@@ -800,4 +800,85 @@ describe('Police UI, Input Safety, Radar/Labels & Audio', () => {
         expect(radarOps2.length).toBe(1);
         expect(mockEls['radar-canvas']._ops.length).toBe(1);
     });
+
+    test('traffic police dialog hides/disables close button, shows lock notice + blocker, enforces ban vs 66666, and restores camera mode', () => {
+        const blocker = createElement('div');
+        blocker.classList.add('hidden');
+        const lockNotice = createElement('p');
+        lockNotice.classList.add('hidden');
+        const camLabel = createElement('span');
+        mockEls['police-modal-blocker'] = blocker;
+        mockEls['police-dialogue-lock-notice'] = lockNotice;
+        mockEls['cam-mode-label'] = camLabel;
+
+        GAME_STATE.cameraMode = 3; // Cockpit mode saved before top-down fine stop
+        const car = { id: 'car_0', name: 'Mark II', group: { position: { x: 23, y: 0, z: 25 }, rotation: { y: 0 } }, vx: 0, vz: 0, speed: 0, yawRate: 0, _lastExitTime: Date.now() };
+        GAME_STATE.policeFineSequence = {
+            active: true,
+            topDownActive: true,
+            stage: 'dialogue',
+            policeCarId: 'police_car_0',
+            carId: 'car_0',
+            officerId: 'dps_police_car_0',
+            officerName: 'Инспектор ДПС Соколов',
+            savedCamera: { cameraMode: 3, cameraDistance: 0.1, cameraPitch: 0.56, cameraYaw: 0 }
+        };
+        GAME_STATE.cameraMode = 0;
+
+        openPoliceEncounterModal({
+            type: 'police_encounter_start',
+            encounter_id: 'enc_traffic_1',
+            cop_id: 'dps_police_car_0',
+            cop_name: 'Инспектор ДПС Соколов',
+            scenario_id: 'traffic_speeding',
+            encounter_kind: 'traffic',
+            car_id: 'car_0',
+            title: 'Остановка ДПС',
+            opening: 'Превышение скорости!',
+            options: [
+                { index: 0, text: 'Штраф 5000', fine: 5000, blocks_vehicle: true },
+                { index: 3, text: 'Макс 66666', fine: 66666, blocks_vehicle: false }
+            ],
+            target_user: 'Димон-с-Первака'
+        }, () => true);
+
+        expect(mockEls['btn-close-npc-chat'].disabled).toBe(true);
+        expect(mockEls['btn-close-npc-chat'].classList.contains('hidden')).toBe(true);
+        expect(lockNotice.classList.contains('hidden')).toBe(false);
+        expect(blocker.classList.contains('hidden')).toBe(false);
+        expect(mockEls['npc-dialogue-modal'].getAttribute('aria-describedby')).toBe('police-dialogue-lock-notice');
+        expect(mockEls['npc-options-container'].children[0].children[1].textContent).toContain('запрет авто 5 мин');
+        expect(mockEls['npc-options-container'].children[1].children[1].textContent).toContain('без запрета авто');
+
+        // Escape cannot dismiss before resolution
+        expect(closeNpcDialogue()).toBe(false);
+        expect(mockEls['npc-dialogue-modal'].classList.contains('hidden')).toBe(false);
+
+        // Resolve with option 0 -> car_0 blocked for 5 min and toggleVehicleDrive rejects re-entry
+        resolvePoliceEncounterModal({
+            type: 'police_encounter_result',
+            encounter_id: 'enc_traffic_1',
+            target_user: 'Димон-с-Первака',
+            option_index: 0,
+            reply_text: 'Наложен запрет',
+            fine: 5000,
+            money: 120400,
+            car_id: 'car_0',
+            vehicle_blocked: true,
+            vehicle_ban_sec: 300
+        });
+        expect(mockEls['btn-close-npc-chat'].disabled).toBe(false);
+        expect(mockEls['btn-close-npc-chat'].classList.contains('hidden')).toBe(false);
+        expect(lockNotice.classList.contains('hidden')).toBe(true);
+
+        // Closing after resolution restores saved cameraMode === 3 and hides blocker
+        expect(closeNpcDialogue()).toBe(true);
+        expect(GAME_STATE.cameraMode).toBe(3);
+        expect(GAME_STATE.policeFineSequence).toBeNull();
+        expect(blocker.classList.contains('hidden')).toBe(true);
+
+        // Banned car rejects manual entry
+        expect(toggleVehicleDrive(car)).toBe(false);
+        expect(GAME_STATE.inVehicle).toBeNull();
+    });
 });

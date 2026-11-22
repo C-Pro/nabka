@@ -1,5 +1,5 @@
 import { renderVehiclePose, resetVehiclePose, VehicleSnapshotBuffer, smoothingAlpha } from './vehicle-motion.js';
-import { GAME_STATE, isGameplayInputSuspended, applyPoliceStateSnapshot, isLocalPlayerChased, resetPoliceState } from './state.js';
+import { GAME_STATE, isGameplayInputSuspended, applyPoliceStateSnapshot, isLocalPlayerChased, resetPoliceState, getVehicleBanRemainingSec, formatBanCountdown, getLocalChaseType } from './state.js';
 import { PhysicsEngine, WorldVehiclePhysics, stepWorldVehiclePhysics, getVehicleCollisionCircles, getMinVehicleCircleGap, applyVehicleImpulse, POLICE_CAR_SPECS, SEA_SURFACE_Y, getWaterDepthAt, getTargetSwimY, MIN_SWIM_X, SHORE_X } from './physics.js';
 import { TextureFactory } from './textures.js';
 import { SoundManager, computePoliceSirenAcoustics } from './audio.js';
@@ -72,6 +72,30 @@ export const Player = {
             return;
         }
         this.group.visible = true;
+
+        const fineSeq = GAME_STATE.policeFineSequence;
+        if (fineSeq && fineSeq.active) {
+            this.velocity.x = 0;
+            this.velocity.z = 0;
+            let anchor = null;
+            if (fineSeq.officerId && GAME_STATE.policeCops instanceof Map) {
+                anchor = GAME_STATE.policeCops.get(fineSeq.officerId) || null;
+            }
+            if (!anchor && fineSeq.policeCarId && GAME_STATE.policeCars instanceof Map) {
+                anchor = GAME_STATE.policeCars.get(fineSeq.policeCarId) || null;
+            }
+            const anchorPos = anchor ? (anchor.renderPosition || anchor.group?.position || anchor) : null;
+            if (anchorPos && Number.isFinite(Number(anchorPos.x)) && Number.isFinite(Number(anchorPos.z))) {
+                const dx = Number(anchorPos.x) - this.position.x;
+                const dz = Number(anchorPos.z) - this.position.z;
+                if (Math.hypot(dx, dz) > 0.1) {
+                    const targetYaw = Math.atan2(dx, dz);
+                    let diff = targetYaw - this.rotationY;
+                    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+                    this.rotationY += diff * Math.min(1, dt * 10);
+                }
+            }
+        }
 
         let moveForward = 0;
         let moveRight = 0;
@@ -840,6 +864,10 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
         isCar: true,
         carRef: carObj,
         get prompt() {
+            const banSec = getVehicleBanRemainingSec(GAME_STATE, carObj.id);
+            if (banSec > 0) {
+                return `🚫 Запрет на эксплуатацию ${name} (${formatBanCountdown(banSec)})`;
+            }
             if (carObj.remoteDriver) {
                 return `За рулём ${name} сейчас @${carObj.remoteDriver}`;
             }
@@ -849,6 +877,11 @@ export function createJDMCar(name, colorHex, x, z, rotY = 0, onToggleDrive = nul
         get z() { return carObj.group.position.z; },
         radius: 4.5,
         onInteract: () => {
+            const banSec = getVehicleBanRemainingSec(GAME_STATE, carObj.id);
+            if (banSec > 0) {
+                showToast(`🚫 На ${carObj.name} наложен запрет на эксплуатацию транспортного средства (${formatBanCountdown(banSec)})`, 'red', 3500);
+                return;
+            }
             if (carObj.remoteDriver && carObj.remoteDriver !== GAME_STATE.username) {
                 showToast(`⚠️ За рулём ${carObj.name} уже сидит @${carObj.remoteDriver}!`, 'amber');
                 return;
@@ -868,8 +901,14 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null, options = {}) 
         sendSnapshotFn = null;
     }
     const force = Boolean(opts && opts.force);
+    const silent = Boolean(opts && opts.silent);
+    const skipSnapshot = Boolean(opts && opts.skipSnapshot);
     if (!force && GAME_STATE.activePoliceEncounter && GAME_STATE.activePoliceEncounter.stage !== 'resolved') {
         showToast('⚠️ Сначала ответьте полицейскому!', 'amber', 1500);
+        return false;
+    }
+    if (!force && GAME_STATE.policeFineSequence && GAME_STATE.policeFineSequence.active) {
+        showToast('⚠️ Сначала завершите оформление с ДПС!', 'amber', 1500);
         return false;
     }
 
@@ -877,7 +916,7 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null, options = {}) 
     const mobilePedals = (typeof document !== 'undefined') ? document.getElementById('mobile-car-pedals') : null;
     const jumpBtn = (typeof document !== 'undefined') ? document.getElementById('btn-action-jump') : null;
     const actionBtnLabel = (typeof document !== 'undefined') ? document.getElementById('action-btn-label') : null;
-    SoundManager.playActionSound('car');
+    if (!silent) SoundManager.playActionSound('car');
 
     dismissInteractionPrompt();
 
@@ -894,11 +933,33 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null, options = {}) 
         leavingVehicle.tractionLoss = 0;
         resetVehiclePose(leavingVehicle);
 
-        if (sendSnapshotFn) sendSnapshotFn(true);
+        if (!skipSnapshot && sendSnapshotFn) sendSnapshotFn(true);
 
-        const exitX = leavingVehicle.group.position.x - 2.6;
-        const exitZ = leavingVehicle.group.position.z;
+        const hasCustomExit = opts.exitPos && Number.isFinite(Number(opts.exitPos.x)) && Number.isFinite(Number(opts.exitPos.z));
+        const exitX = hasCustomExit ? Number(opts.exitPos.x) : leavingVehicle.group.position.x - 2.6;
+        const exitZ = hasCustomExit ? Number(opts.exitPos.z) : leavingVehicle.group.position.z;
         Player.position.set(exitX, 0, exitZ);
+        if (Player.velocity && typeof Player.velocity.set === 'function') {
+            Player.velocity.set(0, 0, 0);
+        } else if (Player.velocity) {
+            Player.velocity.x = 0;
+            Player.velocity.y = 0;
+            Player.velocity.z = 0;
+        }
+        if (hasCustomExit && Number.isFinite(Number(opts.exitPos.yaw))) {
+            Player.rotationY = Number(opts.exitPos.yaw);
+        }
+        if (Player.group) {
+            Player.group.visible = true;
+            if (Player.group.position && typeof Player.group.position.copy === 'function') {
+                Player.group.position.copy(Player.position);
+            } else if (Player.group.position && typeof Player.group.position.set === 'function') {
+                Player.group.position.set(exitX, 0, exitZ);
+            }
+            if (Player.group.rotation) {
+                Player.group.rotation.y = Player.rotationY || 0;
+            }
+        }
         GAME_STATE.inVehicle = null;
         GAME_STATE.keys.w = GAME_STATE.keys.s = GAME_STATE.keys.space = false;
         SoundManager.updateVehicleAudio(null, false, false, false, false);
@@ -916,10 +977,17 @@ export function toggleVehicleDrive(carObj, onSendSnapshot = null, options = {}) 
         if (mobilePedals) mobilePedals.classList.add('hidden');
         if (jumpBtn) jumpBtn.classList.remove('hidden');
         if (actionBtnLabel) actionBtnLabel.textContent = 'Действие (E)';
-        showToast(`🚶 @${GAME_STATE.username} вышел на променад Набки`, 'sky');
+        if (!silent) {
+            showToast(`🚶 @${GAME_STATE.username} вышел на променад Набки`, 'sky');
+        }
         showLocalLabels(LOCAL_LABEL_EXIT_VEHICLE_DURATION_MS);
-        if (sendSnapshotFn) sendSnapshotFn(true);
+        if (!skipSnapshot && sendSnapshotFn) sendSnapshotFn(true);
     } else {
+        const banSec = !force ? getVehicleBanRemainingSec(GAME_STATE, carObj.id) : 0;
+        if (banSec > 0) {
+            showToast(`🚫 На ${carObj.name} наложен запрет на эксплуатацию транспортного средства (${formatBanCountdown(banSec)})`, 'red', 3500);
+            return false;
+        }
         if (carObj.remoteDriver && carObj.remoteDriver !== GAME_STATE.username) {
             showToast(`⚠️ Машина занята игроком @${carObj.remoteDriver}`, 'amber');
             return false;
@@ -1841,9 +1909,9 @@ export function updatePoliceEntities(dt, elapsed = 0, remotePlayersMap = null) {
             }
 
             const speed = Math.hypot(target.vx || 0, target.vz || 0);
-            const isMoving = target.state === 'patrol' || target.state === 'approach' || speed > 0.25;
+            const isMoving = target.state === 'patrol' || target.state === 'approach' || target.state === 'chase' || speed > 0.25;
             if (isMoving) {
-                const isRun = target.state === 'approach' || target.anim === 'run' || speed > 4.0;
+                const isRun = target.state === 'approach' || target.state === 'chase' || target.anim === 'run' || speed > 4.0;
                 cop.walkCycle = (cop.walkCycle || 0) + dt * (isRun ? 14 : 9);
                 const swing = Math.sin(cop.walkCycle) * (isRun ? 0.8 : 0.55);
                 if (cop.leftLeg?.rotation) cop.leftLeg.rotation.x = swing;
@@ -1890,7 +1958,7 @@ export function updatePoliceEntities(dt, elapsed = 0, remotePlayersMap = null) {
                 car.group.rotation.y = car.yaw;
             }
 
-            const emergencyActive = Boolean(car.siren || car.lights || car.state === 'chase');
+            const emergencyActive = Boolean(car.siren || car.lights || car.state === 'chase' || car.state === 'fine_stop');
             if (car.lightbarRed && car.lightbarRed.material) {
                 car.lightbarRed.material.emissiveIntensity = emergencyActive ? (redPhase ? 2.8 : 0.15) : 0.15;
             }
@@ -1911,8 +1979,16 @@ export function updatePoliceEntities(dt, elapsed = 0, remotePlayersMap = null) {
         }
     }
 
-    const chased = isLocalPlayerChased(GAME_STATE);
-    updatePolicePursuitBanner(chased);
+    const chaseInfo = getLocalChaseType(GAME_STATE);
+    let bannerText = null;
+    if (chaseInfo.carCount >= 2) {
+        bannerText = 'ПОГОНЯ ДПС (2 ЭКИПАЖА) • СБРОСЬТЕ СКОРОСТЬ ИЛИ УХОДИТЕ';
+    } else if (chaseInfo.byCar) {
+        bannerText = 'ПОГОНЯ ДПС • ПРЕВЫШЕНИЕ СКОРОСТИ (> 40 КМ/Ч)';
+    } else if (chaseInfo.onFoot) {
+        bannerText = 'ПЕШАЯ ПОГОНЯ ПОЛИЦИИ • БЕГИТЕ ИЛИ СДАВАЙТЕСЬ';
+    }
+    updatePolicePursuitBanner(chaseInfo.chased, bannerText);
     if (nearestSirenAcoustics?.active) {
         SoundManager.playPoliceSiren?.(true, nearestSirenAcoustics.volume, nearestSirenAcoustics);
     } else {

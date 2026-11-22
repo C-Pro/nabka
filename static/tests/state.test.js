@@ -24,7 +24,14 @@ import {
     applyPoliceChaseEvent,
     isLocalPlayerChased,
     resetPoliceState,
-    isGameplayInputSuspended
+    isGameplayInputSuspended,
+    applyVehicleBansSnapshot,
+    setVehicleBan,
+    getVehicleBanRemainingSec,
+    formatBanCountdown,
+    startPoliceFineSequenceState,
+    endPoliceFineSequenceState,
+    getLocalChaseType
 } from '../js/state.js';
 import { World, getVladivostokTime, getTimeOfDayPhase } from '../js/world.js';
 import { MultiplayerClient, showChatBox, hideChatBox, scheduleChatAutoHide } from '../js/network.js';
@@ -1862,6 +1869,105 @@ describe('Pet Selection (Dog Dunya / Cat Berik) and Persistence', () => {
             expect(redelivered.idempotent).toBe(true);
             expect(redelivered.encounter.stage).toBe('opening');
             expect(redelivered.encounter.chosenOptionIndex).toBeNull();
+        });
+
+        test('vehicle bans snapshot, countdown helpers, fine sequence camera save/restore, and chase type', () => {
+            const state = createGameState({ username: 'Вован-с-Чуркина' });
+            state.cameraMode = 3; // First-person cockpit
+            state.cameraDistance = 0.1;
+            state.cameraPitch = 0.4;
+            state.cameraYaw = 1.25;
+
+            const now = 100000;
+            applyVehicleBansSnapshot(state, [
+                { car_id: 'car_0', remaining_ms: 299100, reason: 'наложен запрет' }
+            ], now);
+            expect(getVehicleBanRemainingSec(state, 'car_0', now)).toBe(300);
+            expect(formatBanCountdown(getVehicleBanRemainingSec(state, 'car_0', now))).toBe('5:00');
+            expect(getVehicleBanRemainingSec(state, 'car_0', now + 300001)).toBe(0);
+
+            setVehicleBan(state, 'car_1', 120, 'ban', now);
+            expect(getVehicleBanRemainingSec(state, 'car_1', now)).toBe(120);
+            expect(formatBanCountdown(120)).toBe('2:00');
+
+            // Start animated fine stop -> saves mode 3, turns on topDownActive & suspends input
+            const seqRes = startPoliceFineSequenceState(state, {
+                stage: 'approaching',
+                police_car_id: 'police_car_0',
+                car_id: 'car_0',
+                officer_id: 'dps_police_car_0',
+                officer_name: 'Инспектор ДПС Соколов',
+                target_user: 'Вован-с-Чуркина',
+                exit_x: 20,
+                exit_z: 15,
+                exit_yaw: 1.5
+            });
+            expect(seqRes.active).toBe(true);
+            expect(state.policeFineSequence.topDownActive).toBe(true);
+            expect(isGameplayInputSuspended(state)).toBe(true);
+
+            // Second update ('dialogue') preserves savedCamera (does not overwrite with topDown state)
+            startPoliceFineSequenceState(state, {
+                stage: 'dialogue',
+                car_id: 'car_0',
+                officer_id: 'dps_police_car_0',
+                target_user: 'Вован-с-Чуркина'
+            });
+            expect(state.policeFineSequence.savedCamera.cameraMode).toBe(3);
+
+            // Resolve traffic encounter without 66666 -> bans car_0
+            startPoliceEncounterState(state, {
+                encounter_id: 'enc_tr',
+                cop_id: 'dps_police_car_0',
+                cop_name: 'Инспектор ДПС Соколов',
+                encounter_kind: 'traffic',
+                car_id: 'car_0',
+                title: 'ДПС',
+                opening: 'Превышение!',
+                options: [
+                    { index: 0, text: 'Штраф', fine: 5000, blocks_vehicle: true },
+                    { index: 3, text: 'Макс', fine: 66666, blocks_vehicle: false }
+                ],
+                target_user: 'Вован-с-Чуркина'
+            });
+            const res = resolvePoliceEncounterState(state, {
+                encounter_id: 'enc_tr',
+                target_user: 'Вован-с-Чуркина',
+                option_index: 0,
+                reply_text: 'Запрет',
+                fine: 5000,
+                money: 120400,
+                car_id: 'car_0',
+                vehicle_blocked: true,
+                vehicle_ban_sec: 300
+            });
+            expect(res.resolved).toBe(true);
+            expect(getVehicleBanRemainingSec(state, 'car_0')).toBeGreaterThan(290);
+
+            // End fine sequence -> restores cameraMode === 3
+            state.cameraMode = 0;
+            const ended = endPoliceFineSequenceState(state);
+            expect(ended.ended).toBe(true);
+            expect(state.cameraMode).toBe(3);
+            expect(state.policeFineSequence).toBeNull();
+
+            // Chase type distinguishes 2-car vs foot pursuit
+            applyPoliceStateSnapshot(state, {
+                sequence: 50,
+                foot_cops: [{ id: 'cop_0', x: 0, y: 0, z: 0, vx: 0, vz: 9.5, yaw: 0, state: 'chase', anim: 'run', target_user: 'Вован-с-Чуркина' }],
+                police_cars: [
+                    { id: 'police_car_0', state: 'chase', target_user: 'Вован-с-Чуркина', siren: true, lights: true },
+                    { id: 'police_car_1', state: 'chase', target_user: 'Вован-с-Чуркина', siren: true, lights: true }
+                ],
+                vehicle_bans: []
+            });
+            expect(getLocalChaseType(state)).toEqual({
+                chased: true,
+                byCar: true,
+                carCount: 2,
+                onFoot: true,
+                footCopCount: 1
+            });
         });
     });
 });

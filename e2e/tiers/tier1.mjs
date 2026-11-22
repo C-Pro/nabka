@@ -20,6 +20,7 @@ import {
     POLICE_CAR_MASS,
     SPEED_LIMIT_MS,
     STANDARD_MAX_SPEED_MS,
+    completeTrafficFineStop,
     driveNearPatrolPoliceCar,
     incurFinesUntilBelow,
     sleep,
@@ -30,8 +31,8 @@ import {
 } from '../lib/helpers.mjs';
 import { createTrackedPage, joinGame, launchBrowser, parseMoneyText } from '../lib/playwright.mjs';
 
-const VALID_FOOT_COP_STATES = new Set(['patrol', 'approach', 'dialogue', 'cooldown']);
-const VALID_POLICE_CAR_STATES = new Set(['patrol', 'chase', 'cooldown']);
+const VALID_FOOT_COP_STATES = new Set(['patrol', 'approach', 'chase', 'dialogue', 'cooldown']);
+const VALID_POLICE_CAR_STATES = new Set(['patrol', 'chase', 'fine_stop', 'cooldown']);
 
 export function getTier1Tests() {
     return [
@@ -570,7 +571,7 @@ export function getTier1Tests() {
         },
         {
             id: 'T1-F3-05',
-            name: 'F3.5: Stopping near chasing police car ends chase with status=stopped and fine',
+            name: 'F3.5: Stopping near chasing police car triggers fine_stop, traffic dialogue fine, and 5-min car ban',
             tier: 1,
             async run({ binaryPath }) {
                 await withServer({ binaryPath }, async (srv) => {
@@ -596,7 +597,7 @@ export function getTier1Tests() {
                             if (pc) {
                                 client.sendMoveDriving({
                                     car_id: 'car_0',
-                                    x: pc.x + 1.2,
+                                    x: pc.x + 2.0,
                                     y: 0,
                                     z: pc.z + 1.2,
                                     speed: 0,
@@ -611,16 +612,28 @@ export function getTier1Tests() {
                             await sleep(50);
                         }
                         assert(stoppedEvt, 'expected police_chase status=stopped');
-                        assertGreater(stoppedEvt.fine, 0, 'stopped chase applies fine > 0');
-                        assertEqual(stoppedEvt.money, (join.money ?? INITIAL_PLAYER_MONEY) - stoppedEvt.fine);
+                        assertEqual(stoppedEvt.reason, 'caught');
+                        assertEqual(stoppedEvt.fine, 0);
+
+                        const { fineStop, encounter, result } = await completeTrafficFineStop(client, {
+                            optionIndex: 0,
+                            fromIndex: cur,
+                            timeoutMs: 10000
+                        });
+                        assertEqual(fineStop.car_id, 'car_0');
+                        assertEqual(encounter.encounter_kind, 'traffic');
+                        assertGreater(result.fine, 0, 'traffic dialogue applies fine > 0');
+                        assertEqual(result.vehicle_blocked, true, 'option 0 blocks car_0 for 5 minutes');
+                        assertEqual(result.vehicle_ban_sec, 300);
+                        assertEqual(result.money, (join.money ?? INITIAL_PLAYER_MONEY) - result.fine);
 
                         const bal = await client.waitForType('balance_update', {
                             fromIndex: cur,
                             timeoutMs: 3000,
                             predicate: (m) => m.username === client.username
                         });
-                        assertEqual(bal.delta, -stoppedEvt.fine);
-                        assertEqual(bal.money, stoppedEvt.money);
+                        assertEqual(bal.delta, -result.fine);
+                        assertEqual(bal.money, result.money);
                     } finally {
                         await client.close();
                     }
@@ -642,10 +655,13 @@ export function getTier1Tests() {
                         });
                         assert(chase, 'chase started');
 
-                        const pc = (client.latestPoliceState?.police_cars || []).find((c) => c.id === policeCarId);
-                        const farX = pc && pc.x > 100 ? -12 : 285;
-                        const farZ = pc && pc.z > 0 ? -160 : 160;
                         const cur = client.cursor();
+                        const evadeCorners = [
+                            { x: -12, z: -160 },
+                            { x: -12, z: 160 },
+                            { x: 285, z: -160 },
+                            { x: 285, z: 160 }
+                        ];
 
                         let evadedEvt = null;
                         const deadline = Date.now() + 20000;
@@ -654,6 +670,21 @@ export function getTier1Tests() {
                                 .messagesSince(cur)
                                 .find((m) => m.type === 'police_chase' && m.target_user === client.username && m.status === 'evaded');
                             if (evadedEvt) break;
+
+                            const pcs = client.latestPoliceState?.police_cars || [];
+                            let farX = 285;
+                            let farZ = 160;
+                            if (pcs.length > 0) {
+                                let bestMinDist = -1;
+                                for (const corner of evadeCorners) {
+                                    const minD = Math.min(...pcs.map((p) => Math.hypot(corner.x - p.x, corner.z - p.z)));
+                                    if (minD > bestMinDist) {
+                                        bestMinDist = minD;
+                                        farX = corner.x;
+                                        farZ = corner.z;
+                                    }
+                                }
+                            }
 
                             client.sendMoveDriving({
                                 car_id: 'car_0',
@@ -982,8 +1013,8 @@ export function getTier1Tests() {
                             durationMs: 3500
                         });
                         assert(chase, 'chase started');
-                        const deadline = Date.now() + 10000;
                         let stopped = null;
+                        const deadline = Date.now() + 10000;
                         while (Date.now() < deadline) {
                             stopped = client
                                 .messagesSince(cur)
@@ -993,7 +1024,7 @@ export function getTier1Tests() {
                             if (pc) {
                                 client.sendMoveDriving({
                                     car_id: 'car_3',
-                                    x: pc.x + 1.0,
+                                    x: pc.x + 2.0,
                                     y: 0,
                                     z: pc.z + 1.0,
                                     speed: 0,
@@ -1007,9 +1038,14 @@ export function getTier1Tests() {
                             }
                             await sleep(50);
                         }
-                        assert(stopped, 'speeding stop completed');
-                        assertGreater(stopped.fine, 0);
-                        assertEqual(stopped.money, balBeforeZero - stopped.fine);
+                        assert(stopped, 'speeding stop initiated');
+                        const { result: res } = await completeTrafficFineStop(client, {
+                            optionIndex: 0,
+                            fromIndex: cur,
+                            timeoutMs: 10000
+                        });
+                        assertGreater(res.fine, 0);
+                        assertEqual(res.money, balBeforeZero - res.fine);
                     } finally {
                         await client.close();
                     }
@@ -1219,6 +1255,7 @@ export function getTier1Tests() {
                         ({ client: driver } = await connectWs(srv.wsUrl, uniqueUsername('drv')));
                         ({ client: obs } = await connectWs(srv.wsUrl, uniqueUsername('obs')));
                         const obsCur = obs.cursor();
+                        const drvCur = driver.cursor();
                         const { chase, policeCarId } = await driveNearPatrolPoliceCar(driver, {
                             carId: 'car_0',
                             speedMs: 22.0,
@@ -1232,19 +1269,23 @@ export function getTier1Tests() {
                         });
                         assertEqual(obsChase.police_car_id, policeCarId);
 
-                        // Stop to trigger fine broadcast
+                        // Stop to trigger fine_stop + DPS traffic dialogue -> balance_update
                         const deadline = Date.now() + 10000;
                         let obsBal = null;
-                        while (Date.now() < deadline) {
-                            obsBal = obs
-                                .messagesSince(obsCur)
-                                .find((m) => m.type === 'balance_update' && m.username === driver.username);
-                            if (obsBal) break;
+                        let sentStop = false;
+                        while (Date.now() < deadline && !sentStop) {
+                            const fin = driver
+                                .messagesSince(drvCur)
+                                .find((m) => m.type === 'police_chase' && m.target_user === driver.username && m.status === 'stopped');
+                            if (fin) {
+                                sentStop = true;
+                                break;
+                            }
                             const pc = (driver.latestPoliceState?.police_cars || []).find((c) => c.id === policeCarId);
                             if (pc) {
                                 driver.sendMoveDriving({
                                     car_id: 'car_0',
-                                    x: pc.x + 1.0,
+                                    x: pc.x + 2.0,
                                     y: 0,
                                     z: pc.z + 1.0,
                                     speed: 0,
@@ -1258,6 +1299,13 @@ export function getTier1Tests() {
                             }
                             await sleep(50);
                         }
+                        assert(sentStop, 'driver chase stopped cleanly');
+                        await completeTrafficFineStop(driver, { optionIndex: 0, fromIndex: drvCur, timeoutMs: 10000 });
+                        obsBal = await obs.waitForType('balance_update', {
+                            fromIndex: obsCur,
+                            timeoutMs: 4000,
+                            predicate: (m) => m.username === driver.username
+                        });
                         assert(obsBal, 'observer received balance_update on speeding fine');
                         assertLess(obsBal.delta, 0);
                     } finally {

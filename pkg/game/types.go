@@ -39,6 +39,7 @@ const (
 	TypePoliceDialogueChoice  = "police_dialogue_choice"
 	TypePoliceEncounterResult = "police_encounter_result"
 	TypePoliceChase           = "police_chase"
+	TypePoliceFineStop        = "police_fine_stop"
 	TypeVehicleImpulse        = "vehicle_impulse"
 )
 
@@ -46,6 +47,7 @@ const (
 const (
 	CopStatePatrol   = "patrol"
 	CopStateApproach = "approach"
+	CopStateChase    = "chase"
 	CopStateDialogue = "dialogue"
 	CopStateCooldown = "cooldown"
 )
@@ -54,7 +56,14 @@ const (
 const (
 	PoliceCarStatePatrol   = "patrol"
 	PoliceCarStateChase    = "chase"
+	PoliceCarStateFineStop = "fine_stop"
 	PoliceCarStateCooldown = "cooldown"
+)
+
+// Police encounter kinds
+const (
+	EncounterKindFoot    = "foot"
+	EncounterKindTraffic = "traffic"
 )
 
 // Police chase event statuses
@@ -268,6 +277,13 @@ type PoliceCarState struct {
 	Lights      bool    `msgpack:"lights"`
 }
 
+// VehicleBanState represents an active temporary driving prohibition on a vehicle.
+type VehicleBanState struct {
+	CarID       string `msgpack:"car_id"`
+	RemainingMS int64  `msgpack:"remaining_ms"`
+	Reason      string `msgpack:"reason"`
+}
+
 // OutboundPoliceStateMsg broadcasts authoritative police world state at 20 Hz and on join baseline.
 type OutboundPoliceStateMsg struct {
 	Type         string               `msgpack:"type"`
@@ -275,40 +291,62 @@ type OutboundPoliceStateMsg struct {
 	SampleTimeMS int64                `msgpack:"sample_time_ms"`
 	FootCops     []PoliceFootCopState `msgpack:"foot_cops"`
 	PoliceCars   []PoliceCarState     `msgpack:"police_cars"`
+	VehicleBans  []VehicleBanState    `msgpack:"vehicle_bans"`
 }
 
 // PoliceDialogueOptionView is a single selectable dialogue option sent to the target player.
 type PoliceDialogueOptionView struct {
-	Index int    `msgpack:"index"`
-	Text  string `msgpack:"text"`
-	Fine  int64  `msgpack:"fine"`
+	Index         int    `msgpack:"index"`
+	Text          string `msgpack:"text"`
+	Fine          int64  `msgpack:"fine"`
+	BlocksVehicle bool   `msgpack:"blocks_vehicle,omitempty"`
 }
 
 // OutboundPoliceEncounterStartMsg initiates an unsolicited Russian police encounter with target_user.
 type OutboundPoliceEncounterStartMsg struct {
-	Type        string                     `msgpack:"type"`
-	EncounterID string                     `msgpack:"encounter_id"`
-	CopID       string                     `msgpack:"cop_id"`
-	CopName     string                     `msgpack:"cop_name"`
-	ScenarioID  string                     `msgpack:"scenario_id"`
-	Title       string                     `msgpack:"title"`
-	Opening     string                     `msgpack:"opening"`
-	Options     []PoliceDialogueOptionView `msgpack:"options"`
-	TargetUser  string                     `msgpack:"target_user"`
+	Type          string                     `msgpack:"type"`
+	EncounterID   string                     `msgpack:"encounter_id"`
+	CopID         string                     `msgpack:"cop_id"`
+	CopName       string                     `msgpack:"cop_name"`
+	ScenarioID    string                     `msgpack:"scenario_id"`
+	Title         string                     `msgpack:"title"`
+	Opening       string                     `msgpack:"opening"`
+	Options       []PoliceDialogueOptionView `msgpack:"options"`
+	TargetUser    string                     `msgpack:"target_user"`
+	EncounterKind string                     `msgpack:"encounter_kind,omitempty"`
+	CarID         string                     `msgpack:"car_id,omitempty"`
 }
 
 // OutboundPoliceEncounterResultMsg broadcasts the outcome of a police encounter choice.
 type OutboundPoliceEncounterResultMsg struct {
-	Type        string `msgpack:"type"`
-	EncounterID string `msgpack:"encounter_id"`
-	CopID       string `msgpack:"cop_id"`
-	CopName     string `msgpack:"cop_name"`
-	ScenarioID  string `msgpack:"scenario_id"`
-	TargetUser  string `msgpack:"target_user"`
-	OptionIndex int    `msgpack:"option_index"`
-	ReplyText   string `msgpack:"reply_text"`
-	Fine        int64  `msgpack:"fine"`
-	Money       int64  `msgpack:"money"`
+	Type           string `msgpack:"type"`
+	EncounterID    string `msgpack:"encounter_id"`
+	CopID          string `msgpack:"cop_id"`
+	CopName        string `msgpack:"cop_name"`
+	ScenarioID     string `msgpack:"scenario_id"`
+	TargetUser     string `msgpack:"target_user"`
+	OptionIndex    int    `msgpack:"option_index"`
+	ReplyText      string `msgpack:"reply_text"`
+	Fine           int64  `msgpack:"fine"`
+	Money          int64  `msgpack:"money"`
+	CarID          string `msgpack:"car_id,omitempty"`
+	VehicleBlocked bool   `msgpack:"vehicle_blocked,omitempty"`
+	VehicleBanSec  int    `msgpack:"vehicle_ban_sec,omitempty"`
+}
+
+// OutboundPoliceFineStopMsg broadcasts animated fine-stop transitions (forced exit, GTA1 top-down camera, officer walk).
+type OutboundPoliceFineStopMsg struct {
+	Type        string  `msgpack:"type"`
+	Stage       string  `msgpack:"stage"` // "approaching" | "dialogue" | "resolved"
+	PoliceCarID string  `msgpack:"police_car_id,omitempty"`
+	CarID       string  `msgpack:"car_id"`
+	OfficerID   string  `msgpack:"officer_id"`
+	OfficerName string  `msgpack:"officer_name"`
+	TargetUser  string  `msgpack:"target_user"`
+	ExitX       float64 `msgpack:"exit_x"`
+	ExitZ       float64 `msgpack:"exit_z"`
+	ExitYaw     float64 `msgpack:"exit_yaw"`
+	Reason      string  `msgpack:"reason"`
 }
 
 // OutboundPoliceChaseMsg broadcasts police car chase lifecycle transitions.

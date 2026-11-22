@@ -1662,6 +1662,7 @@ func TestPoliceMessages_ServerReserved(t *testing.T) {
 		TypePoliceState,
 		TypePoliceEncounterStart,
 		TypePoliceEncounterResult,
+		TypePoliceFineStop,
 		TypePoliceChase,
 		TypeVehicleImpulse,
 	}
@@ -1773,9 +1774,9 @@ func TestJoinAndReconnect_MoneyAndPoliceBaseline(t *testing.T) {
 		t.Fatalf("broadcast join must omit money: %+v", aliceSeesBob)
 	}
 
-	// 3. Drive Alice's balance negative via real speeding stops (26 * 5000 = 130000 -> -4600)
-	for i := 0; i < 26; i++ {
-		srv.Hub().StepSimulation(10.5) // clear grace/cooldowns
+	// 3. Drive Alice's balance negative via two animated speeding fine-stops paying 66666 each (leaves car_0 unblocked, balance = -7932)
+	for i := 0; i < 2; i++ {
+		srv.Hub().StepSimulation(10.5) // clear officer return, grace & cooldowns
 		snap := srv.Hub().Snapshot()
 		pc := snap.Police.PoliceCars[0]
 		if err := sendMsgPack(t, alice1, map[string]any{
@@ -1787,34 +1788,59 @@ func TestJoinAndReconnect_MoneyAndPoliceBaseline(t *testing.T) {
 		_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
 		srv.Hub().StepSimulation(0.05) // chase started
 
-		// Stop right next to police_car_0 for 0.6s -> fined 5000
-		snap2 := srv.Hub().Snapshot()
-		pc2 := snap2.Police.PoliceCars[0]
-		_ = sendMsgPack(t, alice1, map[string]any{
-			"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
-			"x": pc2.X + 1.5, "y": 0.0, "z": pc2.Z + 1.5, "speed": 0.0, "yaw": 0.0, "drift": false, "lights": true,
-		})
-		_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
-		for s := 0; s < 12; s++ {
+		// Stop next to police_car_0 until fine_stop starts
+		for s := 0; s < 16; s++ {
 			snapLoop := srv.Hub().Snapshot()
+			if _, inStop := snapLoop.Police.ActiveFineStops["alice"]; inStop {
+				break
+			}
 			pcLoop := snapLoop.Police.PoliceCars[0]
 			_ = sendMsgPack(t, alice1, map[string]any{
 				"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
-				"x": pcLoop.X + 1.0, "y": 0.0, "z": pcLoop.Z + 1.0, "speed": 0.0, "yaw": 0.0, "drift": false, "lights": true,
+				"x": pcLoop.X + 3.0, "y": 0.0, "z": pcLoop.Z + 1.0, "speed": 0.0, "yaw": 0.0, "drift": false, "lights": true,
 			})
 			_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
 			srv.Hub().StepSimulation(0.05)
 		}
+		// Step until DPS officer walks up and starts traffic encounter
+		for s := 0; s < 80; s++ {
+			if _, hasEnc := srv.Hub().Snapshot().Police.ActiveEncounters["alice"]; hasEnc {
+				break
+			}
+			srv.Hub().StepSimulation(0.05)
+		}
+		trafficEnc, err := readMsgOfType(t, alice1, TypePoliceEncounterStart, 2*time.Second)
+		if err != nil {
+			t.Fatalf("round %d: expected traffic police_encounter_start: %v", i, err)
+		}
+		if err := sendMsgPack(t, alice1, map[string]any{
+			"type":         TypePoliceDialogueChoice,
+			"encounter_id": fmt.Sprint(trafficEnc["encounter_id"]),
+			"option_index": 3, // 66666 rub, car remains unblocked
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readMsgOfType(t, bob, TypePoliceEncounterResult, 2*time.Second); err != nil {
+			t.Fatalf("round %d: expected encounter result on bob: %v", i, err)
+		}
 	}
 
 	snapNeg := srv.Hub().Snapshot()
-	wantNegMoney := DefaultInitialMoney - 26*PoliceSpeedingFine // -4600
+	wantNegMoney := DefaultInitialMoney - 2*PoliceMaxFineNoBan // -7932
 	if snapNeg.Accounts["alice"] != wantNegMoney {
 		t.Fatalf("expected alice negative balance %d, got %d", wantNegMoney, snapNeg.Accounts["alice"])
 	}
 
-	// 4. Alice exits car and triggers an active foot-cop encounter while balance is negative
+	// 4. Alice triggers an active foot-cop encounter while balance is negative
+	srv.Hub().StepSimulation(16.0) // clear playerCooldownUntil
+	snapNeg = srv.Hub().Snapshot()
 	cop0 := snapNeg.Police.FootCops[0]
+	for _, c := range snapNeg.Police.FootCops {
+		if !strings.HasPrefix(c.ID, "dps_") {
+			cop0 = c
+			break
+		}
+	}
 	_ = sendMsgPack(t, alice1, map[string]any{
 		"type": TypeMove, "mode": ModePedestrian,
 		"x": cop0.X, "y": 0.0, "z": cop0.Z + 1.5, "vx": 0.0, "vz": 0.0, "yaw": 0.0, "anim": AnimIdle,
@@ -1830,7 +1856,7 @@ func TestJoinAndReconnect_MoneyAndPoliceBaseline(t *testing.T) {
 	encID := fmt.Sprint(encOnOld["encounter_id"])
 
 	// 5. Alice reconnects with her session token (4408 replacement):
-	//    must receive join.money == -4600, tracked cars baseline, police_state, AND the unresolved police_encounter_start!
+	//    must receive join.money == -7932, tracked cars baseline, police_state, AND the unresolved police_encounter_start!
 	alice2 := connectWS(t, fmt.Sprintf("%s?username=alice&token=%s", wsURL, aliceTok))
 	defer alice2.Close()
 
@@ -2016,7 +2042,7 @@ func TestMultiplayer_SpeedingChaseCollisionAndStopFineSync(t *testing.T) {
 		t.Fatalf("expected police_mass %v, got %v", PoliceCarMass, impAlice["police_mass"])
 	}
 
-	// 3. Alice remains stopped near police_car_0 (within 7.5m stop dist, laterally clear of overlap) for >= 0.5s -> stopped & fined 5000
+	// 3. Alice remains stopped near police_car_0 -> enters fine_stop, forces exit, spawns DPS officer, then option 0 fines 5000 & bans car_0
 	for i := 0; i < 16; i++ {
 		s := srv.Hub().Snapshot()
 		p := s.Police.PoliceCars[0]
@@ -2031,33 +2057,80 @@ func TestMultiplayer_SpeedingChaseCollisionAndStopFineSync(t *testing.T) {
 		srv.Hub().StepSimulation(0.05)
 	}
 
-	var balBob, stoppedMsg map[string]any
+	var stoppedMsg, fineStopApp map[string]any
 	deadline := time.Now().Add(2 * time.Second)
-	for (balBob == nil || stoppedMsg == nil) && time.Now().Before(deadline) {
+	for (stoppedMsg == nil || fineStopApp == nil) && time.Now().Before(deadline) {
 		m, err := readNextMsg(t, bob, time.Until(deadline))
 		if err != nil {
-			t.Fatalf("expected balance_update and police_chase stopped on bob: %v", err)
+			t.Fatalf("expected police_chase stopped and police_fine_stop approaching on bob: %v", err)
+		}
+		if m["type"] == TypePoliceChase && m["status"] == ChaseStatusStopped {
+			stoppedMsg = m
+		} else if m["type"] == TypePoliceFineStop && m["stage"] == "approaching" {
+			fineStopApp = m
+		}
+	}
+	if stoppedMsg["reason"] != "caught" {
+		t.Fatalf("expected caught stop reason, got %+v", stoppedMsg)
+	}
+	if fineStopApp["car_id"] != "car_0" || fineStopApp["target_user"] != "alice" {
+		t.Fatalf("unexpected approaching fine_stop payload: %+v", fineStopApp)
+	}
+
+	// Step simulation until DPS officer reaches Alice and opens traffic encounter
+	for i := 0; i < 100; i++ {
+		if _, ok := srv.Hub().Snapshot().Police.ActiveEncounters["alice"]; ok {
+			break
+		}
+		srv.Hub().StepSimulation(0.05)
+	}
+	encStart, err := readMsgOfType(t, alice, TypePoliceEncounterStart, 2*time.Second)
+	if err != nil || encStart["encounter_kind"] != EncounterKindTraffic {
+		t.Fatalf("expected traffic police_encounter_start on alice, got %+v (err=%v)", encStart, err)
+	}
+	if err := sendMsgPack(t, alice, map[string]any{
+		"type":         TypePoliceDialogueChoice,
+		"encounter_id": fmt.Sprint(encStart["encounter_id"]),
+		"option_index": 0, // 5000 rub + 5-min car_0 ban
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var balBob, resBob map[string]any
+	deadline = time.Now().Add(2 * time.Second)
+	for (balBob == nil || resBob == nil) && time.Now().Before(deadline) {
+		m, err := readNextMsg(t, bob, time.Until(deadline))
+		if err != nil {
+			t.Fatalf("expected balance_update and police_encounter_result on bob: %v", err)
 		}
 		if m["type"] == TypeBalanceUpdate {
 			balBob = m
-		} else if m["type"] == TypePoliceChase && m["status"] == ChaseStatusStopped {
-			stoppedMsg = m
+		} else if m["type"] == TypePoliceEncounterResult {
+			resBob = m
 		}
 	}
-	if balBob == nil || stoppedMsg == nil {
-		t.Fatalf("missing balance_update (%v) or stopped chase (%v)", balBob, stoppedMsg)
+	fineVal, _ := asInt64(resBob["fine"])
+	moneyVal, _ := asInt64(resBob["money"])
+	if fineVal != PoliceSpeedingFine || moneyVal != DefaultInitialMoney-PoliceSpeedingFine || resBob["vehicle_blocked"] != true {
+		t.Fatalf("unexpected traffic encounter result: %+v", resBob)
 	}
-	fineVal, _ := asInt64(stoppedMsg["fine"])
-	moneyVal, _ := asInt64(stoppedMsg["money"])
-	if fineVal != PoliceSpeedingFine || moneyVal != DefaultInitialMoney-PoliceSpeedingFine {
-		t.Fatalf("unexpected stopped chase payload: %+v", stoppedMsg)
-	}
-
 	if bMoney, _ := asInt64(balBob["money"]); bMoney != DefaultInitialMoney-PoliceSpeedingFine {
 		t.Fatalf("expected synced balance %d on bob, got %+v", DefaultInitialMoney-PoliceSpeedingFine, balBob)
 	}
 
-	// 4. Late joiner Charlie sees current authoritative police_state and parked/moved world state
+	// Banned car_0 rejects re-entry move from alice
+	if err := sendMsgPack(t, alice, map[string]any{
+		"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+		"x": 23.0, "y": 0.0, "z": 20.0, "speed": 0.0, "yaw": 0.0, "drift": false, "lights": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	banErr, err := readMsgOfType(t, alice, TypeError, 2*time.Second)
+	if err != nil || banErr["op"] != TypeMove || !strings.Contains(fmt.Sprint(banErr["message"]), "запрет") {
+		t.Fatalf("expected ban error on car_0 driving move, got %+v (err=%v)", banErr, err)
+	}
+
+	// 4. Late joiner Charlie sees current authoritative police_state including vehicle_bans
 	charlie := connectWS(t, wsURL+"?username=charlie")
 	defer charlie.Close()
 	psCharlie, err := readMsgOfType(t, charlie, TypePoliceState, 2*time.Second)
@@ -2067,6 +2140,10 @@ func TestMultiplayer_SpeedingChaseCollisionAndStopFineSync(t *testing.T) {
 	carsSlice, ok := psCharlie["police_cars"].([]any)
 	if !ok || len(carsSlice) != 2 {
 		t.Fatalf("expected 2 police cars on late joiner baseline, got %+v", psCharlie["police_cars"])
+	}
+	bansSlice, ok := psCharlie["vehicle_bans"].([]any)
+	if !ok || len(bansSlice) != 1 {
+		t.Fatalf("expected 1 active vehicle_ban on charlie baseline, got %+v", psCharlie["vehicle_bans"])
 	}
 }
 
@@ -2108,7 +2185,7 @@ func TestMultiplayer_OpenRoadRealisticBrakingStopAndFineSync(t *testing.T) {
 
 	// Simulate realistic 31.4 m/s^2 braking + aero drag without any lateral teleporting
 	const dt = 0.05
-	var stoppedBob, balBob map[string]any
+	var stoppedBob, fineStopBob map[string]any
 	maxZ := carZ
 
 	for tick := 0; tick < 300; tick++ {
@@ -2154,8 +2231,8 @@ func TestMultiplayer_OpenRoadRealisticBrakingStopAndFineSync(t *testing.T) {
 				if dvz, ok := m["dvz"].(float64); ok {
 					carVZ += dvz
 				}
-			case TypeBalanceUpdate:
-				balBob = m
+			case TypePoliceFineStop:
+				fineStopBob = m
 			case TypePoliceChase:
 				if m["status"] == ChaseStatusStopped || m["status"] == ChaseStatusEvaded {
 					stoppedBob = m
@@ -2168,26 +2245,134 @@ func TestMultiplayer_OpenRoadRealisticBrakingStopAndFineSync(t *testing.T) {
 		if _, err := readMsgOfType(t, alice, TypePoliceState, 2*time.Second); err != nil {
 			t.Fatalf("alice read failed on tick %d: %v", tick, err)
 		}
-		if stoppedBob != nil && balBob != nil {
+		if stoppedBob != nil && fineStopBob != nil {
 			break
 		}
 	}
 
-	if stoppedBob == nil {
-		t.Fatalf("expected police_chase stopped over WS without bulldozing (maxZ=%.2f)", maxZ)
+	if stoppedBob == nil || fineStopBob == nil {
+		t.Fatalf("expected police_chase stopped + police_fine_stop over WS without bulldozing (maxZ=%.2f)", maxZ)
 	}
-	if stoppedBob["status"] != ChaseStatusStopped || stoppedBob["reason"] != "fined" {
-		t.Fatalf("expected clean stop-and-fine, got %+v (maxZ=%.2f)", stoppedBob, maxZ)
-	}
-	fineVal, _ := asInt64(stoppedBob["fine"])
-	moneyVal, _ := asInt64(stoppedBob["money"])
-	if fineVal != PoliceSpeedingFine || moneyVal != DefaultInitialMoney-PoliceSpeedingFine {
-		t.Fatalf("unexpected fine/money in stopped chase: %+v", stoppedBob)
-	}
-	if balBob == nil {
-		t.Fatalf("expected balance_update broadcast to bob")
+	if stoppedBob["status"] != ChaseStatusStopped || stoppedBob["reason"] != "caught" {
+		t.Fatalf("expected caught chase transition into fine_stop, got %+v (maxZ=%.2f)", stoppedBob, maxZ)
 	}
 	if maxZ >= 85.0 {
 		t.Fatalf("expected car_0 not to be bulldozed down the road (maxZ=%.2f)", maxZ)
+	}
+
+	// Finish DPS officer walk -> traffic dialogue -> option 0 (5000 rub fine)
+	for tick := 0; tick < 100; tick++ {
+		if _, ok := srv.Hub().Snapshot().Police.ActiveEncounters["alice"]; ok {
+			break
+		}
+		srv.Hub().StepSimulation(dt)
+	}
+	encStart, err := readMsgOfType(t, alice, TypePoliceEncounterStart, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected police_encounter_start after officer walk: %v", err)
+	}
+	if err := sendMsgPack(t, alice, map[string]any{
+		"type":         TypePoliceDialogueChoice,
+		"encounter_id": fmt.Sprint(encStart["encounter_id"]),
+		"option_index": 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	balBob, err := readMsgOfType(t, bob, TypeBalanceUpdate, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected balance_update broadcast to bob: %v", err)
+	}
+	if m, _ := asInt64(balBob["money"]); m != DefaultInitialMoney-PoliceSpeedingFine {
+		t.Fatalf("expected synced balance %d on bob, got %+v", DefaultInitialMoney-PoliceSpeedingFine, balBob)
+	}
+}
+
+func TestMultiplayer_FineStopReconnect66666UnblockedAndBumpSplit(t *testing.T) {
+	srv, wsURL := startTestServer(t, 30*time.Second)
+	srv.Hub().SetSimAutoTick(false)
+
+	alice1 := connectWS(t, wsURL+"?username=alice")
+	defer alice1.Close()
+	j1, err := readNextMsg(t, alice1, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliceTok := fmt.Sprint(j1["token"])
+	_, _ = readMsgOfType(t, alice1, TypePoliceState, 2*time.Second)
+
+	bob := connectWS(t, wsURL+"?username=bob")
+	defer bob.Close()
+	_, _ = readMsgOfType(t, bob, TypePoliceState, 2*time.Second)
+
+	// 1. Alice bumps into patrolling police_car_0 at low speed (< 40 km/h) -> collision chase!
+	pc0 := srv.Hub().Snapshot().Police.PoliceCars[0]
+	if err := sendMsgPack(t, alice1, map[string]any{
+		"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+		"x": pc0.X, "y": 0.0, "z": pc0.Z + 3.8, "vx": 0.0, "vz": -5.0, "speed": -5.0, "yaw": 0.0, "drift": false, "lights": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+	srv.Hub().StepSimulation(0.05)
+
+	bumpChase, err := readMsgOfType(t, bob, TypePoliceChase, 2*time.Second)
+	if err != nil || bumpChase["status"] != ChaseStatusStarted || bumpChase["reason"] != "collision" {
+		t.Fatalf("expected bump collision chase started on bob, got %+v (err=%v)", bumpChase, err)
+	}
+
+	// 2. Stop near police_car_0 -> fine_stop dialogue starts -> 4408 reconnect preserves BOTH fine_stop and encounter!
+	for i := 0; i < 16; i++ {
+		if _, ok := srv.Hub().Snapshot().Police.ActiveFineStops["alice"]; ok {
+			break
+		}
+		p := srv.Hub().Snapshot().Police.PoliceCars[0]
+		_ = sendMsgPack(t, alice1, map[string]any{
+			"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+			"x": p.X + 3.0, "y": 0.0, "z": p.Z + 1.0, "vx": 0.0, "vz": 0.0, "speed": 0.0, "yaw": 0.0, "drift": false, "lights": true,
+		})
+		_, _ = readMsgOfType(t, bob, TypeMove, 2*time.Second)
+		srv.Hub().StepSimulation(0.05)
+	}
+	for i := 0; i < 100; i++ {
+		if _, ok := srv.Hub().Snapshot().Police.ActiveEncounters["alice"]; ok {
+			break
+		}
+		srv.Hub().StepSimulation(0.05)
+	}
+
+	alice2 := connectWS(t, fmt.Sprintf("%s?username=alice&token=%s", wsURL, aliceTok))
+	defer alice2.Close()
+	_, _ = readNextMsg(t, alice2, 2*time.Second)                    // join
+	_, _ = readMsgOfType(t, alice2, TypePoliceState, 2*time.Second) // police_state
+	reFS, err := readNextMsg(t, alice2, 2*time.Second)
+	if err != nil || reFS["type"] != TypePoliceFineStop {
+		t.Fatalf("expected preserved police_fine_stop on 4408 reconnect, got %+v (err=%v)", reFS, err)
+	}
+	reEnc, err := readNextMsg(t, alice2, 2*time.Second)
+	if err != nil || reEnc["type"] != TypePoliceEncounterStart || reEnc["scenario_id"] != "traffic_collision" {
+		t.Fatalf("expected preserved traffic_collision encounter on 4408 reconnect, got %+v (err=%v)", reEnc, err)
+	}
+
+	// 3. Choosing option 3 (66666) leaves car_0 unblocked and immediately drivable!
+	if err := sendMsgPack(t, alice2, map[string]any{
+		"type":         TypePoliceDialogueChoice,
+		"encounter_id": fmt.Sprint(reEnc["encounter_id"]),
+		"option_index": 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res2, err := readMsgOfType(t, alice2, TypePoliceEncounterResult, 2*time.Second)
+	if err != nil || res2["vehicle_blocked"] == true {
+		t.Fatalf("expected 66666 choice unblocked result, got %+v (err=%v)", res2, err)
+	}
+	if err := sendMsgPack(t, alice2, map[string]any{
+		"type": TypeMove, "mode": ModeDriving, "car_id": "car_0",
+		"x": 23.0, "y": 0.0, "z": 25.0, "speed": 2.0, "yaw": 0.0, "drift": false, "lights": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bobDrive, err := readMsgOfType(t, bob, TypeMove, 2*time.Second)
+	if err != nil || bobDrive["car_id"] != "car_0" {
+		t.Fatalf("expected immediate re-drive on car_0 after 66666 choice, got %+v (err=%v)", bobDrive, err)
 	}
 }

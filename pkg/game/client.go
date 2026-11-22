@@ -295,7 +295,7 @@ func (c *Client) ReadPump() {
 			c.sendDirect(errMsg)
 
 		case TypeBalanceUpdate, TypePoliceState, TypePoliceEncounterStart,
-			TypePoliceEncounterResult, TypePoliceChase, TypeVehicleImpulse:
+			TypePoliceEncounterResult, TypePoliceChase, TypePoliceFineStop, TypeVehicleImpulse:
 			errMsg, _ := MarshalMsgPack(OutboundErrorMsg{
 				Type:    TypeError,
 				Message: env.Type + " message type is server reserved",

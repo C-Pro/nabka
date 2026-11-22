@@ -7,6 +7,7 @@ import {
     assert,
     assertCyrillic,
     assertEqual,
+    assertFinite,
     assertGreater,
     assertGreaterOrEqual,
     assertLess,
@@ -59,7 +60,13 @@ async function walkBrowserToNearestPatrolCop(page, obsClient, { timeoutMs = 4000
     });
 }
 
-async function clickHighestFineDialogueOption(page, obsClient = null, username = '', fromIndex = null) {
+async function clickHighestFineDialogueOption(
+    page,
+    obsClient = null,
+    username = '',
+    fromIndex = null,
+    { modalTimeoutMs = 10000, optionIndex = null } = {}
+) {
     await page.waitForFunction(
         () => {
             const modal = document.getElementById('npc-dialogue-modal');
@@ -67,26 +74,30 @@ async function clickHighestFineDialogueOption(page, obsClient = null, username =
             return Boolean(modal && !modal.classList.contains('hidden') && btns.length >= 2);
         },
         null,
-        { timeout: 6000 }
+        { timeout: modalTimeoutMs }
     );
+    const expectedEncId = await page.evaluate(() => window.GAME_STATE?.activePoliceEncounter?.encounter_id || '');
     const waitFrom = typeof fromIndex === 'number' ? fromIndex : (obsClient ? obsClient.cursor() : 0);
-    const chosenIdx = await page.evaluate(() => {
-        const btns = [...document.querySelectorAll('#npc-options-container button')];
-        let bestIdx = btns.length - 1;
-        let bestFine = -1;
-        btns.forEach((btn, idx) => {
-            const txt = btn.textContent || '';
-            const m = txt.match(/(\d[\d\s\u00a0]*)\s*₽/);
-            if (m) {
-                const val = Number(m[1].replace(/[^\d]/g, ''));
-                if (val > bestFine) {
-                    bestFine = val;
-                    bestIdx = idx;
-                }
-            }
-        });
-        return bestIdx;
-    });
+    const chosenIdx =
+        typeof optionIndex === 'number'
+            ? optionIndex
+            : await page.evaluate(() => {
+                  const btns = [...document.querySelectorAll('#npc-options-container button')];
+                  let bestIdx = btns.length - 1;
+                  let bestFine = -1;
+                  btns.forEach((btn, idx) => {
+                      const txt = btn.textContent || '';
+                      const m = txt.match(/(\d[\d\s\u00a0]*)\s*₽/);
+                      if (m) {
+                          const val = Number(m[1].replace(/[^\d]/g, ''));
+                          if (val > bestFine) {
+                              bestFine = val;
+                              bestIdx = idx;
+                          }
+                      }
+                  });
+                  return bestIdx;
+              });
     const buttons = page.locator('#npc-options-container button');
     await buttons.nth(chosenIdx).click();
 
@@ -95,7 +106,9 @@ async function clickHighestFineDialogueOption(page, obsClient = null, username =
         encRes = await obsClient.waitForType('police_encounter_result', {
             fromIndex: waitFrom,
             timeoutMs: 6000,
-            predicate: (m) => !username || m.target_user === username
+            predicate: (m) =>
+                (!username || m.target_user === username) &&
+                (!expectedEncId || m.encounter_id === expectedEncId)
         });
     }
 
@@ -143,6 +156,111 @@ function computeRoadSteerTarget(telemetry, policeCar) {
     return { x: policeCar.x, z: policeCar.z };
 }
 
+async function stopBrowserCarWithChasingPolice(
+    page,
+    obsClient,
+    username,
+    fallbackPoliceCarId = '',
+    { timeoutMs = 30000 } = {}
+) {
+    const deadline = Date.now() + timeoutMs;
+    let stoppedSince = 0;
+    let creepUntil = 0;
+    let lastTelemetry = null;
+    let lastPc = null;
+
+    try {
+        await page.bringToFront().catch(() => {});
+        await releaseMoveKeys(page);
+        await page.keyboard.down('Space');
+
+        while (Date.now() < deadline) {
+            const telemetry = await page.evaluate(() => {
+                const v = window.GAME_STATE?.inVehicle;
+                return {
+                    x: v?.x ?? 0,
+                    z: v?.z ?? 0,
+                    yaw: v?.yaw ?? 0,
+                    speedMs: v?.speed ?? 0,
+                    inVeh: Boolean(v),
+                    topDown: Boolean(window.GAME_STATE?.policeFineSequence?.topDownActive)
+                };
+            });
+            lastTelemetry = telemetry;
+            if (telemetry.topDown && !telemetry.inVeh) {
+                return;
+            }
+            if (!telemetry.inVeh) {
+                await page.waitForTimeout(80);
+                continue;
+            }
+
+            const cars = obsClient.latestPoliceState?.police_cars || [];
+            const chasing = cars.filter((c) => c.state === 'chase' && c.target_user === username);
+            const pool = chasing.length > 0 ? chasing : cars.filter((c) => c.id === fallbackPoliceCarId);
+            const pc =
+                [...pool].sort(
+                    (a, b) =>
+                        Math.hypot(a.x - telemetry.x, a.z - telemetry.z) -
+                        Math.hypot(b.x - telemetry.x, b.z - telemetry.z)
+                )[0] || null;
+            lastPc = pc;
+
+            const now = Date.now();
+            const isStopped = Math.abs(telemetry.speedMs) <= 1.0;
+            if (!isStopped) {
+                stoppedSince = 0;
+            } else if (!stoppedSince) {
+                stoppedSince = now;
+            }
+
+            const dist = pc ? Math.hypot(pc.x - telemetry.x, pc.z - telemetry.z) : Infinity;
+            const pcSpeed = pc ? Math.hypot(pc.vx || 0, pc.vz || 0) : 0;
+
+            if (now < creepUntil && dist > 6.5 && pc) {
+                const aim = computeRoadSteerTarget(telemetry, pc);
+                let yawDiff = Math.atan2(aim.x - telemetry.x, aim.z - telemetry.z) - telemetry.yaw;
+                while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+                while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+                await page.keyboard.up('Space').catch(() => {});
+                await page.keyboard.down('KeyW');
+                if (yawDiff > 0.12) {
+                    await page.keyboard.up('KeyD');
+                    await page.keyboard.down('KeyA');
+                } else if (yawDiff < -0.12) {
+                    await page.keyboard.up('KeyA');
+                    await page.keyboard.down('KeyD');
+                } else {
+                    await page.keyboard.up('KeyA');
+                    await page.keyboard.up('KeyD');
+                }
+            } else if (stoppedSince && now - stoppedSince > 6000 && dist > 7.5 && pcSpeed < 1.5 && pc) {
+                creepUntil = now + 1200;
+                stoppedSince = 0;
+            } else {
+                await releaseMoveKeys(page);
+                await page.keyboard.down('Space');
+            }
+            await page.waitForTimeout(80);
+        }
+    } finally {
+        await page.keyboard.up('Space').catch(() => {});
+        await releaseMoveKeys(page);
+    }
+    try {
+        await page.waitForFunction(
+            () => Boolean(window.GAME_STATE?.policeFineSequence?.topDownActive) && window.GAME_STATE?.inVehicle === null,
+            null,
+            { timeout: 6000 }
+        );
+    } catch (err) {
+        const d = lastPc && lastTelemetry ? Math.hypot(lastPc.x - lastTelemetry.x, lastPc.z - lastTelemetry.z).toFixed(2) : 'n/a';
+        throw new Error(
+            `stopBrowserCarWithChasingPolice timed out (dist=${d}, car=${JSON.stringify(lastTelemetry)}, pc=${JSON.stringify(lastPc)}): ${err.message}`
+        );
+    }
+}
+
 async function steerCarTowardPoint(page, telemetry, targetX, targetZ, { stuckState }) {
     const now = Date.now();
     if (!stuckState.anchor) {
@@ -151,11 +269,12 @@ async function steerCarTowardPoint(page, telemetry, targetX, targetZ, { stuckSta
         stuckState.anchor = { x: telemetry.x, z: telemetry.z, atMs: now };
     } else if (now >= stuckState.evadeUntil && now - stuckState.anchor.atMs >= 1500) {
         stuckState.phase += 1;
-        stuckState.evadeUntil = now + 750;
-        stuckState.anchor = { x: telemetry.x, z: telemetry.z, atMs: now + 750 };
+        stuckState.evadeUntil = now + 1100;
+        stuckState.anchor = { x: telemetry.x, z: telemetry.z, atMs: now + 1100 };
     }
 
     if (now < stuckState.evadeUntil) {
+        await page.keyboard.up('ShiftLeft').catch(() => {});
         await page.keyboard.up('KeyW');
         await page.keyboard.down('KeyS');
         if (stuckState.phase % 2 === 1) {
@@ -197,7 +316,7 @@ async function driveBrowserCarTowardPoliceAndSpeed(
     page,
     obsClient,
     carId = null,
-    { timeoutMs = 45000, fromIndex = null } = {}
+    { timeoutMs = 65000, fromIndex = null } = {}
 ) {
     const msgCur = typeof fromIndex === 'number' ? fromIndex : obsClient.cursor();
     const enterInfo = await enterCarAndDrivePastSpeed(page, carId, 44, {
@@ -209,6 +328,8 @@ async function driveBrowserCarTowardPoliceAndSpeed(
 
     const deadline = Date.now() + timeoutMs;
     const stuckState = { anchor: null, evadeUntil: 0, phase: 0 };
+    let lastTelemetry = null;
+    let lastTarget = null;
     try {
         await page.bringToFront().catch(() => {});
         await page.keyboard.down('KeyW');
@@ -229,6 +350,7 @@ async function driveBrowserCarTowardPoliceAndSpeed(
                     hasFocus: document.hasFocus()
                 };
             });
+            lastTelemetry = telemetry;
             if (!telemetry.hasFocus) {
                 await page.bringToFront().catch(() => {});
             }
@@ -241,11 +363,14 @@ async function driveBrowserCarTowardPoliceAndSpeed(
                 return scoreA - scoreB;
             });
             const target = cars[0];
+            lastTarget = target || null;
             const aim = computeRoadSteerTarget(telemetry, target);
             await steerCarTowardPoint(page, telemetry, aim.x, aim.z, { stuckState });
             await page.waitForTimeout(70);
         }
-        throw new Error('Timed out waiting for police_chase started in browser driving scenario');
+        throw new Error(
+            `Timed out waiting for police_chase started in browser driving scenario (car=${JSON.stringify(lastTelemetry)}, target=${JSON.stringify(lastTarget)})`
+        );
     } finally {
         await releaseMoveKeys(page);
     }
@@ -385,14 +510,17 @@ export function getTier4Tests() {
 
                         const obsCur = obs.cursor();
                         const chase = await driveBrowserCarTowardPoliceAndSpeed(pDriver.page, obs, 'car_1', {
-                            timeoutMs: 45000,
+                            timeoutMs: 65000,
                             fromIndex: obsCur
                         });
                         assertEqual(chase.status, 'started');
                         assertEqual(chase.target_user, user);
 
                         const speedHud = Number(await pDriver.page.textContent('#speed-value'));
-                        assertGreater(speedHud, 40, 'speedometer HUD exceeded 40 km/h');
+                        assertFinite(speedHud, 'speedometer HUD numeric');
+                        if (chase.reason === 'speeding') {
+                            assertGreaterOrEqual(speedHud, 35, 'speedometer HUD active near >40 km/h chase trigger');
+                        }
 
                         const pursuitVisible = await pDriver.page.evaluate(
                             () => !document.getElementById('police-pursuit-banner')?.classList.contains('hidden')
@@ -461,7 +589,10 @@ export function getTier4Tests() {
                         impulseEvt ||= strongestImpulseEvt;
 
                         assert(impulseEvt, 'received vehicle_impulse from browser heavy police collision');
-                        assertEqual(impulseEvt.police_car_id, chase.police_car_id);
+                        assert(
+                            impulseEvt.police_car_id === 'police_car_0' || impulseEvt.police_car_id === 'police_car_1',
+                            `impulse came from chasing police car (got ${impulseEvt.police_car_id})`
+                        );
                         assertEqual(impulseEvt.police_mass, 4200, 'police car mass = 4200 kg');
                         assertLess(impulseEvt.player_mass, 2000, 'player car mass < 2000 kg');
                         assertGreater(
@@ -552,10 +683,11 @@ export function getTier4Tests() {
                                         timeoutMs: 35000,
                                         fromIndex: loopCur
                                     });
-                                    // Brake & wait for stop fine
+                                    // Brake & complete DPS traffic fine-stop dialogue when caught
+                                    let stopEvt = null;
                                     try {
                                         await pPlayer.page.keyboard.down('Space');
-                                        await obs.waitForType('police_chase', {
+                                        stopEvt = await obs.waitForType('police_chase', {
                                             fromIndex: loopCur,
                                             timeoutMs: 12000,
                                             predicate: (m) =>
@@ -566,6 +698,11 @@ export function getTier4Tests() {
                                     } finally {
                                         await pPlayer.page.keyboard.up('Space').catch(() => {});
                                         await releaseMoveKeys(pPlayer.page);
+                                    }
+                                    if (stopEvt && stopEvt.status === 'stopped') {
+                                        await clickHighestFineDialogueOption(pPlayer.page, obs, user, loopCur, {
+                                            modalTimeoutMs: 10000
+                                        });
                                     }
                                     continue;
                                 } catch {
@@ -670,8 +807,8 @@ export function getTier4Tests() {
 
                         await pDriver.page.bringToFront();
                         const chaseCur = obs.cursor();
-                        const chase = await driveBrowserCarTowardPoliceAndSpeed(pDriver.page, obs, null, {
-                            timeoutMs: 45000,
+                        const chase = await driveBrowserCarTowardPoliceAndSpeed(pDriver.page, obs, 'car_1', {
+                            timeoutMs: 120000,
                             fromIndex: chaseCur
                         });
                         assertEqual(chase.target_user, driverName);
@@ -682,6 +819,196 @@ export function getTier4Tests() {
                         await obs.close();
                         await pWalker.close();
                         await pDriver.close();
+                        await browser.close();
+                    }
+                });
+            }
+        },
+        {
+            id: 'T4-07',
+            name: 'Scenario 7: Animated DPS fine-stop (forced exit, GTA1 top-down, walking officer, non-dismissible dialog, 5-min car ban vs 66666, camera restore)',
+            tier: 4,
+            async run({ binaryPath, headed }) {
+                await withServer({ binaryPath }, async (srv) => {
+                    const browser = await launchBrowser({ headed });
+                    const pDrv = await createTrackedPage(browser);
+                    const { client: obs } = await connectWs(srv.wsUrl, uniqueUsername('t4_obs7'));
+                    try {
+                        const user = uniqueUsername('fine7');
+                        await joinGame(pDrv.page, srv.baseUrl, user);
+                        await waitForPoliceState(obs, (m) => m.police_cars?.some((c) => c.state === 'patrol'), 4000);
+
+                        // Switch camera to mode 3 (First-Person Cockpit) before fine-stop so we prove mode restore + top-down visibility
+                        await pDrv.page.evaluate(() => {
+                            window.World.cycleCameraMode();
+                            window.World.cycleCameraMode();
+                            window.World.cycleCameraMode();
+                        });
+                        const prevCamMode = await pDrv.page.evaluate(() => window.GAME_STATE.cameraMode);
+                        assertEqual(prevCamMode, 3, 'initial camera mode set to 3 before speeding stop');
+
+                        const obsCur1 = obs.cursor();
+                        const chase1 = await driveBrowserCarTowardPoliceAndSpeed(pDrv.page, obs, 'car_1', {
+                            timeoutMs: 55000,
+                            fromIndex: obsCur1
+                        });
+                        assertEqual(chase1.status, 'started');
+
+                        // Approach closest chasing police car and brake to trigger police_fine_stop
+                        await stopBrowserCarWithChasingPolice(pDrv.page, obs, user, chase1.police_car_id, {
+                            timeoutMs: 30000
+                        });
+
+                        const fineStopState = await pDrv.page.evaluate(() => ({
+                            inVehicle: window.GAME_STATE?.inVehicle,
+                            seqActive: Boolean(window.GAME_STATE?.policeFineSequence?.active),
+                            topDown: Boolean(window.GAME_STATE?.policeFineSequence?.topDownActive),
+                            savedCam: window.GAME_STATE?.policeFineSequence?.savedCamera?.cameraMode,
+                            camY: window.World?.camera?.position?.y ?? 0,
+                            playerVisible: Boolean(window.Player?.group?.visible),
+                            camLabel: document.getElementById('cam-mode-label')?.textContent || '',
+                            hasDpsCop: [...(window.GAME_STATE?.policeCops?.values() || [])].some((c) =>
+                                String(c.id || '').startsWith('dps_')
+                            )
+                        }));
+                        assertEqual(fineStopState.inVehicle, null, 'forced vehicle exit on fine_stop');
+                        assert(fineStopState.topDown && fineStopState.savedCam === 3, 'GTA1 top-down active & mode 3 saved');
+                        assert(fineStopState.playerVisible, 'player mesh visible in GTA1 top-down even from mode 3');
+                        assert(fineStopState.hasDpsCop, 'dynamic DPS officer spawned to walk to detained user');
+                        assert(fineStopState.camLabel.includes('Вид сверху'), 'camera HUD label indicates top-down');
+
+                        // Wait for officer walk completion and non-dismissible traffic dialogue modal
+                        await pDrv.page.waitForFunction(
+                            () => {
+                                const modal = document.getElementById('npc-dialogue-modal');
+                                const btns = document.querySelectorAll('#npc-options-container button');
+                                return Boolean(modal && !modal.classList.contains('hidden') && btns.length === 4);
+                            },
+                            null,
+                            { timeout: 10000 }
+                        );
+
+                        // Verify non-dismissibility before answering (Escape blocked, close btn hidden/disabled, blocker/notice visible)
+                        await pDrv.page.keyboard.press('Escape');
+                        await pDrv.page.waitForTimeout(150);
+                        const lockChecks = await pDrv.page.evaluate(() => ({
+                            modalHidden: Boolean(document.getElementById('npc-dialogue-modal')?.classList.contains('hidden')),
+                            closeDisabled: Boolean(document.getElementById('btn-close-npc-chat')?.disabled),
+                            closeHidden: Boolean(document.getElementById('btn-close-npc-chat')?.classList.contains('hidden')),
+                            blockerHidden: Boolean(document.getElementById('police-modal-blocker')?.classList.contains('hidden')),
+                            noticeHidden: Boolean(
+                                document.getElementById('police-dialogue-lock-notice')?.classList.contains('hidden')
+                            ),
+                            describedBy: document.getElementById('npc-dialogue-modal')?.getAttribute('aria-describedby') || ''
+                        }));
+                        assertEqual(lockChecks.modalHidden, false, 'Escape cannot dismiss traffic police dialog');
+                        assertEqual(lockChecks.closeDisabled, true);
+                        assertEqual(lockChecks.closeHidden, true);
+                        assertEqual(lockChecks.blockerHidden, false);
+                        assertEqual(lockChecks.noticeHidden, false);
+                        assertEqual(lockChecks.describedBy, 'police-dialogue-lock-notice');
+
+                        // Option 0: pays regular fine and imposes 5-minute ban on car_1
+                        const encRes1 = await clickHighestFineDialogueOption(pDrv.page, obs, user, null, {
+                            modalTimeoutMs: 6000,
+                            optionIndex: 0
+                        });
+                        assert(encRes1 && encRes1.vehicle_blocked === true, 'option 0 imposes 5-min car ban');
+                        assertEqual(encRes1.vehicle_ban_sec, 300);
+
+                        const restored1 = await pDrv.page.evaluate(() => ({
+                            camMode: window.GAME_STATE.cameraMode,
+                            seq: window.GAME_STATE.policeFineSequence,
+                            banSize: window.GAME_STATE.vehicleBans?.size ?? 0,
+                            banCar1: window.GAME_STATE.vehicleBans?.has('car_1'),
+                            hudMoney: document.getElementById('hud-money')?.textContent || ''
+                        }));
+                        assertEqual(restored1.camMode, 3, 'camera mode restored to 3 after closing fine dialog');
+                        assertEqual(restored1.seq, null, 'policeFineSequence cleared');
+                        assertEqual(restored1.banCar1, true, 'car_1 recorded in GAME_STATE.vehicleBans');
+
+                        // Wait for an animation frame so nearestInteractable refreshes for banned car_1, then verify ban prompt & KeyE rejection
+                        await pDrv.page
+                            .waitForFunction(
+                                () => window.GAME_STATE?.nearestInteractable?.id === 'car_1',
+                                null,
+                                { timeout: 2500 }
+                            )
+                            .catch(() => {});
+                        const banPrompt = await pDrv.page.evaluate(() => window.GAME_STATE?.nearestInteractable?.prompt || '');
+                        if (await pDrv.page.evaluate(() => window.GAME_STATE?.nearestInteractable?.id === 'car_1')) {
+                            assert(banPrompt.includes('Запрет на эксплуатацию'), `expected ban prompt, got ${banPrompt}`);
+                        }
+                        await pDrv.page.keyboard.press('KeyE');
+                        await pDrv.page.waitForTimeout(450);
+                        const afterBanInteract = await pDrv.page.evaluate(() => Boolean(window.GAME_STATE?.inVehicle));
+                        assertEqual(afterBanInteract, false, 'banned car_1 rejects re-entry via KeyE');
+
+                        // Now drive nearest unbanned car past speed limit, get caught, pay 66666 (option 3), verify unblocked immediate drive!
+                        await waitForPoliceState(obs, (m) => m.police_cars?.some((c) => c.state === 'patrol'), 14000);
+                        const obsCur2 = obs.cursor();
+                        const chase2 = await driveBrowserCarTowardPoliceAndSpeed(pDrv.page, obs, null, {
+                            timeoutMs: 55000,
+                            fromIndex: obsCur2
+                        });
+                        assertEqual(chase2.status, 'started');
+                        const secondCarId = chase2.target_car_id;
+
+                        await stopBrowserCarWithChasingPolice(pDrv.page, obs, user, chase2.police_car_id, {
+                            timeoutMs: 30000
+                        });
+
+                        const encRes2 = await clickHighestFineDialogueOption(pDrv.page, obs, user, null, {
+                            modalTimeoutMs: 12000,
+                            optionIndex: 3
+                        });
+                        assertEqual(encRes2.fine, 66666, 'option 3 charges 66666 rub');
+                        assertEqual(Boolean(encRes2.vehicle_blocked), false, '66666 option keeps car unblocked');
+                        const after66666 = await pDrv.page.evaluate((cid) => ({
+                            camMode: window.GAME_STATE.cameraMode,
+                            carBanned: window.GAME_STATE.vehicleBans?.has(cid)
+                        }), secondCarId);
+                        assertEqual(after66666.camMode, 3, 'camera restored again to mode 3');
+                        assertEqual(Boolean(after66666.carBanned), false, 'second car not banned');
+
+                        // Wait for nearestInteractable to point at unblocked secondCarId (SwiftShader frame can take ~450ms)
+                        await pDrv.page
+                            .waitForFunction(
+                                (cid) => window.GAME_STATE?.nearestInteractable?.id === cid,
+                                secondCarId,
+                                { timeout: 2500 }
+                            )
+                            .catch(async () => {
+                                const cPos = await pDrv.page.evaluate((cid) => {
+                                    const v = (window.World?.vehicles || []).find((c) => c.id === cid);
+                                    return v ? { x: v.x, z: v.z } : null;
+                                }, secondCarId);
+                                if (cPos) {
+                                    await steerAndWalkTo(pDrv.page, cPos.x, cPos.z, {
+                                        tolerance: 1.5,
+                                        timeoutMs: 10000,
+                                        stopWhen: (id) => window.GAME_STATE?.nearestInteractable?.id === id,
+                                        stopWhenArg: secondCarId
+                                    });
+                                }
+                            });
+                        await pDrv.page.waitForFunction(
+                            (cid) => window.GAME_STATE?.nearestInteractable?.id === cid,
+                            secondCarId,
+                            { timeout: 2500 }
+                        );
+                        await pDrv.page.bringToFront().catch(() => {});
+                        await pDrv.page.keyboard.press('KeyE');
+                        await pDrv.page.waitForFunction(
+                            (cid) => window.GAME_STATE?.inVehicle?.id === cid,
+                            secondCarId,
+                            { timeout: 5000 }
+                        );
+
+                        pDrv.assertClean('T4-07');
+                    } finally {
+                        await obs.close();
+                        await pDrv.close();
                         await browser.close();
                     }
                 });

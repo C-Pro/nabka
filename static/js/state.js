@@ -132,6 +132,8 @@ export function createGameState(overrides = {}) {
         activePoliceEncounter: null,
         activePoliceChases: overrides.activePoliceChases || new Map(),
         activePoliceChase: null,
+        vehicleBans: overrides.vehicleBans || new Map(),
+        policeFineSequence: overrides.policeFineSequence || null,
         ...overrides
     };
 }
@@ -249,7 +251,9 @@ export async function loadGameData(fetchFn = fetch) {
  * due to active modal dialogs (help modal, login overlay, NPC chat, police encounter) or focused text inputs.
  */
 export function isGameplayInputSuspended(state = GAME_STATE) {
-    if (state && (state.activeNpcChat || state.activePoliceEncounter)) return true;
+    if (state && (state.activeNpcChat || state.activePoliceEncounter || (state.policeFineSequence && state.policeFineSequence.active))) {
+        return true;
+    }
     if (typeof document === 'undefined') return false;
     const activeEl = document.activeElement;
     if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
@@ -339,6 +343,7 @@ export function applyPoliceStateSnapshot(state, msg) {
     if (!(state.policeCops instanceof Map)) state.policeCops = new Map();
     if (!(state.policeCars instanceof Map)) state.policeCars = new Map();
     if (!(state.activePoliceChases instanceof Map)) state.activePoliceChases = new Map();
+    if (!(state.vehicleBans instanceof Map)) state.vehicleBans = new Map();
 
     const removedCops = [];
     const removedCars = [];
@@ -429,8 +434,146 @@ export function applyPoliceStateSnapshot(state, msg) {
         }
     }
 
+    if (Array.isArray(msg.vehicle_bans)) {
+        applyVehicleBansSnapshot(state, msg.vehicle_bans);
+    }
+
     syncActivePoliceChaseSummary(state);
     return { applied: true, sequence: state.policeStateSequence, removedCops, removedCars };
+}
+
+export function applyVehicleBansSnapshot(state, bans, now = Date.now()) {
+    if (!state) return;
+    if (!(state.vehicleBans instanceof Map)) state.vehicleBans = new Map();
+    const activeIds = new Set();
+    if (Array.isArray(bans)) {
+        for (const rawBan of bans) {
+            if (!rawBan || !rawBan.car_id) continue;
+            const carId = String(rawBan.car_id);
+            const remainingMs = Number(rawBan.remaining_ms);
+            if (!Number.isFinite(remainingMs) || remainingMs <= 0) continue;
+            activeIds.add(carId);
+            state.vehicleBans.set(carId, {
+                car_id: carId,
+                expiresAt: now + remainingMs,
+                reason: String(rawBan.reason || 'наложен запрет на эксплуатацию транспортного средства')
+            });
+        }
+    }
+    for (const [cid, existing] of Array.from(state.vehicleBans.entries())) {
+        if (!activeIds.has(cid) || !existing || existing.expiresAt <= now) {
+            state.vehicleBans.delete(cid);
+        }
+    }
+}
+
+export function setVehicleBan(state, carId, durationSec, reason = 'наложен запрет на эксплуатацию транспортного средства', now = Date.now()) {
+    if (!state || !carId) return null;
+    if (!(state.vehicleBans instanceof Map)) state.vehicleBans = new Map();
+    const id = String(carId);
+    const sec = Number(durationSec);
+    if (!Number.isFinite(sec) || sec <= 0) {
+        state.vehicleBans.delete(id);
+        return null;
+    }
+    const entry = {
+        car_id: id,
+        expiresAt: now + sec * 1000,
+        reason: String(reason || 'наложен запрет на эксплуатацию транспортного средства')
+    };
+    state.vehicleBans.set(id, entry);
+    return entry;
+}
+
+export function getVehicleBanRemainingSec(state = GAME_STATE, carId, now = Date.now()) {
+    if (!state || !carId || !(state.vehicleBans instanceof Map)) return 0;
+    const id = String(carId);
+    const ban = state.vehicleBans.get(id);
+    if (!ban) return 0;
+    const remMs = Number(ban.expiresAt) - now;
+    if (!Number.isFinite(remMs) || remMs <= 0) {
+        state.vehicleBans.delete(id);
+        return 0;
+    }
+    return Math.ceil(remMs / 1000);
+}
+
+export function formatBanCountdown(totalSec) {
+    const clamped = Math.max(0, Math.ceil(Number(totalSec) || 0));
+    const mins = Math.floor(clamped / 60);
+    const secs = clamped % 60;
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+export function startPoliceFineSequenceState(state, msg) {
+    if (!state || !msg || typeof msg !== 'object') {
+        return { active: false, reason: 'INVALID_MESSAGE' };
+    }
+    const targetUser = msg.target_user ? String(msg.target_user) : '';
+    if (targetUser && state.username && targetUser !== String(state.username)) {
+        return { active: false, reason: 'USERNAME_MISMATCH' };
+    }
+    const existing = state.policeFineSequence;
+    const savedCamera = (existing && existing.active && existing.savedCamera)
+        ? existing.savedCamera
+        : {
+            cameraMode: Number.isInteger(state.cameraMode) ? state.cameraMode : 0,
+            cameraDistance: Number.isFinite(Number(state.cameraDistance)) ? Number(state.cameraDistance) : 9.2,
+            cameraPitch: Number.isFinite(Number(state.cameraPitch)) ? Number(state.cameraPitch) : DEFAULT_WALK_PITCH,
+            cameraYaw: Number.isFinite(Number(state.cameraYaw)) ? Number(state.cameraYaw) : 0
+        };
+
+    const policeCarId = String(msg.police_car_id || (existing && existing.policeCarId) || '');
+    const carId = String(msg.car_id || (existing && existing.carId) || '');
+    const seq = {
+        active: true,
+        topDownActive: true,
+        stage: String(msg.stage || 'approaching'),
+        policeCarId,
+        carId,
+        officerId: String(msg.officer_id || (existing && existing.officerId) || ''),
+        officerName: String(msg.officer_name || (existing && existing.officerName) || 'Инспектор ДПС'),
+        reason: String(msg.reason || (existing && existing.reason) || ''),
+        exitX: Number.isFinite(Number(msg.exit_x)) ? Number(msg.exit_x) : (existing ? existing.exitX : NaN),
+        exitZ: Number.isFinite(Number(msg.exit_z)) ? Number(msg.exit_z) : (existing ? existing.exitZ : NaN),
+        exitYaw: Number.isFinite(Number(msg.exit_yaw)) ? Number(msg.exit_yaw) : (existing ? existing.exitYaw : NaN),
+        savedCamera
+    };
+    state.policeFineSequence = seq;
+
+    if (policeCarId && state.policeCars instanceof Map) {
+        const pcar = state.policeCars.get(policeCarId);
+        if (pcar) {
+            pcar.state = 'fine_stop';
+            pcar.lights = true;
+            pcar.siren = false;
+        }
+    }
+    return { active: true, sequence: seq };
+}
+
+export function endPoliceFineSequenceState(state = GAME_STATE) {
+    if (!state) return { ended: false, restoredCamera: null };
+    const existing = state.policeFineSequence;
+    let restoredCamera = null;
+    if (existing && existing.savedCamera) {
+        restoredCamera = { ...existing.savedCamera };
+        if (Number.isInteger(restoredCamera.cameraMode)) {
+            state.cameraMode = restoredCamera.cameraMode;
+        }
+        if (Number.isFinite(restoredCamera.cameraDistance)) {
+            state.cameraDistance = restoredCamera.cameraDistance;
+        }
+        if (Number.isFinite(restoredCamera.cameraPitch)) {
+            state.cameraPitch = restoredCamera.cameraPitch;
+        }
+        if (Number.isFinite(restoredCamera.cameraYaw)) {
+            state.cameraYaw = restoredCamera.cameraYaw;
+        }
+    }
+    const ended = Boolean(existing && existing.active);
+    state.policeFineSequence = null;
+    return { ended, restoredCamera };
 }
 
 export function startPoliceEncounterState(state, msg) {
@@ -456,18 +599,23 @@ export function startPoliceEncounterState(state, msg) {
         cop_id: String(msg.cop_id || ''),
         cop_name: String(msg.cop_name || 'Сержант ППС'),
         scenario_id: String(msg.scenario_id || ''),
+        encounter_kind: String(msg.encounter_kind || 'foot'),
+        car_id: String(msg.car_id || ''),
         title: String(msg.title || 'Полиция Владивостока'),
         opening,
         options: msg.options.map((opt, idx) => ({
             index: Number.isInteger(opt && opt.index) ? opt.index : idx,
             text: String((opt && opt.text) || ''),
-            fine: Number(opt && opt.fine) || 0
+            fine: Number(opt && opt.fine) || 0,
+            blocks_vehicle: Boolean(opt && opt.blocks_vehicle)
         })),
         target_user: targetUser || String(state.username || ''),
         stage: 'opening',
         chosenOptionIndex: null,
         replyText: '',
         fine: 0,
+        vehicle_blocked: false,
+        vehicle_ban_sec: 0,
         chatHistory: [
             { role: 'police', text: opening }
         ]
@@ -491,10 +639,20 @@ export function resolvePoliceEncounterState(state, msg) {
     }
 
     const enc = state.activePoliceEncounter;
+    const carId = String(msg.car_id || (enc && enc.car_id) || '');
+    const vehicleBlocked = Boolean(msg.vehicle_blocked);
+    const vehicleBanSec = Number.isFinite(Number(msg.vehicle_ban_sec)) ? Number(msg.vehicle_ban_sec) : 0;
+    if (vehicleBlocked && carId && vehicleBanSec > 0) {
+        setVehicleBan(state, carId, vehicleBanSec);
+    }
+
     if (enc && (!msg.encounter_id || enc.encounter_id === String(msg.encounter_id))) {
         enc.stage = 'resolved';
         enc.replyText = String(msg.reply_text || '');
         enc.fine = Number.isFinite(Number(msg.fine)) ? Number(msg.fine) : 0;
+        enc.car_id = carId;
+        enc.vehicle_blocked = vehicleBlocked;
+        enc.vehicle_ban_sec = vehicleBanSec;
         if (Number.isInteger(msg.option_index)) {
             enc.chosenOptionIndex = msg.option_index;
         }
@@ -511,23 +669,46 @@ export function clearPoliceEncounterState(state = GAME_STATE) {
     state.activePoliceEncounter = null;
 }
 
-export function isLocalPlayerChased(state = GAME_STATE) {
-    if (!state || !state.username) return false;
+export function getLocalChaseType(state = GAME_STATE) {
+    const none = { chased: false, byCar: false, carCount: 0, onFoot: false, footCopCount: 0 };
+    if (!state || !state.username) return none;
+    const carIds = new Set();
     if (state.activePoliceChases instanceof Map) {
-        for (const chase of state.activePoliceChases.values()) {
+        for (const [id, chase] of state.activePoliceChases.entries()) {
             if (chase && chase.target_user === state.username) {
-                return true;
+                carIds.add(String(chase.police_car_id || id));
             }
         }
     }
     if (state.policeCars instanceof Map) {
-        for (const car of state.policeCars.values()) {
+        for (const [id, car] of state.policeCars.entries()) {
             if (car && car.state === 'chase' && car.target_user === state.username) {
-                return true;
+                carIds.add(String(car.id || id));
             }
         }
     }
-    return false;
+    let footCopCount = 0;
+    if (state.policeCops instanceof Map) {
+        for (const cop of state.policeCops.values()) {
+            if (cop && cop.state === 'chase' && cop.target_user === state.username) {
+                footCopCount++;
+            }
+        }
+    }
+    const carCount = carIds.size;
+    const byCar = carCount > 0;
+    const onFoot = footCopCount > 0;
+    return {
+        chased: byCar || onFoot,
+        byCar,
+        carCount,
+        onFoot,
+        footCopCount
+    };
+}
+
+export function isLocalPlayerChased(state = GAME_STATE) {
+    return getLocalChaseType(state).chased;
 }
 
 export function applyPoliceChaseEvent(state, msg) {
@@ -590,8 +771,11 @@ export function resetPoliceState(state = GAME_STATE) {
     else state.policeCars = new Map();
     if (state.activePoliceChases instanceof Map) state.activePoliceChases.clear();
     else state.activePoliceChases = new Map();
+    if (state.vehicleBans instanceof Map) state.vehicleBans.clear();
+    else state.vehicleBans = new Map();
     state.policeStateSequence = -1;
     state.activePoliceEncounter = null;
     state.activePoliceChase = null;
+    endPoliceFineSequenceState(state);
 }
 

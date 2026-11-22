@@ -42,26 +42,35 @@ const (
 	PoliceLatDampingGrip  = 12.0
 	PoliceSteerGain       = 0.52
 
-	PolicePatrolSpeed    = 9.0 // 32.4 km/h (< 40 km/h)
-	PoliceDetectRadius   = 45.0
-	PoliceStopDist       = 7.5
-	PoliceStopSpeedMS    = 3.0
-	PoliceStopHoldSec    = 0.5
-	PoliceEvadeDist      = 90.0
-	PoliceEvadeHoldSec   = 5.0
-	PoliceMaxChaseSec    = 45.0
-	PoliceSpeedingFine   = int64(5000)
-	PoliceCarCooldownSec = 8.0
-	PoliceTargetGraceSec = 6.0
-	ImpulseCooldownSec   = 0.300 // 300ms per-pair impulse cooldown
+	PolicePatrolSpeed            = 9.0 // 32.4 km/h (< 40 km/h)
+	PoliceDetectRadius           = 45.0
+	PoliceStopDist               = 7.5
+	PoliceStopSpeedMS            = 3.0
+	PoliceStopHoldSec            = 0.5
+	PoliceEvadeDist              = 90.0
+	PoliceEvadeHoldSec           = 5.0
+	PoliceMaxChaseSec            = 45.0
+	PoliceSpeedingFine           = int64(5000)
+	PoliceMaxFineNoBan           = int64(66666)
+	VehicleBanDurationSec        = 300.0 // 5 minutes
+	VehicleBanReasonText         = "наложен запрет на эксплуатацию транспортного средства"
+	PoliceCarCooldownSec         = 8.0
+	PoliceTargetGraceSec         = 6.0
+	ChaseInitialApproachGraceSec = 12.0
+	ImpulseCooldownSec           = 0.300 // 300ms per-pair impulse cooldown
 
 	FootCopDetectRadius        = 12.0
+	FootCopPursuitDetectRadius = 75.0
+	FootCopPursuitMaxDuration  = 60.0 // 1 minute
 	FootCopTalkRadius          = 2.4
 	FootCopAbandonRadius       = 20.0
 	FootCopApproachMaxDuration = 15.0
 	FootCopPatrolSpeed         = 1.6
 	FootCopApproachSpeed       = 3.4
-	FootCopDialogueTimeout     = 45.0
+	FootCopPursuitSpeed        = 9.5
+	DpsOfficerWalkSpeed        = 3.2
+	DpsOfficerApproachMaxSec   = 6.0
+	DpsOfficerReturnMaxSec     = 4.0
 	FootCopCooldownDuration    = 12.0
 	PlayerEncounterCooldown    = 15.0
 	FootCopCollisionRadius     = 0.52
@@ -450,10 +459,11 @@ func loadWorldMapConfig() worldMapConfig {
 
 // DialogueOption defines one choice inside a police scenario loaded from police_dialogues.json.
 type DialogueOption struct {
-	Index int    `json:"index"`
-	Text  string `json:"text"`
-	Reply string `json:"reply"`
-	Fine  int64  `json:"fine"`
+	Index         int    `json:"index"`
+	Text          string `json:"text"`
+	Reply         string `json:"reply"`
+	Fine          int64  `json:"fine"`
+	BlocksVehicle bool   `json:"blocks_vehicle"`
 }
 
 // PoliceScenario defines a Russian-language police conversation scenario.
@@ -464,37 +474,77 @@ type PoliceScenario struct {
 	Options []DialogueOption `json:"options"`
 }
 
-func loadPoliceDialogues() ([]PoliceScenario, error) {
+func validateScenarioEntry(s PoliceScenario, idx int, section string, requireFinePositive bool) error {
+	if strings.TrimSpace(s.ID) == "" || strings.TrimSpace(s.Title) == "" || strings.TrimSpace(s.Opening) == "" {
+		return fmt.Errorf("police_dialogues.json %s %d missing required fields", section, idx)
+	}
+	if len(s.Options) == 0 {
+		return fmt.Errorf("police_dialogues.json %s %q has no options", section, s.ID)
+	}
+	hasNoBanMaxFine := false
+	for optIdx, opt := range s.Options {
+		if opt.Index != optIdx {
+			return fmt.Errorf("police_dialogues.json %s %q option %d has non-contiguous index %d", section, s.ID, optIdx, opt.Index)
+		}
+		if strings.TrimSpace(opt.Text) == "" || strings.TrimSpace(opt.Reply) == "" || opt.Fine < 0 {
+			return fmt.Errorf("police_dialogues.json %s %q option %d invalid", section, s.ID, optIdx)
+		}
+		if requireFinePositive {
+			if opt.Fine <= 0 {
+				return fmt.Errorf("police_dialogues.json %s %q option %d must have fine > 0", section, s.ID, optIdx)
+			}
+			if opt.Fine == PoliceMaxFineNoBan {
+				if opt.BlocksVehicle {
+					return fmt.Errorf("police_dialogues.json %s %q option %d with fine %d must not block vehicle", section, s.ID, optIdx, PoliceMaxFineNoBan)
+				}
+				hasNoBanMaxFine = true
+			} else if !opt.BlocksVehicle {
+				return fmt.Errorf("police_dialogues.json %s %q option %d with fine %d must block vehicle", section, s.ID, optIdx, opt.Fine)
+			}
+		}
+	}
+	if requireFinePositive && !hasNoBanMaxFine {
+		return fmt.Errorf("police_dialogues.json %s %q must contain a %d rub option without vehicle block", section, s.ID, PoliceMaxFineNoBan)
+	}
+	return nil
+}
+
+func loadPoliceDialogues() ([]PoliceScenario, map[string]PoliceScenario, error) {
 	raw, err := readStaticDataFile("static/data/police_dialogues.json", "data/police_dialogues.json")
 	if err != nil {
-		return nil, fmt.Errorf("failed to load police_dialogues.json: %w", err)
+		return nil, nil, fmt.Errorf("failed to load police_dialogues.json: %w", err)
 	}
 	var doc struct {
-		Scenarios []PoliceScenario `json:"scenarios"`
+		Scenarios        []PoliceScenario `json:"scenarios"`
+		TrafficScenarios []PoliceScenario `json:"traffic_scenarios"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, fmt.Errorf("failed to parse police_dialogues.json: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse police_dialogues.json: %w", err)
 	}
 	if len(doc.Scenarios) < 4 {
-		return nil, fmt.Errorf("police_dialogues.json must contain at least 4 scenarios, got %d", len(doc.Scenarios))
+		return nil, nil, fmt.Errorf("police_dialogues.json must contain at least 4 scenarios, got %d", len(doc.Scenarios))
 	}
 	for i, s := range doc.Scenarios {
-		if strings.TrimSpace(s.ID) == "" || strings.TrimSpace(s.Title) == "" || strings.TrimSpace(s.Opening) == "" {
-			return nil, fmt.Errorf("police_dialogues.json scenario %d missing required fields", i)
-		}
-		if len(s.Options) == 0 {
-			return nil, fmt.Errorf("police_dialogues.json scenario %q has no options", s.ID)
-		}
-		for idx, opt := range s.Options {
-			if opt.Index != idx {
-				return nil, fmt.Errorf("police_dialogues.json scenario %q option %d has non-contiguous index %d", s.ID, idx, opt.Index)
-			}
-			if strings.TrimSpace(opt.Text) == "" || strings.TrimSpace(opt.Reply) == "" || opt.Fine < 0 {
-				return nil, fmt.Errorf("police_dialogues.json scenario %q option %d invalid", s.ID, idx)
-			}
+		if err := validateScenarioEntry(s, i, "scenario", false); err != nil {
+			return nil, nil, err
 		}
 	}
-	return doc.Scenarios, nil
+	trafficByID := make(map[string]PoliceScenario, len(doc.TrafficScenarios))
+	for i, s := range doc.TrafficScenarios {
+		if err := validateScenarioEntry(s, i, "traffic_scenario", true); err != nil {
+			return nil, nil, err
+		}
+		if _, dup := trafficByID[s.ID]; dup {
+			return nil, nil, fmt.Errorf("police_dialogues.json duplicate traffic_scenario %q", s.ID)
+		}
+		trafficByID[s.ID] = s
+	}
+	for _, reqID := range []string{"traffic_speeding", "traffic_collision", "traffic_foot_escape"} {
+		if _, ok := trafficByID[reqID]; !ok {
+			return nil, nil, fmt.Errorf("police_dialogues.json missing required traffic_scenario %q", reqID)
+		}
+	}
+	return doc.Scenarios, trafficByID, nil
 }
 
 type waypoint2D struct {
@@ -515,6 +565,10 @@ type footCopEntity struct {
 	waypointIdx       int
 	approachStartedAt float64
 	cooldownUntil     float64
+	isCarOfficer      bool
+	homePoliceCarID   string
+	returningToCar    bool
+	returnStartedAt   float64
 }
 
 type policeCarEntity struct {
@@ -548,16 +602,49 @@ type policeCarEntity struct {
 }
 
 type activeEncounter struct {
-	id         string
-	copID      string
-	copName    string
-	scenario   PoliceScenario
-	targetUser string
-	createdAt  float64
-	msg        OutboundPoliceEncounterStartMsg
+	id          string
+	copID       string
+	copName     string
+	scenario    PoliceScenario
+	targetUser  string
+	kind        string
+	carID       string
+	policeCarID string
+	createdAt   float64
+	msg         OutboundPoliceEncounterStartMsg
 }
 
-// PoliceEncounterStartEvent represents an unsolicited dialogue triggered by a foot cop.
+type activeChaseTarget struct {
+	carID               string
+	username            string
+	reason              string
+	startedAt           float64
+	everWithinEvadeDist bool
+	outOfRangeSec       float64
+}
+
+type footPursuitState struct {
+	carID     string
+	reason    string
+	startedAt float64
+	expiresAt float64
+}
+
+type activeFineStop struct {
+	policeCarID string
+	carID       string
+	officerID   string
+	officerName string
+	targetUser  string
+	reason      string
+	exitX       float64
+	exitZ       float64
+	exitYaw     float64
+	stage       string
+	msg         OutboundPoliceFineStopMsg
+}
+
+// PoliceEncounterStartEvent represents an unsolicited dialogue triggered by a foot cop or DPS officer.
 type PoliceEncounterStartEvent struct {
 	Msg OutboundPoliceEncounterStartMsg
 }
@@ -588,37 +675,52 @@ type VehicleImpulseEvent struct {
 type PoliceStepOutput struct {
 	EncounterStarts []PoliceEncounterStartEvent
 	ChaseEvents     []PoliceChaseEvent
+	FineStopEvents  []OutboundPoliceFineStopMsg
 	ImpulseEvents   []VehicleImpulseEvent
+	ForcedExitCars  []string
+	ForcedExitUsers []string
 	ModifiedCars    map[string]struct{}
 }
 
 // DialogueResolution represents the validated result of a player's police dialogue option selection.
 type DialogueResolution struct {
-	EncounterID string
-	CopID       string
-	CopName     string
-	ScenarioID  string
-	TargetUser  string
-	OptionIndex int
-	ReplyText   string
-	Fine        int64
+	EncounterID    string
+	CopID          string
+	CopName        string
+	ScenarioID     string
+	TargetUser     string
+	OptionIndex    int
+	ReplyText      string
+	Fine           int64
+	EncounterKind  string
+	CarID          string
+	PoliceCarID    string
+	VehicleBlocked bool
+	VehicleBanSec  int
 }
 
 // PoliceSnapshot is an immutable copy of police entities and active encounters for inspection/tests.
 type PoliceSnapshot struct {
 	FootCops         []PoliceFootCopState
 	PoliceCars       []PoliceCarState
+	VehicleBans      []VehicleBanState
 	ActiveEncounters map[string]OutboundPoliceEncounterStartMsg
+	ActiveFineStops  map[string]OutboundPoliceFineStopMsg
 }
 
 // PoliceManager owns authoritative foot policemen, police cars, encounters, chases, and 3-circle vehicle collisions.
 type PoliceManager struct {
 	worldCfg               worldMapConfig
 	scenarios              []PoliceScenario
+	trafficScenarios       map[string]PoliceScenario
 	footCops               []*footCopEntity
 	policeCars             []*policeCarEntity
 	activeEncountersByID   map[string]*activeEncounter
 	activeEncountersByUser map[string]*activeEncounter
+	activeChases           map[string]*activeChaseTarget
+	footPursuits           map[string]*footPursuitState
+	activeFineStops        map[string]*activeFineStop
+	vehicleBans            map[string]float64
 	playerCooldownUntil    map[string]float64
 	chaseGraceUntil        map[string]float64
 	lastImpulseAt          map[string]float64
@@ -630,7 +732,7 @@ type PoliceManager struct {
 
 // NewPoliceManager initializes foot policemen, patrolling police cars, world colliders, and Russian dialogue scenarios.
 func NewPoliceManager(worldCfg worldMapConfig) (*PoliceManager, error) {
-	scenarios, err := loadPoliceDialogues()
+	scenarios, trafficScenarios, err := loadPoliceDialogues()
 	if err != nil {
 		return nil, err
 	}
@@ -737,10 +839,15 @@ func NewPoliceManager(worldCfg worldMapConfig) (*PoliceManager, error) {
 	pm := &PoliceManager{
 		worldCfg:               worldCfg,
 		scenarios:              scenarios,
+		trafficScenarios:       trafficScenarios,
 		footCops:               footCops,
 		policeCars:             policeCars,
 		activeEncountersByID:   make(map[string]*activeEncounter),
 		activeEncountersByUser: make(map[string]*activeEncounter),
+		activeChases:           make(map[string]*activeChaseTarget),
+		footPursuits:           make(map[string]*footPursuitState),
+		activeFineStops:        make(map[string]*activeFineStop),
+		vehicleBans:            make(map[string]float64),
 		playerCooldownUntil:    make(map[string]float64),
 		chaseGraceUntil:        make(map[string]float64),
 		lastImpulseAt:          make(map[string]float64),
@@ -755,6 +862,93 @@ func NewPoliceManager(worldCfg worldMapConfig) (*PoliceManager, error) {
 // SimTimeMS returns accumulated simulation time in milliseconds.
 func (pm *PoliceManager) SimTimeMS() int64 {
 	return int64(math.Round(pm.simTimeSec * 1000.0))
+}
+
+// SetVehicleBan sets or clears a temporary driving ban on carID.
+func (pm *PoliceManager) SetVehicleBan(carID string, durationSec float64) {
+	if carID == "" {
+		return
+	}
+	if durationSec <= 0 {
+		delete(pm.vehicleBans, carID)
+		return
+	}
+	pm.vehicleBans[carID] = pm.simTimeSec + durationSec
+}
+
+// VehicleBanRemainingSec returns remaining ban seconds for carID, pruning expired entries.
+func (pm *PoliceManager) VehicleBanRemainingSec(carID string) float64 {
+	until, ok := pm.vehicleBans[carID]
+	if !ok {
+		return 0
+	}
+	rem := until - pm.simTimeSec
+	if rem <= 0 {
+		delete(pm.vehicleBans, carID)
+		return 0
+	}
+	return rem
+}
+
+// IsVehicleBanned reports whether carID currently has an active driving ban.
+func (pm *PoliceManager) IsVehicleBanned(carID string) bool {
+	return pm.VehicleBanRemainingSec(carID) > 0
+}
+
+// VehicleBansState returns a sorted slice of currently active vehicle bans.
+func (pm *PoliceManager) VehicleBansState() []VehicleBanState {
+	bans := make([]VehicleBanState, 0, len(pm.vehicleBans))
+	for cid, until := range pm.vehicleBans {
+		rem := until - pm.simTimeSec
+		if rem <= 0 {
+			delete(pm.vehicleBans, cid)
+			continue
+		}
+		bans = append(bans, VehicleBanState{
+			CarID:       cid,
+			RemainingMS: int64(math.Ceil(rem * 1000.0)),
+			Reason:      VehicleBanReasonText,
+		})
+	}
+	sort.Slice(bans, func(i, j int) bool { return bans[i].CarID < bans[j].CarID })
+	return bans
+}
+
+// IsUserInFineStop reports whether username is currently detained in an animated fine stop or traffic dialog.
+func (pm *PoliceManager) IsUserInFineStop(username string) bool {
+	_, ok := pm.activeFineStops[username]
+	return ok
+}
+
+// FineStopCarForUser returns the detained vehicle ID for username, or empty string.
+func (pm *PoliceManager) FineStopCarForUser(username string) string {
+	if fs, ok := pm.activeFineStops[username]; ok {
+		return fs.carID
+	}
+	return ""
+}
+
+// IsCarInFineStop reports whether carID is currently involved in an active fine stop.
+func (pm *PoliceManager) IsCarInFineStop(carID string) bool {
+	if carID == "" {
+		return false
+	}
+	for _, fs := range pm.activeFineStops {
+		if fs.carID == carID {
+			return true
+		}
+	}
+	return false
+}
+
+// ActiveFineStopFor returns a copy of an unresolved fine-stop state for username, or nil.
+func (pm *PoliceManager) ActiveFineStopFor(username string) *OutboundPoliceFineStopMsg {
+	fs, ok := pm.activeFineStops[username]
+	if !ok {
+		return nil
+	}
+	cp := fs.msg
+	return &cp
 }
 
 // StateMsg builds the outbound Wire PoliceState snapshot.
@@ -801,6 +995,7 @@ func (pm *PoliceManager) StateMsg(sequence uint64) OutboundPoliceStateMsg {
 		SampleTimeMS: pm.SimTimeMS(),
 		FootCops:     cops,
 		PoliceCars:   cars,
+		VehicleBans:  pm.VehicleBansState(),
 	}
 }
 
@@ -815,10 +1010,16 @@ func (pm *PoliceManager) Snapshot() PoliceSnapshot {
 		cp.Options = opts
 		enc[uname] = cp
 	}
+	stops := make(map[string]OutboundPoliceFineStopMsg, len(pm.activeFineStops))
+	for uname, fs := range pm.activeFineStops {
+		stops[uname] = fs.msg
+	}
 	return PoliceSnapshot{
 		FootCops:         msg.FootCops,
 		PoliceCars:       msg.PoliceCars,
+		VehicleBans:      msg.VehicleBans,
 		ActiveEncounters: enc,
+		ActiveFineStops:  stops,
 	}
 }
 
@@ -859,46 +1060,117 @@ func (pm *PoliceManager) HandleDialogueChoice(username, encounterID string, opti
 	delete(pm.activeEncountersByUser, username)
 	pm.playerCooldownUntil[username] = pm.simTimeSec + PlayerEncounterCooldown
 
+	vehicleBlocked := false
+	vehicleBanSec := 0
+	if enc.kind == EncounterKindTraffic {
+		pm.chaseGraceUntil[username] = pm.simTimeSec + PoliceTargetGraceSec
+		delete(pm.activeFineStops, username)
+		if opt.BlocksVehicle && enc.carID != "" {
+			pm.SetVehicleBan(enc.carID, VehicleBanDurationSec)
+			vehicleBlocked = true
+			vehicleBanSec = int(VehicleBanDurationSec)
+		}
+	}
+
 	for _, cop := range pm.footCops {
 		if cop.id == enc.copID {
 			cop.state = CopStateCooldown
 			cop.targetUser = ""
 			cop.anim = AnimWalk
-			cop.cooldownUntil = pm.simTimeSec + FootCopCooldownDuration
+			if cop.isCarOfficer {
+				cop.returningToCar = true
+				cop.returnStartedAt = pm.simTimeSec
+			} else {
+				cop.cooldownUntil = pm.simTimeSec + FootCopCooldownDuration
+			}
 			break
 		}
 	}
 
 	return &DialogueResolution{
-		EncounterID: enc.id,
-		CopID:       enc.copID,
-		CopName:     enc.copName,
-		ScenarioID:  enc.scenario.ID,
-		TargetUser:  username,
-		OptionIndex: optionIndex,
-		ReplyText:   opt.Reply,
-		Fine:        opt.Fine,
+		EncounterID:    enc.id,
+		CopID:          enc.copID,
+		CopName:        enc.copName,
+		ScenarioID:     enc.scenario.ID,
+		TargetUser:     username,
+		OptionIndex:    optionIndex,
+		ReplyText:      opt.Reply,
+		Fine:           opt.Fine,
+		EncounterKind:  enc.kind,
+		CarID:          enc.carID,
+		PoliceCarID:    enc.policeCarID,
+		VehicleBlocked: vehicleBlocked,
+		VehicleBanSec:  vehicleBanSec,
 	}, nil
 }
 
-// OnPlayerEnteredVehicle cancels any foot cop approach or active dialogue targeting username.
+// OnPlayerEnteredVehicle cancels any foot cop approach or foot pursuit targeting username,
+// while keeping unresolved dialogues non-dismissible.
 func (pm *PoliceManager) OnPlayerEnteredVehicle(username, _ string) {
-	pm.cancelFootCopInteraction(username, false)
+	delete(pm.footPursuits, username)
+	for _, cop := range pm.footCops {
+		if cop.targetUser == username && (cop.state == CopStateApproach || cop.state == CopStateChase) && !cop.isCarOfficer {
+			cop.targetUser = ""
+			cop.state = CopStatePatrol
+			cop.anim = AnimWalk
+		}
+	}
 }
 
-// OnPlayerExitedVehicle ends any active police chase targeting (username, carID) as evaded.
-func (pm *PoliceManager) OnPlayerExitedVehicle(username, carID string) []PoliceChaseEvent {
+// OnPlayerExitedVehicle ends any active police chase targeting (username, carID) as evaded
+// and triggers up to 1 minute of nearby pedestrian police pursuit.
+func (pm *PoliceManager) OnPlayerExitedVehicle(username, carID string, exitX, exitZ float64) []PoliceChaseEvent {
 	var events []PoliceChaseEvent
+	chasedCarID := carID
+	wasChased := false
+	if ac, ok := pm.activeChases[username]; ok && (carID == "" || ac.carID == carID) {
+		wasChased = true
+		if chasedCarID == "" {
+			chasedCarID = ac.carID
+		}
+		delete(pm.activeChases, username)
+	}
 	for _, pc := range pm.policeCars {
 		if pc.state == PoliceCarStateChase && pc.targetUser == username && (carID == "" || pc.targetCarID == carID) {
+			wasChased = true
+			if chasedCarID == "" {
+				chasedCarID = pc.targetCarID
+			}
 			events = append(events, pm.endChase(pc, ChaseStatusEvaded, "target_exited", 0))
 		}
+	}
+	if wasChased && !pm.IsUserInFineStop(username) && pm.activeEncountersByUser[username] == nil {
+		delete(pm.playerCooldownUntil, username)
+		pm.footPursuits[username] = &footPursuitState{
+			carID:     chasedCarID,
+			reason:    "foot_escape",
+			startedAt: pm.simTimeSec,
+			expiresAt: pm.simTimeSec + FootCopPursuitMaxDuration,
+		}
+		pm.dispatchNearbyFootCopsForPursuit(username, exitX, exitZ)
 	}
 	return events
 }
 
-// OnPlayerDisconnected cancels active foot cop encounters/approaches and ends active chases for username.
+// OnPlayerDisconnected cancels active foot cop encounters/approaches, cleans up fine stops,
+// and ends active chases for username.
 func (pm *PoliceManager) OnPlayerDisconnected(username string) []PoliceChaseEvent {
+	if fs, ok := pm.activeFineStops[username]; ok {
+		if fs.carID != "" {
+			pm.SetVehicleBan(fs.carID, VehicleBanDurationSec)
+		}
+		pm.removeFootCopByID(fs.officerID)
+		if fs.policeCarID != "" {
+			for _, pc := range pm.policeCars {
+				if pc.id == fs.policeCarID && pc.state == PoliceCarStateFineStop {
+					pm.endChase(pc, ChaseStatusEvaded, "target_disconnected", 0)
+				}
+			}
+		}
+		delete(pm.activeFineStops, username)
+	}
+	delete(pm.footPursuits, username)
+	delete(pm.activeChases, username)
 	pm.cancelFootCopInteraction(username, true)
 	var events []PoliceChaseEvent
 	for _, pc := range pm.policeCars {
@@ -909,6 +1181,18 @@ func (pm *PoliceManager) OnPlayerDisconnected(username string) []PoliceChaseEven
 	return events
 }
 
+func (pm *PoliceManager) removeFootCopByID(copID string) {
+	if copID == "" {
+		return
+	}
+	for i := 0; i < len(pm.footCops); i++ {
+		if pm.footCops[i].id == copID && pm.footCops[i].isCarOfficer {
+			pm.footCops = append(pm.footCops[:i], pm.footCops[i+1:]...)
+			return
+		}
+	}
+}
+
 func (pm *PoliceManager) cancelFootCopInteraction(username string, isDisconnect bool) {
 	if enc, ok := pm.activeEncountersByUser[username]; ok {
 		delete(pm.activeEncountersByID, enc.id)
@@ -917,17 +1201,40 @@ func (pm *PoliceManager) cancelFootCopInteraction(username string, isDisconnect 
 			pm.playerCooldownUntil[username] = pm.simTimeSec + 5.0
 		}
 	}
-	for _, cop := range pm.footCops {
+	for i := 0; i < len(pm.footCops); i++ {
+		cop := pm.footCops[i]
 		if cop.targetUser == username {
 			cop.targetUser = ""
+			if cop.isCarOfficer {
+				pm.footCops = append(pm.footCops[:i], pm.footCops[i+1:]...)
+				i--
+				continue
+			}
 			if cop.state == CopStateDialogue {
 				cop.state = CopStateCooldown
 				cop.anim = AnimWalk
 				cop.cooldownUntil = pm.simTimeSec + FootCopCooldownDuration
-			} else if cop.state == CopStateApproach {
+			} else if cop.state == CopStateApproach || cop.state == CopStateChase {
 				cop.state = CopStatePatrol
 				cop.anim = AnimWalk
 			}
+		}
+	}
+}
+
+func (pm *PoliceManager) dispatchNearbyFootCopsForPursuit(username string, px, pz float64) {
+	maxDistSq := FootCopPursuitDetectRadius * FootCopPursuitDetectRadius
+	for _, cop := range pm.footCops {
+		if cop.isCarOfficer || cop.state == CopStateDialogue || cop.state == CopStateChase {
+			continue
+		}
+		dx := px - cop.x
+		dz := pz - cop.z
+		if dx*dx+dz*dz <= maxDistSq {
+			cop.state = CopStateChase
+			cop.targetUser = username
+			cop.approachStartedAt = pm.simTimeSec
+			cop.anim = AnimRun
 		}
 	}
 }
@@ -944,7 +1251,13 @@ func (pm *PoliceManager) endChase(pc *policeCarEntity, status, reason string, fi
 	if pc.targetUser != "" && (reason == "fined" || reason == "evaded" || reason == "timeout") {
 		pm.chaseGraceUntil[pc.targetUser] = pm.simTimeSec + PoliceTargetGraceSec
 	}
-	pc.state = PoliceCarStateCooldown
+	if reason == "target_disconnected" {
+		pc.state = PoliceCarStatePatrol
+		pc.cooldownUntil = 0
+	} else {
+		pc.state = PoliceCarStateCooldown
+		pc.cooldownUntil = pm.simTimeSec + PoliceCarCooldownSec
+	}
 	pc.targetCarID = ""
 	pc.targetUser = ""
 	pc.siren = false
@@ -955,7 +1268,6 @@ func (pm *PoliceManager) endChase(pc *policeCarEntity, status, reason string, fi
 	pc.unstuckSec = 0
 	pc.unstuckSteer = 0
 	pc.progressX, pc.progressZ, pc.progressAt = pc.x, pc.z, pm.simTimeSec
-	pc.cooldownUntil = pm.simTimeSec + PoliceCarCooldownSec
 	return ev
 }
 
@@ -979,7 +1291,7 @@ func (pm *PoliceManager) Step(dt float64, users map[string]*UserState, cars map[
 
 func (pm *PoliceManager) stepTick(dt float64, users map[string]*UserState, cars map[string]*CarState, out *PoliceStepOutput) {
 	pm.simTimeSec += dt
-	pm.stepFootCops(dt, users, out)
+	pm.stepFootCops(dt, users, cars, out)
 	pm.stepPoliceCars(dt, users, cars, out)
 }
 
@@ -992,20 +1304,110 @@ func (pm *PoliceManager) isUserTargetedByOtherCop(username, excludeCopID string)
 	return false
 }
 
-func (pm *PoliceManager) stepFootCops(dt float64, users map[string]*UserState, out *PoliceStepOutput) {
-	// Expire stale dialogues cleanly
-	for id, enc := range pm.activeEncountersByID {
-		if pm.simTimeSec-enc.createdAt >= FootCopDialogueTimeout {
-			delete(pm.activeEncountersByID, id)
-			delete(pm.activeEncountersByUser, enc.targetUser)
-			pm.playerCooldownUntil[enc.targetUser] = pm.simTimeSec + PlayerEncounterCooldown
+func (pm *PoliceManager) trafficScenarioForReason(reason string) PoliceScenario {
+	switch reason {
+	case "collision":
+		if s, ok := pm.trafficScenarios["traffic_collision"]; ok {
+			return s
+		}
+	case "foot_escape":
+		if s, ok := pm.trafficScenarios["traffic_foot_escape"]; ok {
+			return s
+		}
+	}
+	if s, ok := pm.trafficScenarios["traffic_speeding"]; ok {
+		return s
+	}
+	return pm.scenarios[0]
+}
+
+func (pm *PoliceManager) startEncounterForCop(cop *footCopEntity, scenario PoliceScenario, kind, carID, policeCarID string, out *PoliceStepOutput) {
+	pm.encounterSeq++
+	encID := fmt.Sprintf("enc_%d", pm.encounterSeq)
+
+	opts := make([]PoliceDialogueOptionView, 0, len(scenario.Options))
+	for _, opt := range scenario.Options {
+		opts = append(opts, PoliceDialogueOptionView{
+			Index:         opt.Index,
+			Text:          opt.Text,
+			Fine:          opt.Fine,
+			BlocksVehicle: opt.BlocksVehicle,
+		})
+	}
+
+	msg := OutboundPoliceEncounterStartMsg{
+		Type:          TypePoliceEncounterStart,
+		EncounterID:   encID,
+		CopID:         cop.id,
+		CopName:       cop.name,
+		ScenarioID:    scenario.ID,
+		Title:         scenario.Title,
+		Opening:       scenario.Opening,
+		Options:       opts,
+		TargetUser:    cop.targetUser,
+		EncounterKind: kind,
+		CarID:         carID,
+	}
+	enc := &activeEncounter{
+		id:          encID,
+		copID:       cop.id,
+		copName:     cop.name,
+		scenario:    scenario,
+		targetUser:  cop.targetUser,
+		kind:        kind,
+		carID:       carID,
+		policeCarID: policeCarID,
+		createdAt:   pm.simTimeSec,
+		msg:         msg,
+	}
+	pm.activeEncountersByID[encID] = enc
+	pm.activeEncountersByUser[cop.targetUser] = enc
+	cop.state = CopStateDialogue
+	out.EncounterStarts = append(out.EncounterStarts, PoliceEncounterStartEvent{Msg: msg})
+}
+
+func (pm *PoliceManager) resolveFootCopSlide(cop *footCopEntity, dx, dz, dist, speed, dt float64) {
+	dirX := dx / dist
+	dirZ := dz / dist
+	cop.vx = dirX * speed
+	cop.vz = dirZ * speed
+	cop.yaw = NormalizeYaw(math.Atan2(dirX, dirZ))
+
+	nextX := cop.x + cop.vx*dt
+	nextZ := cop.z + cop.vz*dt
+	resolvedX, resolvedZ, hit := pm.resolveFootCopWorldCollision(nextX, nextZ)
+	if hit {
+		slideDist := math.Hypot(resolvedX-cop.x, resolvedZ-cop.z)
+		if slideDist < speed*dt*0.25 {
+			bestX, bestZ := resolvedX, resolvedZ
+			bestProgress := slideDist
+			for _, sign := range [2]float64{1, -1} {
+				tx, tz := -dirZ*sign, dirX*sign
+				tryX, tryZ, _ := pm.resolveFootCopWorldCollision(cop.x+tx*speed*dt, cop.z+tz*speed*dt)
+				prog := math.Hypot(tryX-cop.x, tryZ-cop.z)
+				if prog > bestProgress {
+					bestProgress = prog
+					bestX, bestZ = tryX, tryZ
+				}
+			}
+			resolvedX, resolvedZ = bestX, bestZ
+		}
+	}
+	cop.x = resolvedX
+	cop.z = resolvedZ
+}
+
+func (pm *PoliceManager) stepFootCops(dt float64, users map[string]*UserState, cars map[string]*CarState, out *PoliceStepOutput) {
+	// Prune expired or invalid 1-minute foot pursuits (active police dialogs are NEVER auto-expired)
+	for uname, fp := range pm.footPursuits {
+		u, exists := users[uname]
+		if pm.simTimeSec >= fp.expiresAt || !exists || u.Mode != ModePedestrian {
+			delete(pm.footPursuits, uname)
 			for _, cop := range pm.footCops {
-				if cop.id == enc.copID {
-					cop.state = CopStateCooldown
+				if !cop.isCarOfficer && cop.state == CopStateChase && cop.targetUser == uname {
+					cop.state = CopStatePatrol
 					cop.targetUser = ""
 					cop.anim = AnimWalk
-					cop.cooldownUntil = pm.simTimeSec + FootCopCooldownDuration
-					break
 				}
 			}
 		}
@@ -1017,15 +1419,36 @@ func (pm *PoliceManager) stepFootCops(dt float64, users map[string]*UserState, o
 	}
 	sort.Strings(sortedUsers)
 
-	for copIdx, cop := range pm.footCops {
+	regularCopIdx := 0
+	for i := 0; i < len(pm.footCops); i++ {
+		cop := pm.footCops[i]
+		if cop.isCarOfficer {
+			removed := pm.stepCarOfficer(cop, dt, users, out)
+			if removed {
+				pm.footCops = append(pm.footCops[:i], pm.footCops[i+1:]...)
+				i--
+			}
+			continue
+		}
+
+		idx := regularCopIdx
+		regularCopIdx++
+
 		switch cop.state {
 		case CopStateCooldown:
+			// Even during routine cooldown, join an active 1-minute foot pursuit if suspect runs nearby
+			if pm.tryStartFootPursuitForCop(cop, sortedUsers, users) {
+				continue
+			}
 			pm.advanceFootCopPatrol(cop, dt)
 			if pm.simTimeSec >= cop.cooldownUntil {
 				cop.state = CopStatePatrol
 			}
 
 		case CopStatePatrol:
+			if pm.tryStartFootPursuitForCop(cop, sortedUsers, users) {
+				continue
+			}
 			pm.advanceFootCopPatrol(cop, dt)
 
 			// Scan for nearest eligible pedestrian within FootCopDetectRadius
@@ -1036,7 +1459,7 @@ func (pm *PoliceManager) stepFootCops(dt float64, users map[string]*UserState, o
 				if u == nil || u.Mode != ModePedestrian || u.X < FootCopMinX {
 					continue
 				}
-				if pm.activeEncountersByUser[uname] != nil {
+				if pm.activeEncountersByUser[uname] != nil || pm.IsUserInFineStop(uname) || pm.footPursuits[uname] != nil {
 					continue
 				}
 				if pm.isUserTargetedByOtherCop(uname, cop.id) {
@@ -1060,10 +1483,39 @@ func (pm *PoliceManager) stepFootCops(dt float64, users map[string]*UserState, o
 				cop.anim = AnimWalk
 			}
 
+		case CopStateChase:
+			fp, fpOK := pm.footPursuits[cop.targetUser]
+			u, exists := users[cop.targetUser]
+			if !fpOK || !exists || u.Mode != ModePedestrian ||
+				pm.simTimeSec >= fp.expiresAt ||
+				pm.activeEncountersByUser[cop.targetUser] != nil ||
+				pm.IsUserInFineStop(cop.targetUser) {
+				cop.state = CopStatePatrol
+				cop.targetUser = ""
+				cop.anim = AnimWalk
+				continue
+			}
+
+			dx := u.X - cop.x
+			dz := u.Z - cop.z
+			dist := math.Hypot(dx, dz)
+			if dist <= FootCopTalkRadius {
+				pm.catchFootPursuitSuspect(cop, u, fp, out)
+				continue
+			}
+
+			cop.anim = AnimRun
+			pm.resolveFootCopSlide(cop, dx, dz, dist, FootCopPursuitSpeed, dt)
+
 		case CopStateApproach:
+			// Prioritize joining active 1-minute foot pursuit if target is nearby
+			if pm.tryStartFootPursuitForCop(cop, sortedUsers, users) {
+				continue
+			}
 			u, exists := users[cop.targetUser]
 			if !exists || u.Mode != ModePedestrian || u.X < FootCopMinX ||
 				pm.activeEncountersByUser[cop.targetUser] != nil ||
+				pm.IsUserInFineStop(cop.targetUser) ||
 				pm.simTimeSec-cop.approachStartedAt > FootCopApproachMaxDuration {
 				cop.state = CopStatePatrol
 				cop.targetUser = ""
@@ -1088,71 +1540,13 @@ func (pm *PoliceManager) stepFootCops(dt float64, users map[string]*UserState, o
 				if dist > 1e-4 {
 					cop.yaw = NormalizeYaw(math.Atan2(dx, dz))
 				}
-
-				scenario := pm.scenarios[(copIdx+int(pm.encounterSeq))%len(pm.scenarios)]
-				pm.encounterSeq++
-				encID := fmt.Sprintf("enc_%d", pm.encounterSeq)
-
-				opts := make([]PoliceDialogueOptionView, 0, len(scenario.Options))
-				for _, opt := range scenario.Options {
-					opts = append(opts, PoliceDialogueOptionView{
-						Index: opt.Index,
-						Text:  opt.Text,
-						Fine:  opt.Fine,
-					})
-				}
-
-				msg := OutboundPoliceEncounterStartMsg{
-					Type:        TypePoliceEncounterStart,
-					EncounterID: encID,
-					CopID:       cop.id,
-					CopName:     cop.name,
-					ScenarioID:  scenario.ID,
-					Title:       scenario.Title,
-					Opening:     scenario.Opening,
-					Options:     opts,
-					TargetUser:  cop.targetUser,
-				}
-				enc := &activeEncounter{
-					id:         encID,
-					copID:      cop.id,
-					copName:    cop.name,
-					scenario:   scenario,
-					targetUser: cop.targetUser,
-					createdAt:  pm.simTimeSec,
-					msg:        msg,
-				}
-				pm.activeEncountersByID[encID] = enc
-				pm.activeEncountersByUser[cop.targetUser] = enc
-				cop.state = CopStateDialogue
-				out.EncounterStarts = append(out.EncounterStarts, PoliceEncounterStartEvent{Msg: msg})
+				scenario := pm.scenarios[(idx+int(pm.encounterSeq))%len(pm.scenarios)]
+				pm.startEncounterForCop(cop, scenario, EncounterKindFoot, "", "", out)
 				continue
 			}
 
-			// Move toward player
-			dirX := dx / dist
-			dirZ := dz / dist
-			cop.vx = dirX * FootCopApproachSpeed
-			cop.vz = dirZ * FootCopApproachSpeed
-			cop.yaw = NormalizeYaw(math.Atan2(dirX, dirZ))
 			cop.anim = AnimWalk
-
-			nextX := cop.x + cop.vx*dt
-			nextZ := cop.z + cop.vz*dt
-			resolvedX, resolvedZ, hit := pm.resolveFootCopWorldCollision(nextX, nextZ)
-			if hit {
-				// Tangential slide if blocked head-on
-				slideDist := math.Hypot(resolvedX-cop.x, resolvedZ-cop.z)
-				if slideDist < FootCopApproachSpeed*dt*0.25 {
-					tx, tz := -dirZ, dirX
-					tryX, tryZ, _ := pm.resolveFootCopWorldCollision(cop.x+tx*FootCopApproachSpeed*dt, cop.z+tz*FootCopApproachSpeed*dt)
-					if math.Hypot(tryX-cop.x, tryZ-cop.z) > slideDist {
-						resolvedX, resolvedZ = tryX, tryZ
-					}
-				}
-			}
-			cop.x = resolvedX
-			cop.z = resolvedZ
+			pm.resolveFootCopSlide(cop, dx, dz, dist, FootCopApproachSpeed, dt)
 
 		case CopStateDialogue:
 			cop.vx = 0
@@ -1167,6 +1561,181 @@ func (pm *PoliceManager) stepFootCops(dt float64, users map[string]*UserState, o
 			}
 		}
 	}
+	_ = cars
+}
+
+func (pm *PoliceManager) tryStartFootPursuitForCop(cop *footCopEntity, sortedUsers []string, users map[string]*UserState) bool {
+	if len(pm.footPursuits) == 0 {
+		return false
+	}
+	bestUser := ""
+	bestDistSq := FootCopPursuitDetectRadius * FootCopPursuitDetectRadius
+	for _, uname := range sortedUsers {
+		fp := pm.footPursuits[uname]
+		if fp == nil || pm.simTimeSec >= fp.expiresAt {
+			continue
+		}
+		if pm.activeEncountersByUser[uname] != nil || pm.IsUserInFineStop(uname) {
+			continue
+		}
+		u := users[uname]
+		if u == nil || u.Mode != ModePedestrian {
+			continue
+		}
+		dx := u.X - cop.x
+		dz := u.Z - cop.z
+		dSq := dx*dx + dz*dz
+		if dSq <= bestDistSq {
+			bestDistSq = dSq
+			bestUser = uname
+		}
+	}
+	if bestUser == "" {
+		return false
+	}
+	cop.state = CopStateChase
+	cop.targetUser = bestUser
+	cop.approachStartedAt = pm.simTimeSec
+	cop.anim = AnimRun
+	return true
+}
+
+func (pm *PoliceManager) catchFootPursuitSuspect(cop *footCopEntity, u *UserState, fp *footPursuitState, out *PoliceStepOutput) {
+	targetUser := cop.targetUser
+	delete(pm.footPursuits, targetUser)
+
+	for _, other := range pm.footCops {
+		if other.id != cop.id && !other.isCarOfficer && other.targetUser == targetUser {
+			other.state = CopStatePatrol
+			other.targetUser = ""
+			other.anim = AnimWalk
+		}
+	}
+
+	cop.vx = 0
+	cop.vz = 0
+	cop.anim = AnimIdle
+	dx := u.X - cop.x
+	dz := u.Z - cop.z
+	if math.Hypot(dx, dz) > 1e-4 {
+		cop.yaw = NormalizeYaw(math.Atan2(dx, dz))
+	}
+
+	u.VX = 0
+	u.VZ = 0
+	u.Speed = 0
+	u.Anim = AnimIdle
+	exitYaw := NormalizeYaw(math.Atan2(cop.x-u.X, cop.z-u.Z))
+
+	fsMsg := OutboundPoliceFineStopMsg{
+		Type:        TypePoliceFineStop,
+		Stage:       "dialogue",
+		CarID:       fp.carID,
+		OfficerID:   cop.id,
+		OfficerName: cop.name,
+		TargetUser:  targetUser,
+		ExitX:       u.X,
+		ExitZ:       u.Z,
+		ExitYaw:     exitYaw,
+		Reason:      fp.reason,
+	}
+	pm.activeFineStops[targetUser] = &activeFineStop{
+		carID:       fp.carID,
+		officerID:   cop.id,
+		officerName: cop.name,
+		targetUser:  targetUser,
+		reason:      fp.reason,
+		exitX:       u.X,
+		exitZ:       u.Z,
+		exitYaw:     exitYaw,
+		stage:       "dialogue",
+		msg:         fsMsg,
+	}
+	out.FineStopEvents = append(out.FineStopEvents, fsMsg)
+
+	scenario := pm.trafficScenarioForReason(fp.reason)
+	pm.startEncounterForCop(cop, scenario, EncounterKindTraffic, fp.carID, "", out)
+}
+
+func (pm *PoliceManager) stepCarOfficer(cop *footCopEntity, dt float64, users map[string]*UserState, out *PoliceStepOutput) (removed bool) {
+	var homeCar *policeCarEntity
+	for _, pc := range pm.policeCars {
+		if pc.id == cop.homePoliceCarID {
+			homeCar = pc
+			break
+		}
+	}
+
+	if cop.returningToCar {
+		if homeCar == nil {
+			return true
+		}
+		targetX := homeCar.x - math.Cos(homeCar.yaw)*1.9
+		targetZ := homeCar.z + math.Sin(homeCar.yaw)*1.9
+		dx := targetX - cop.x
+		dz := targetZ - cop.z
+		dist := math.Hypot(dx, dz)
+		if dist <= 1.6 || pm.simTimeSec-cop.returnStartedAt >= DpsOfficerReturnMaxSec {
+			if homeCar.state == PoliceCarStateFineStop {
+				pm.endChase(homeCar, ChaseStatusEvaded, "fine_complete", 0)
+			}
+			return true
+		}
+		cop.anim = AnimWalk
+		pm.resolveFootCopSlide(cop, dx, dz, dist, DpsOfficerWalkSpeed, dt)
+		return false
+	}
+
+	if cop.state == CopStateDialogue {
+		cop.vx = 0
+		cop.vz = 0
+		cop.anim = AnimIdle
+		if u, exists := users[cop.targetUser]; exists {
+			dx := u.X - cop.x
+			dz := u.Z - cop.z
+			if math.Hypot(dx, dz) > 1e-4 {
+				cop.yaw = NormalizeYaw(math.Atan2(dx, dz))
+			}
+		}
+		return false
+	}
+
+	fs, ok := pm.activeFineStops[cop.targetUser]
+	if !ok {
+		cop.returningToCar = true
+		cop.returnStartedAt = pm.simTimeSec
+		cop.targetUser = ""
+		return false
+	}
+
+	targetX, targetZ := fs.exitX, fs.exitZ
+	if u, exists := users[cop.targetUser]; exists {
+		targetX, targetZ = u.X, u.Z
+	}
+	dx := targetX - cop.x
+	dz := targetZ - cop.z
+	dist := math.Hypot(dx, dz)
+	elapsed := pm.simTimeSec - cop.approachStartedAt
+	if (dist <= FootCopTalkRadius && elapsed >= 0.35) || elapsed >= DpsOfficerApproachMaxSec {
+		cop.vx = 0
+		cop.vz = 0
+		cop.anim = AnimIdle
+		if dist > 1e-4 {
+			cop.yaw = NormalizeYaw(math.Atan2(dx, dz))
+		}
+		fs.stage = "dialogue"
+		fs.msg.Stage = "dialogue"
+		out.FineStopEvents = append(out.FineStopEvents, fs.msg)
+		scenario := pm.trafficScenarioForReason(fs.reason)
+		pm.startEncounterForCop(cop, scenario, EncounterKindTraffic, fs.carID, fs.policeCarID, out)
+		return false
+	}
+
+	if dist > 1e-4 {
+		cop.anim = AnimWalk
+		pm.resolveFootCopSlide(cop, dx, dz, dist, DpsOfficerWalkSpeed, dt)
+	}
+	return false
 }
 
 func (pm *PoliceManager) advanceFootCopPatrol(cop *footCopEntity, dt float64) {
@@ -1302,13 +1871,326 @@ func (pm *PoliceManager) resolveFootCopWorldCollision(x, z float64) (float64, fl
 	return px, pz, hitAny
 }
 
-func (pm *PoliceManager) isCarTargetedByOtherPolice(carID, excludePoliceID string) bool {
-	for _, pc := range pm.policeCars {
-		if pc.id != excludePoliceID && pc.state == PoliceCarStateChase && pc.targetCarID == carID {
-			return true
+func (pm *PoliceManager) computeSafeExitPose(car *CarState, pc *policeCarEntity) (exitX, exitZ, exitYaw float64) {
+	sinY, cosY := math.Sin(car.Yaw), math.Cos(car.Yaw)
+	perpX, perpZ := cosY, -sinY
+	candidates := [4][2]float64{
+		{car.X + perpX*2.4, car.Z + perpZ*2.4},
+		{car.X - perpX*2.4, car.Z - perpZ*2.4},
+		{car.X - sinY*3.4, car.Z - cosY*3.4},
+		{car.X + sinY*3.4, car.Z + cosY*3.4},
+	}
+	bestScore := math.Inf(1)
+	found := false
+	for _, cand := range candidates {
+		rx, rz, hit := pm.resolveFootCopWorldCollision(cand[0], cand[1])
+		if hit && math.Hypot(rx-cand[0], rz-cand[1]) > 0.35 {
+			continue
+		}
+		distCar := math.Hypot(rx-car.X, rz-car.Z)
+		if distCar < 1.9 {
+			continue
+		}
+		distPC := math.Hypot(rx-pc.x, rz-pc.z)
+		if distPC < 2.2 {
+			continue
+		}
+		// Prefer side reasonably close to police car while still >= 3.2m when possible so walk animation is visible
+		score := math.Abs(distPC - 4.2)
+		if distPC < 3.0 {
+			score += 8.0
+		}
+		if score < bestScore {
+			bestScore = score
+			exitX, exitZ = rx, rz
+			found = true
 		}
 	}
-	return false
+	if !found {
+		exitX, exitZ, _ = pm.resolveFootCopWorldCollision(car.X-perpX*2.4, car.Z-perpZ*2.4)
+	}
+	exitYaw = NormalizeYaw(math.Atan2(pc.x-exitX, pc.z-exitZ))
+	return exitX, exitZ, exitYaw
+}
+
+func (pm *PoliceManager) spawnCarOfficer(pc *policeCarEntity, car *CarState, targetUser string, exitX, exitZ float64) *footCopEntity {
+	officerID := "dps_" + pc.id
+	pm.removeFootCopByID(officerID)
+	officerName := "Инспектор ДПС Громов"
+	if pc.id == "police_car_0" {
+		officerName = "Инспектор ДПС Соколов"
+	} else if pc.id == "police_car_1" {
+		officerName = "Инспектор ДПС Морозов"
+	}
+
+	perpX := math.Cos(pc.yaw)
+	perpZ := -math.Sin(pc.yaw)
+	cands := [2][2]float64{
+		{pc.x - perpX*2.15, pc.z - perpZ*2.15},
+		{pc.x + perpX*2.15, pc.z + perpZ*2.15},
+	}
+	bestX, bestZ := cands[0][0], cands[0][1]
+	bestScore := math.Inf(-1)
+	for _, c := range cands {
+		rx, rz, hit := pm.resolveFootCopWorldCollision(c[0], c[1])
+		if hit && math.Hypot(rx-c[0], rz-c[1]) > 0.4 {
+			continue
+		}
+		if math.Hypot(rx-car.X, rz-car.Z) < 1.75 {
+			continue
+		}
+		dExit := math.Hypot(rx-exitX, rz-exitZ)
+		score := dExit
+		// Prefer clear door at least 3.2m from user so the officer visibly walks toward them
+		if dExit >= 3.2 && dExit <= 7.5 {
+			score = 100.0 - dExit
+		}
+		if score > bestScore {
+			bestScore = score
+			bestX, bestZ = rx, rz
+		}
+	}
+
+	yaw := NormalizeYaw(math.Atan2(exitX-bestX, exitZ-bestZ))
+	cop := &footCopEntity{
+		id:                officerID,
+		name:              officerName,
+		x:                 bestX,
+		y:                 0.0,
+		z:                 bestZ,
+		yaw:               yaw,
+		state:             CopStateApproach,
+		anim:              AnimWalk,
+		targetUser:        targetUser,
+		approachStartedAt: pm.simTimeSec,
+		isCarOfficer:      true,
+		homePoliceCarID:   pc.id,
+	}
+	pm.footCops = append(pm.footCops, cop)
+	return cop
+}
+
+func (pm *PoliceManager) beginCarFineStop(catchingPC *policeCarEntity, target *activeChaseTarget, users map[string]*UserState, cars map[string]*CarState, out *PoliceStepOutput) {
+	car := cars[target.carID]
+	u := users[target.username]
+	if car == nil || u == nil {
+		return
+	}
+
+	// Cancel any stray foot pursuit or regular cop approach toward this user
+	delete(pm.footPursuits, target.username)
+	for _, cop := range pm.footCops {
+		if !cop.isCarOfficer && cop.targetUser == target.username && (cop.state == CopStateApproach || cop.state == CopStateChase) {
+			cop.state = CopStatePatrol
+			cop.targetUser = ""
+			cop.anim = AnimWalk
+		}
+	}
+
+	// Force user out of vehicle and park car
+	exitX, exitZ, exitYaw := pm.computeSafeExitPose(car, catchingPC)
+	car.Driver = ""
+	car.Speed = 0
+	car.VX = 0
+	car.VZ = 0
+	car.YawRate = 0
+	car.Drift = false
+	out.ModifiedCars[car.CarID] = struct{}{}
+	out.ForcedExitCars = append(out.ForcedExitCars, car.CarID)
+
+	u.Mode = ModePedestrian
+	u.CarID = ""
+	u.X = exitX
+	u.Y = 0.0
+	u.Z = exitZ
+	u.VX = 0
+	u.VZ = 0
+	u.Speed = 0
+	u.YawRate = 0
+	u.Drift = false
+	u.Yaw = exitYaw
+	u.Anim = AnimIdle
+	out.ForcedExitUsers = append(out.ForcedExitUsers, target.username)
+
+	// Emit stopped chase events for catching car and any assisting police cars
+	out.ChaseEvents = append(out.ChaseEvents, PoliceChaseEvent{
+		PoliceCarID: catchingPC.id,
+		TargetCarID: target.carID,
+		TargetUser:  target.username,
+		Status:      ChaseStatusStopped,
+		Reason:      "caught",
+		Fine:        0,
+	})
+	for _, otherPC := range pm.policeCars {
+		if otherPC.id != catchingPC.id && otherPC.state == PoliceCarStateChase && otherPC.targetUser == target.username {
+			out.ChaseEvents = append(out.ChaseEvents, pm.endChase(otherPC, ChaseStatusStopped, "caught", 0))
+		}
+	}
+
+	// Park catching police car with flashing lights (no siren) during fine stop
+	catchingPC.state = PoliceCarStateFineStop
+	catchingPC.vx = 0
+	catchingPC.vz = 0
+	catchingPC.speed = 0
+	catchingPC.yawRate = 0
+	catchingPC.siren = false
+	catchingPC.lights = true
+	catchingPC.stopHoldSec = 0
+	catchingPC.outOfRangeSec = 0
+	catchingPC.stuckSec = 0
+	catchingPC.unstuckSec = 0
+	catchingPC.unstuckSteer = 0
+	catchingPC.targetCarID = target.carID
+	catchingPC.targetUser = target.username
+
+	officer := pm.spawnCarOfficer(catchingPC, car, target.username, exitX, exitZ)
+	fsMsg := OutboundPoliceFineStopMsg{
+		Type:        TypePoliceFineStop,
+		Stage:       "approaching",
+		PoliceCarID: catchingPC.id,
+		CarID:       target.carID,
+		OfficerID:   officer.id,
+		OfficerName: officer.name,
+		TargetUser:  target.username,
+		ExitX:       exitX,
+		ExitZ:       exitZ,
+		ExitYaw:     exitYaw,
+		Reason:      target.reason,
+	}
+	pm.activeFineStops[target.username] = &activeFineStop{
+		policeCarID: catchingPC.id,
+		carID:       target.carID,
+		officerID:   officer.id,
+		officerName: officer.name,
+		targetUser:  target.username,
+		reason:      target.reason,
+		exitX:       exitX,
+		exitZ:       exitZ,
+		exitYaw:     exitYaw,
+		stage:       "approaching",
+		msg:         fsMsg,
+	}
+	out.FineStopEvents = append(out.FineStopEvents, fsMsg)
+	delete(pm.activeChases, target.username)
+}
+
+func (pm *PoliceManager) assignPoliceCarTargets(cars map[string]*CarState, out *PoliceStepOutput) {
+	if len(pm.activeChases) == 0 {
+		return
+	}
+	available := make([]*policeCarEntity, 0, len(pm.policeCars))
+	for _, pc := range pm.policeCars {
+		if pc.state == PoliceCarStatePatrol || pc.state == PoliceCarStateChase {
+			available = append(available, pc)
+		}
+	}
+	if len(available) == 0 {
+		return
+	}
+
+	targetUsers := make([]string, 0, len(pm.activeChases))
+	for uname := range pm.activeChases {
+		targetUsers = append(targetUsers, uname)
+	}
+	sort.Strings(targetUsers)
+	targets := make([]*activeChaseTarget, 0, len(targetUsers))
+	for _, uname := range targetUsers {
+		targets = append(targets, pm.activeChases[uname])
+	}
+
+	assignOne := func(pc *policeCarEntity, t *activeChaseTarget) {
+		if pc.state == PoliceCarStateChase && pc.targetUser == t.username && pc.targetCarID == t.carID {
+			return
+		}
+		pc.state = PoliceCarStateChase
+		pc.targetCarID = t.carID
+		pc.targetUser = t.username
+		pc.siren = true
+		pc.lights = true
+		pc.chaseStartedAt = pm.simTimeSec
+		pc.stopHoldSec = 0
+		pc.outOfRangeSec = 0
+		pc.stuckSec = 0
+		pc.unstuckSec = 0
+		pc.unstuckSteer = 0
+		pc.progressX, pc.progressZ, pc.progressAt = pc.x, pc.z, pm.simTimeSec
+		out.ChaseEvents = append(out.ChaseEvents, PoliceChaseEvent{
+			PoliceCarID: pc.id,
+			TargetCarID: t.carID,
+			TargetUser:  t.username,
+			Status:      ChaseStatusStarted,
+			Reason:      t.reason,
+			Fine:        0,
+		})
+	}
+
+	if len(targets) == 1 {
+		for _, pc := range available {
+			assignOne(pc, targets[0])
+		}
+		return
+	}
+
+	if len(available) == 1 {
+		pc := available[0]
+		if pc.state == PoliceCarStateChase {
+			if existing, ok := pm.activeChases[pc.targetUser]; ok {
+				assignOne(pc, existing)
+				return
+			}
+		}
+		best := targets[0]
+		bestDist := math.Inf(1)
+		for _, t := range targets {
+			if car := cars[t.carID]; car != nil {
+				d := math.Hypot(car.X-pc.x, car.Z-pc.z)
+				if d < bestDist {
+					bestDist = d
+					best = t
+				}
+			}
+		}
+		assignOne(pc, best)
+		return
+	}
+
+	// >= 2 available police cars and >= 2 targets: keep distinct valid assignments if already split
+	if available[0].state == PoliceCarStateChase && available[1].state == PoliceCarStateChase &&
+		available[0].targetUser != available[1].targetUser {
+		_, ok0 := pm.activeChases[available[0].targetUser]
+		_, ok1 := pm.activeChases[available[1].targetUser]
+		if ok0 && ok1 {
+			return
+		}
+	}
+
+	costFor := func(pc *policeCarEntity, t *activeChaseTarget) float64 {
+		d := 0.0
+		if car := cars[t.carID]; car != nil {
+			d = math.Hypot(car.X-pc.x, car.Z-pc.z)
+		}
+		if pc.state == PoliceCarStateChase && pc.targetUser == t.username {
+			d -= 15.0
+		}
+		return d
+	}
+
+	bestI, bestJ := 0, 1
+	bestCost := math.Inf(1)
+	for i := 0; i < len(targets); i++ {
+		for j := 0; j < len(targets); j++ {
+			if i == j {
+				continue
+			}
+			c := costFor(available[0], targets[i]) + costFor(available[1], targets[j])
+			if c < bestCost {
+				bestCost = c
+				bestI, bestJ = i, j
+			}
+		}
+	}
+	assignOne(available[0], targets[bestI])
+	assignOne(available[1], targets[bestJ])
 }
 
 func (pm *PoliceManager) stepPoliceCars(dt float64, users map[string]*UserState, cars map[string]*CarState, out *PoliceStepOutput) {
@@ -1318,106 +2200,161 @@ func (pm *PoliceManager) stepPoliceCars(dt float64, users map[string]*UserState,
 	}
 	sort.Strings(carIDs)
 
-	// 1. Evaluate AI state transitions (detection, stop-and-fine, evasion, cooldown expiry)
+	// Sync any pre-set chase state (e.g. direct test setup) into activeChases
 	for _, pc := range pm.policeCars {
-		switch pc.state {
-		case PoliceCarStateCooldown:
-			if pm.simTimeSec >= pc.cooldownUntil {
-				pc.state = PoliceCarStatePatrol
+		if pc.state == PoliceCarStateChase && pc.targetUser != "" && pc.targetCarID != "" {
+			if _, exists := pm.activeChases[pc.targetUser]; !exists && !pm.IsUserInFineStop(pc.targetUser) {
+				pm.activeChases[pc.targetUser] = &activeChaseTarget{
+					carID:               pc.targetCarID,
+					username:            pc.targetUser,
+					reason:              "speeding",
+					startedAt:           pc.chaseStartedAt,
+					everWithinEvadeDist: true,
+				}
 			}
+		}
+	}
 
-		case PoliceCarStatePatrol:
-			bestCarID := ""
-			bestUser := ""
-			bestDistSq := PoliceDetectRadius * PoliceDetectRadius
-			for _, cid := range carIDs {
-				car := cars[cid]
-				if car == nil || car.Driver == "" {
-					continue
-				}
-				u := users[car.Driver]
-				if u == nil || u.Mode != ModeDriving || u.CarID != cid {
-					continue
-				}
-				if until, ok := pm.chaseGraceUntil[car.Driver]; ok && pm.simTimeSec < until {
-					continue
-				}
-				if pm.isCarTargetedByOtherPolice(cid, pc.id) {
-					continue
-				}
-				speedMag := math.Max(math.Abs(car.Speed), math.Hypot(car.VX, car.VZ))
-				if speedMag <= PoliceSpeedLimitMS {
-					continue
-				}
-				dx := car.X - pc.x
-				dz := car.Z - pc.z
-				dSq := dx*dx + dz*dz
-				if dSq <= bestDistSq {
-					bestDistSq = dSq
-					bestCarID = cid
-					bestUser = car.Driver
-				}
-			}
-			if bestCarID != "" {
-				pc.state = PoliceCarStateChase
-				pc.targetCarID = bestCarID
-				pc.targetUser = bestUser
-				pc.siren = true
-				pc.lights = true
-				pc.chaseStartedAt = pm.simTimeSec
-				pc.stopHoldSec = 0
-				pc.outOfRangeSec = 0
-				pc.stuckSec = 0
-				pc.unstuckSec = 0
-				pc.unstuckSteer = 0
-				pc.progressX, pc.progressZ, pc.progressAt = pc.x, pc.z, pm.simTimeSec
-				out.ChaseEvents = append(out.ChaseEvents, PoliceChaseEvent{
-					PoliceCarID: pc.id,
-					TargetCarID: bestCarID,
-					TargetUser:  bestUser,
-					Status:      ChaseStatusStarted,
-					Reason:      "speeding",
-					Fine:        0,
-				})
-			}
+	// 1. Cooldown expiry and active chase lifecycle evaluation (stop-to-fine-stop, evasion, timeout)
+	for _, pc := range pm.policeCars {
+		if pc.state == PoliceCarStateCooldown && pm.simTimeSec >= pc.cooldownUntil {
+			pc.state = PoliceCarStatePatrol
+		}
+	}
 
-		case PoliceCarStateChase:
-			car, carOK := cars[pc.targetCarID]
-			u, userOK := users[pc.targetUser]
-			if !carOK || !userOK || car.Driver != pc.targetUser || u.Mode != ModeDriving || u.CarID != pc.targetCarID {
-				out.ChaseEvents = append(out.ChaseEvents, pm.endChase(pc, ChaseStatusEvaded, "target_exited", 0))
-				continue
-			}
+	chaseUsers := make([]string, 0, len(pm.activeChases))
+	for uname := range pm.activeChases {
+		chaseUsers = append(chaseUsers, uname)
+	}
+	sort.Strings(chaseUsers)
 
+	for _, uname := range chaseUsers {
+		target := pm.activeChases[uname]
+		if target == nil {
+			continue
+		}
+		car, carOK := cars[target.carID]
+		u, userOK := users[uname]
+		if !carOK || !userOK || car.Driver != uname || u.Mode != ModeDriving || u.CarID != target.carID || pm.IsUserInFineStop(uname) {
+			for _, pc := range pm.policeCars {
+				if pc.state == PoliceCarStateChase && pc.targetUser == uname {
+					out.ChaseEvents = append(out.ChaseEvents, pm.endChase(pc, ChaseStatusEvaded, "target_exited", 0))
+				}
+			}
+			delete(pm.activeChases, uname)
+			continue
+		}
+
+		chasingCars := make([]*policeCarEntity, 0, len(pm.policeCars))
+		for _, pc := range pm.policeCars {
+			if pc.state == PoliceCarStateChase && pc.targetUser == uname {
+				chasingCars = append(chasingCars, pc)
+			}
+		}
+
+		targetSpeed := math.Max(math.Abs(car.Speed), math.Hypot(car.VX, car.VZ))
+		caught := false
+		minDist := math.Inf(1)
+		for _, pc := range chasingCars {
 			dist := math.Hypot(car.X-pc.x, car.Z-pc.z)
-			targetSpeed := math.Max(math.Abs(car.Speed), math.Hypot(car.VX, car.VZ))
-
+			if dist < minDist {
+				minDist = dist
+			}
 			if dist <= PoliceStopDist && targetSpeed <= PoliceStopSpeedMS {
 				pc.stopHoldSec += dt
 				if pc.stopHoldSec >= PoliceStopHoldSec {
-					out.ChaseEvents = append(out.ChaseEvents, pm.endChase(pc, ChaseStatusStopped, "fined", PoliceSpeedingFine))
-					continue
+					pm.beginCarFineStop(pc, target, users, cars, out)
+					caught = true
+					break
 				}
 			} else {
 				pc.stopHoldSec = 0
 			}
-
-			if dist > PoliceEvadeDist {
-				pc.outOfRangeSec += dt
-			} else {
-				pc.outOfRangeSec = 0
-			}
-			if pc.outOfRangeSec >= PoliceEvadeHoldSec {
-				out.ChaseEvents = append(out.ChaseEvents, pm.endChase(pc, ChaseStatusEvaded, "evaded", 0))
-				continue
-			}
-			if pm.simTimeSec-pc.chaseStartedAt >= PoliceMaxChaseSec {
-				out.ChaseEvents = append(out.ChaseEvents, pm.endChase(pc, ChaseStatusEvaded, "timeout", 0))
-				continue
-			}
-
 		}
-		pm.updatePoliceCarUnstuck(pc, cars, dt)
+		if caught {
+			continue
+		}
+
+		if len(chasingCars) > 0 {
+			if minDist <= PoliceEvadeDist {
+				target.everWithinEvadeDist = true
+				target.outOfRangeSec = 0
+			} else if target.everWithinEvadeDist || pm.simTimeSec-target.startedAt >= ChaseInitialApproachGraceSec {
+				target.outOfRangeSec += dt
+			}
+		}
+		if target.outOfRangeSec >= PoliceEvadeHoldSec {
+			for _, pc := range chasingCars {
+				out.ChaseEvents = append(out.ChaseEvents, pm.endChase(pc, ChaseStatusEvaded, "evaded", 0))
+			}
+			pm.chaseGraceUntil[uname] = pm.simTimeSec + PoliceTargetGraceSec
+			delete(pm.activeChases, uname)
+			continue
+		}
+		if pm.simTimeSec-target.startedAt >= PoliceMaxChaseSec {
+			for _, pc := range chasingCars {
+				out.ChaseEvents = append(out.ChaseEvents, pm.endChase(pc, ChaseStatusEvaded, "timeout", 0))
+			}
+			pm.chaseGraceUntil[uname] = pm.simTimeSec + PoliceTargetGraceSec
+			delete(pm.activeChases, uname)
+			continue
+		}
+	}
+
+	// 2. Detect new speeding targets and assign/join/split police cars
+	activeAtScanStart := len(pm.activeChases) > 0
+	for _, cid := range carIDs {
+		car := cars[cid]
+		if car == nil || car.Driver == "" {
+			continue
+		}
+		u := users[car.Driver]
+		if u == nil || u.Mode != ModeDriving || u.CarID != cid {
+			continue
+		}
+		if _, already := pm.activeChases[car.Driver]; already {
+			continue
+		}
+		if pm.IsUserInFineStop(car.Driver) || pm.activeEncountersByUser[car.Driver] != nil {
+			continue
+		}
+		if until, ok := pm.chaseGraceUntil[car.Driver]; ok && pm.simTimeSec < until {
+			continue
+		}
+		speedMag := math.Max(math.Abs(car.Speed), math.Hypot(car.VX, car.VZ))
+		if speedMag <= PoliceSpeedLimitMS {
+			continue
+		}
+		nearestAvailDist := math.Inf(1)
+		detected := false
+		for _, pc := range pm.policeCars {
+			if pc.state != PoliceCarStatePatrol && pc.state != PoliceCarStateChase {
+				continue
+			}
+			d := math.Hypot(car.X-pc.x, car.Z-pc.z)
+			if d < nearestAvailDist {
+				nearestAvailDist = d
+			}
+			if d <= PoliceDetectRadius {
+				detected = true
+			}
+		}
+		if detected || (activeAtScanStart && !math.IsInf(nearestAvailDist, 1)) {
+			pm.activeChases[car.Driver] = &activeChaseTarget{
+				carID:               cid,
+				username:            car.Driver,
+				reason:              "speeding",
+				startedAt:           pm.simTimeSec,
+				everWithinEvadeDist: nearestAvailDist <= PoliceEvadeDist,
+			}
+		}
+	}
+	pm.assignPoliceCarTargets(cars, out)
+
+	for _, pc := range pm.policeCars {
+		if pc.state != PoliceCarStateFineStop {
+			pm.updatePoliceCarUnstuck(pc, cars, dt)
+		}
 	}
 
 	// Accumulate per-(policeCarID, carID) collision impulses across physics substeps
@@ -1433,14 +2370,19 @@ func (pm *PoliceManager) stepPoliceCars(dt float64, users map[string]*UserState,
 		dyawRate    float64
 	}
 	accum := make(map[impulsePairKey]*impulseAccum)
+	bumpedTargets := make(map[string]string) // username -> carID
 
-	// 2. Sub-stepped dynamics & 3-circle vehicle collisions (maxSubDt = 0.016s)
+	// 3. Sub-stepped dynamics & 3-circle vehicle collisions (maxSubDt = 0.016s)
 	subRemaining := dt
 	for subRemaining > 1e-4 {
 		subDt := math.Min(0.016, subRemaining)
 		subRemaining -= subDt
 
 		for _, pc := range pm.policeCars {
+			if pc.state == PoliceCarStateFineStop {
+				pc.vx, pc.vz, pc.speed, pc.yawRate = 0, 0, 0, 0
+				continue
+			}
 			throttle, steer, boost := pm.computePoliceCarControl(pc, cars)
 			stepSinglePoliceVehicleDynamics(pc, throttle, steer, boost, subDt)
 			pm.resolvePoliceCarWorldCollision(pc)
@@ -1453,8 +2395,12 @@ func (pm *PoliceManager) stepPoliceCars(dt float64, users map[string]*UserState,
 					a := pm.policeCars[i].asBody()
 					b := pm.policeCars[j].asBody()
 					if ResolveVehiclePairCollision(&a, &b) {
-						pm.policeCars[i].applyBody(a)
-						pm.policeCars[j].applyBody(b)
+						if pm.policeCars[i].state != PoliceCarStateFineStop {
+							pm.policeCars[i].applyBody(a)
+						}
+						if pm.policeCars[j].state != PoliceCarStateFineStop {
+							pm.policeCars[j].applyBody(b)
+						}
 					}
 				}
 			}
@@ -1516,7 +2462,9 @@ func (pm *PoliceManager) stepPoliceCars(dt float64, users map[string]*UserState,
 					}
 				}
 				if collided {
-					pc.applyBody(bodyA)
+					if pc.state != PoliceCarStateFineStop {
+						pc.applyBody(bodyA)
+					}
 					car.X = bodyB.X
 					car.Z = bodyB.Z
 					if car.Driver == "" {
@@ -1540,6 +2488,9 @@ func (pm *PoliceManager) stepPoliceCars(dt float64, users map[string]*UserState,
 							u.VZ = car.VZ
 							u.YawRate = car.YawRate
 							u.Speed = car.Speed
+							if pc.state == PoliceCarStatePatrol {
+								bumpedTargets[car.Driver] = cid
+							}
 						}
 						key := impulsePairKey{policeCarID: pc.id, carID: cid}
 						acc := accum[key]
@@ -1557,6 +2508,32 @@ func (pm *PoliceManager) stepPoliceCars(dt float64, users map[string]*UserState,
 				}
 			}
 		}
+	}
+
+	// Trigger chase mode immediately if any driving player bumped into a patrolling police car
+	if len(bumpedTargets) > 0 {
+		bumpedUsers := make([]string, 0, len(bumpedTargets))
+		for uname := range bumpedTargets {
+			bumpedUsers = append(bumpedUsers, uname)
+		}
+		sort.Strings(bumpedUsers)
+		for _, uname := range bumpedUsers {
+			cid := bumpedTargets[uname]
+			if pm.IsUserInFineStop(uname) || pm.activeEncountersByUser[uname] != nil {
+				continue
+			}
+			if _, exists := pm.activeChases[uname]; !exists {
+				delete(pm.chaseGraceUntil, uname)
+				pm.activeChases[uname] = &activeChaseTarget{
+					carID:               cid,
+					username:            uname,
+					reason:              "collision",
+					startedAt:           pm.simTimeSec,
+					everWithinEvadeDist: true,
+				}
+			}
+		}
+		pm.assignPoliceCarTargets(cars, out)
 	}
 
 	// Emit vehicle_impulse events subject to 300ms per-pair cooldown
@@ -1658,11 +2635,20 @@ func (pm *PoliceManager) computePoliceCarControl(pc *policeCarEntity, cars map[s
 					const sideOffset = 3.2
 					plusBlocked := pm.isPointBlockedForVehicle(aimX+perpX*sideOffset, aimZ+perpZ*sideOffset)
 					minusBlocked := pm.isPointBlockedForVehicle(aimX-perpX*sideOffset, aimZ-perpZ*sideOffset)
+					hasOtherSeniorChaser := false
+					for _, other := range pm.policeCars {
+						if other.id < pc.id && other.state == PoliceCarStateChase && other.targetCarID == pc.targetCarID {
+							hasOtherSeniorChaser = true
+							break
+						}
+					}
 					side := 1.0
 					if plusBlocked && !minusBlocked {
 						side = -1.0
 					} else if !plusBlocked && minusBlocked {
 						side = 1.0
+					} else if hasOtherSeniorChaser {
+						side = -1.0
 					} else {
 						sideDot := (pc.x-target.X)*perpX + (pc.z-target.Z)*perpZ
 						if sideDot < -0.1 {
@@ -1688,7 +2674,7 @@ func (pm *PoliceManager) computePoliceCarControl(pc *policeCarEntity, cars map[s
 		}
 	}
 	if chasingTarget {
-		boost = (targetDist > 7.5 || targetSpeed > PoliceSpeedLimitMS+1.5)
+		boost = targetDist > 20.0 && (targetSpeed > PoliceSpeedLimitMS+1.5 || targetDist > 25.0)
 	}
 
 	if !chasingTarget && len(pc.waypoints) > 0 {
@@ -1896,6 +2882,17 @@ func (pm *PoliceManager) contextSteerYaw(pc *policeCarEntity, cars map[string]*C
 						continue
 					}
 					if math.Hypot(x-car.X, z-car.Z) < 2*CarCollisionRadius+0.7 {
+						blocked = true
+						break
+					}
+				}
+			}
+			if !blocked {
+				for _, otherPC := range pm.policeCars {
+					if otherPC == nil || otherPC.id == pc.id {
+						continue
+					}
+					if math.Hypot(x-otherPC.x, z-otherPC.z) < 2*CarCollisionRadius+0.7 {
 						blocked = true
 						break
 					}

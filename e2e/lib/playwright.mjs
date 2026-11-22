@@ -403,7 +403,7 @@ export async function enterCarAndDrivePastSpeed(
             return v ? { id: v.id, x: v.x, z: v.z } : null;
         }
         const avail = vehicles
-            .filter((v) => !v.remoteDriver)
+            .filter((v) => !v.remoteDriver && !window.GAME_STATE?.vehicleBans?.has(v.id))
             .sort((a, b) => Math.hypot(a.x - px, a.z - pz) - Math.hypot(b.x - px, b.z - pz));
         const nearest = avail[0] || vehicles[0];
         return nearest ? { id: nearest.id, x: nearest.x, z: nearest.z } : null;

@@ -72,4 +72,30 @@ describe('Police Dialogues Schema (police_dialogues.json)', () => {
         expect(Array.isArray(npcDialogues)).toBe(true);
         expect(npcDialogues.length).toBe(10);
     });
+
+    test('traffic_scenarios contains traffic_speeding, traffic_collision, traffic_foot_escape with 66666 unblocked option vs 5-min car ban', () => {
+        expect(Array.isArray(policeDialogues.traffic_scenarios)).toBe(true);
+        const ids = policeDialogues.traffic_scenarios.map((s) => s.id);
+        expect(ids).toContain('traffic_speeding');
+        expect(ids).toContain('traffic_collision');
+        expect(ids).toContain('traffic_foot_escape');
+
+        for (const scenario of policeDialogues.traffic_scenarios) {
+            expect(CYRILLIC_RE.test(scenario.title)).toBe(true);
+            expect(CYRILLIC_RE.test(scenario.opening)).toBe(true);
+            expect(scenario.options.length).toBe(4);
+            scenario.options.forEach((opt, idx) => {
+                expect(opt.index).toBe(idx);
+                expect(Number.isInteger(opt.fine)).toBe(true);
+                expect(opt.fine).toBeGreaterThan(0);
+                if (idx === 3) {
+                    expect(opt.fine).toBe(66666);
+                    expect(opt.blocks_vehicle).toBe(false);
+                } else {
+                    expect(opt.blocks_vehicle).toBe(true);
+                    expect(opt.reply).toContain('наложен запрет на эксплуатацию транспортного средства');
+                }
+            });
+        }
+    });
 });

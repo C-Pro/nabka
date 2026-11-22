@@ -49,6 +49,40 @@ export function updateThirdPersonCamera(dt = 0.016) {
 
     removeCameraShake(camera);
 
+    const fineSeq = GAME_STATE.policeFineSequence;
+    if (fineSeq && fineSeq.topDownActive) {
+        if (Player.group && !GAME_STATE.inVehicle) {
+            Player.group.visible = true;
+        }
+        let anchor = null;
+        if (fineSeq.officerId && GAME_STATE.policeCops instanceof Map) {
+            anchor = GAME_STATE.policeCops.get(fineSeq.officerId) || null;
+        }
+        if (!anchor && fineSeq.policeCarId && GAME_STATE.policeCars instanceof Map) {
+            anchor = GAME_STATE.policeCars.get(fineSeq.policeCarId) || null;
+        }
+        const anchorPos = anchor ? (anchor.renderPosition || anchor.group?.position || anchor) : null;
+        const ax = (anchorPos && Number.isFinite(Number(anchorPos.x))) ? Number(anchorPos.x) : Player.position.x;
+        const az = (anchorPos && Number.isFinite(Number(anchorPos.z))) ? Number(anchorPos.z) : Player.position.z;
+        const midX = (Player.position.x + ax) * 0.5;
+        const midZ = (Player.position.z + az) * 0.5;
+        const spread = Math.hypot(Player.position.x - ax, Player.position.z - az);
+        const topHeight = Math.max(19, Math.min(30, 18 + spread * 1.15));
+        const yaw = (fineSeq.savedCamera && Number.isFinite(fineSeq.savedCamera.cameraYaw))
+            ? fineSeq.savedCamera.cameraYaw
+            : GAME_STATE.cameraYaw;
+        const horizOff = 1.6;
+        const desiredPos = new THREE.Vector3(
+            midX + Math.sin(yaw) * horizOff,
+            Player.position.y + topHeight,
+            midZ + Math.cos(yaw) * horizOff
+        );
+        camera.position.lerp(desiredPos, smoothingAlpha(10, dt));
+        camera.lookAt(midX, Player.position.y + 1.0, midZ);
+        applyCameraShake(camera, dt);
+        return;
+    }
+
     const mode = GAME_STATE.cameraModes[GAME_STATE.cameraMode] || { heightOffset: 2.6 };
     const targetBase = GAME_STATE.inVehicle ? GAME_STATE.inVehicle.group.position : Player.position;
 

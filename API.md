@@ -386,7 +386,7 @@ Broadcast when a cannon shot is confirmed, or at daily noon:
 
 ### 3.10. Police Simulation, Encounters, Chases & Economy
 
-The server runs a fixed-timestep (`20 Hz`, `dt = 0.05s`) authoritative police simulation governing foot policemen (`cop_0..cop_3`), police patrol cars (`police_car_0`, `police_car_1`), speeding chases (`> 40 km/h` = `40 / 3.6` m/s), 3-circle heavy vehicle collisions (`4200 kg` police car mass), unsolicited Russian-language encounters, and persistent per-session player wallets (`accounts`, default `125400`, negative `int64` balances allowed).
+The server runs a fixed-timestep (`20 Hz`, `dt = 0.05s`) authoritative police simulation governing foot policemen (`cop_0..cop_3` plus temporary DPS officers `dps_police_car_*`), police patrol cars (`police_car_0`, `police_car_1`), speeding chases (`> 40 km/h` = `40 / 3.6` m/s), bump-triggered collision chases (`reason: "collision"`), 1-minute foot pursuits after fleeing a chased vehicle, animated traffic fine-stops with temporary 5-minute (`300s`) vehicle bans, 3-circle heavy vehicle collisions (`4200 kg` police car mass), non-dismissible Russian-language encounters, and persistent per-session player wallets (`accounts`, default `125400`, negative `int64` balances allowed).
 
 #### Balance Update (`balance_update`, Server -> Clients)
 Broadcast whenever a player's authoritative wallet changes (e.g., dialogue fine or speeding ticket):
@@ -449,32 +449,64 @@ Sent on join baseline and broadcast at `20 Hz` to all connected clients:
       "siren": false,
       "lights": false
     }
+  ],
+  "vehicle_bans": [
+    {
+      "car_id": "car_0",
+      "remaining_ms": 298500,
+      "reason": "наложен запрет на эксплуатацию транспортного средства"
+    }
   ]
 }
 ```
-- `foot_cops[].state`: `"patrol" | "approach" | "dialogue" | "cooldown"`
-- `police_cars[].state`: `"patrol" | "chase" | "cooldown"`
-- `foot_cops` and `police_cars` are always encoded as MsgPack arrays (never `null`). All numeric and boolean fields are always present.
+- `foot_cops[].state`: `"patrol" | "approach" | "chase" | "dialogue" | "cooldown"` (`"chase"` is used during a 1-minute foot pursuit after a driver exits a chased car).
+- `police_cars[].state`: `"patrol" | "chase" | "fine_stop" | "cooldown"` (`"fine_stop"` keeps emergency lights on without siren while the DPS officer walks to the detained driver and conducts the traffic encounter).
+- `vehicle_bans`: active 5-minute (`300s`) driving bans imposed after traffic fines without the `66666` ₽ option; client `move` (`mode: "driving"`) targeting a banned `car_id` is rejected with `type: "error"` (`op: "move"`).
+- `foot_cops`, `police_cars`, and `vehicle_bans` are always encoded as MsgPack arrays (never `null`). All numeric and boolean fields are always present.
+
+#### Animated Fine Stop (`police_fine_stop`, Server -> Clients)
+Broadcast when a police patrol car catches a chased driver (`stage: "approaching"`) or once the DPS officer / pursuing foot cop reaches talking distance (`stage: "dialogue"`), and re-sent to `target_user` on `4408` connection replacement if still unresolved:
+```json
+{
+  "type": "police_fine_stop",
+  "stage": "approaching",
+  "police_car_id": "police_car_0",
+  "car_id": "car_0",
+  "officer_id": "dps_police_car_0",
+  "officer_name": "Инспектор ДПС Соколов",
+  "target_user": "vasya",
+  "exit_x": 19.6,
+  "exit_z": 12.0,
+  "exit_yaw": 1.57,
+  "reason": "speeding"
+}
+```
+- Upon `"approaching"`, the target player is authoritatively removed from the car (vehicle parked with `driver: ""`, `speed: 0`) at `(exit_x, 0, exit_z)`, the client switches to a GTA1-style top-down camera framing the stop, and movement/vehicle entry are locked until the encounter resolves.
+- On a pedestrian-cop foot-pursuit catch after fleeing a chased vehicle, `"dialogue"` is emitted directly with `police_car_id` omitted and `car_id` identifying the chased vehicle.
 
 #### Unsolicited Police Encounter Start (`police_encounter_start`, Server -> Target Client)
-Sent directly to `target_user` when an approaching foot policeman reaches talking distance (`<= 2.4 m`), and re-sent on `4408` connection replacement if still unresolved:
+Sent directly to `target_user` when an approaching/chasing foot policeman or DPS stop officer reaches talking distance (`<= 2.4 m`), and re-sent on `4408` connection replacement if still unresolved. Police dialogues (both foot and traffic) **cannot be dismissed, timed out, cancelled by entering a vehicle, or closed with Escape/close button** — the player must answer with `police_dialogue_choice`:
 ```json
 {
   "type": "police_encounter_start",
   "encounter_id": "enc_1",
-  "cop_id": "cop_0",
-  "cop_name": "Сержант ППС Дробышев",
-  "scenario_id": "weed_shakedown",
-  "title": "Личный досмотр у набережной",
-  "opening": "Так, гражданин, стоять, руки из карманов! ...",
+  "cop_id": "dps_police_car_0",
+  "cop_name": "Инспектор ДПС Соколов",
+  "scenario_id": "traffic_speeding",
+  "title": "Остановка ДПС: превышение скорости",
+  "opening": "Инспектор ДПС! Вы превысили ограничение 40 км/ч на Спортивной набережной. ...",
   "options": [
-    { "index": 0, "text": "...", "fine": 5000 },
-    { "index": 1, "text": "...", "fine": 3500 },
-    { "index": 2, "text": "...", "fine": 8000 }
+    { "index": 0, "text": "...", "fine": 5000, "blocks_vehicle": true },
+    { "index": 1, "text": "...", "fine": 15000, "blocks_vehicle": true },
+    { "index": 2, "text": "...", "fine": 25000, "blocks_vehicle": true },
+    { "index": 3, "text": "...", "fine": 66666, "blocks_vehicle": false }
   ],
-  "target_user": "vasya"
+  "target_user": "vasya",
+  "encounter_kind": "traffic",
+  "car_id": "car_0"
 }
 ```
+- `encounter_kind`: `"foot"` (routine PPs/pedestrian encounter, omitted if empty) or `"traffic"` (DPS stop / foot-pursuit catch, every option carries `fine > 0`; paying `66666` ₽ leaves `blocks_vehicle: false` so the car stays unblocked, while other options impose a 300-second ban on `car_id`).
 
 #### Police Dialogue Choice (`police_dialogue_choice`, Client -> Server)
 Sent by the target player to select an option in an active encounter:
@@ -497,19 +529,27 @@ Broadcast upon valid choice resolution:
 {
   "type": "police_encounter_result",
   "encounter_id": "enc_1",
-  "cop_id": "cop_0",
-  "cop_name": "Сержант ППС Дробышев",
-  "scenario_id": "weed_shakedown",
+  "cop_id": "dps_police_car_0",
+  "cop_name": "Инспектор ДПС Соколов",
+  "scenario_id": "traffic_speeding",
   "target_user": "vasya",
   "option_index": 0,
-  "reply_text": "...",
+  "reply_text": "Протокол оформлен, штраф 5 000 ₽ списан. На автомобиль наложен запрет на эксплуатацию транспортного средства на 5 минут.",
   "fine": 5000,
-  "money": 120400
+  "money": 120400,
+  "car_id": "car_0",
+  "vehicle_blocked": true,
+  "vehicle_ban_sec": 300
 }
 ```
+- When `vehicle_blocked` is `false` (the `66666` ₽ traffic option) or for `"foot"` encounters, `vehicle_blocked` and `vehicle_ban_sec` are omitted (`omitempty`) and the vehicle can be driven again immediately once the player dismisses the resolved modal and restores their previous camera view.
 
 #### Police Chase Event (`police_chase`, Server -> Clients)
-Broadcast when a patrolling police car starts a chase (`max(|speed|, hypot(vx, vz)) > 40 / 3.6` m/s within `45 m`), stops & fines the target (`dist <= 7.5 m` and `speed <= 3.0 m/s` sustained `0.5s`, fine `5000`), or ends in evasion (`dist > 90 m` for `5s`, `45s` max duration, target exits vehicle, or disconnects):
+Broadcast when police car chases start, catch/stop a driver (initiating the `police_fine_stop` dialogue sequence), or end in evasion/exit:
+- **Multi-car join & split**: if 1 player is actively chased, the second patrol car joins the chase (`status: "started"` for both `police_car_0` and `police_car_1`). If `>= 2` players are actively fleeing simultaneously, the two patrol cars split between distinct targets (nearest/stickiness assignment).
+- **Triggers**: speeding (`max(|speed|, hypot(vx, vz)) > 40 / 3.6` m/s within `45 m`, or detected while another chase is active; `reason: "speeding"`) or colliding with a patrolling police car (`reason: "collision"`, regardless of speed).
+- **Stopping**: `dist <= 7.5 m` and `speed <= 3.0 m/s` sustained for `0.5s` emits `status: "stopped"`, `reason: "caught"`, `fine: 0` alongside `police_fine_stop` (`stage: "approaching"`). The actual fine amount (`5000..66666`) and optional 5-minute vehicle ban are resolved via `police_dialogue_choice` / `police_encounter_result`.
+- **Foot pursuit on exit**: exiting a chased vehicle ends the car chase (`status: "evaded"`, `reason: "target_exited"`) and alerts nearby pedestrian policemen (`<= 75 m`) to sprint after the player (`foot_cops[].state = "chase"`) for up to `60s`; catching them triggers `traffic_foot_escape` (`police_fine_stop` `stage: "dialogue"`).
 ```json
 {
   "type": "police_chase",
@@ -517,9 +557,9 @@ Broadcast when a patrolling police car starts a chase (`max(|speed|, hypot(vx, v
   "target_car_id": "car_0",
   "target_user": "vasya",
   "status": "stopped",
-  "reason": "fined",
-  "fine": 5000,
-  "money": -2600
+  "reason": "caught",
+  "fine": 0,
+  "money": 125400
 }
 ```
 - `status`: `"started" | "stopped" | "evaded"`
@@ -542,7 +582,7 @@ Broadcast when a 3-circle heavy rigid-body collision (`4200 kg` police car vs `1
 ```
 
 #### Server-Reserved Message Types
-Clients are strictly prohibited from sending server-originated message types. Sending any of `join`, `leave`, `cannon_shot`, `balance_update`, `police_state`, `police_encounter_start`, `police_encounter_result`, `police_chase`, or `vehicle_impulse` from a client returns `type: "error"` containing `"server reserved"` without mutating world state.
+Clients are strictly prohibited from sending server-originated message types. Sending any of `join`, `leave`, `cannon_shot`, `balance_update`, `police_state`, `police_encounter_start`, `police_encounter_result`, `police_fine_stop`, `police_chase`, or `vehicle_impulse` from a client returns `type: "error"` containing `"server reserved"` without mutating world state.
 
 #### Non-Driveable Police Vehicles
 Police car IDs (`police_car_*`) are excluded from `world_map.json` `vehicles[]` and `Hub.allowedCars`. Any client `move` (`mode: "driving"`) targeting `police_car*` is rejected with `type: "error"` (`op: "move"`, `"cannot drive police vehicle"`).

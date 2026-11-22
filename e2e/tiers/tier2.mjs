@@ -598,7 +598,7 @@ export function getTier2Tests() {
         },
         {
             id: 'T2-F4-05',
-            name: 'T2-F4.5: Stationary car in path of patrolling police car does not trigger speeding chase',
+            name: 'T2-F4.5: Stationary car near patrolling police car (without collision) does not trigger speeding chase',
             tier: 2,
             async run({ binaryPath }) {
                 await withServer({ binaryPath }, async (srv) => {
@@ -610,7 +610,7 @@ export function getTier2Tests() {
                         for (let i = 0; i < 20; i++) {
                             client.sendMoveDriving({
                                 car_id: 'car_0',
-                                x: pc.x,
+                                x: pc.x + 12.0,
                                 y: 0,
                                 z: pc.z,
                                 speed: 0,
@@ -624,7 +624,7 @@ export function getTier2Tests() {
                             await sleep(60);
                         }
                         const chases = client.messagesSince(cur).filter((m) => m.type === 'police_chase');
-                        assertEqual(chases.length, 0, 'stationary car must not trigger speeding chase');
+                        assertEqual(chases.length, 0, 'stationary non-colliding car must not trigger speeding chase');
                     } finally {
                         await client.close();
                     }
@@ -771,7 +771,7 @@ export function getTier2Tests() {
         // =====================================================================
         {
             id: 'T2-F6-01',
-            name: 'T2-F6.1: All 6 S->C police message types sent by client are rejected as server reserved',
+            name: 'T2-F6.1: All 7 S->C police message types sent by client are rejected as server reserved',
             tier: 2,
             async run({ binaryPath }) {
                 await withServer({ binaryPath }, async (srv) => {

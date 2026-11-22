@@ -765,7 +765,21 @@ func (h *Hub) run() {
 					continue
 				}
 
-				// 6. Re-send unresolved police encounter if preserved across 4408 replacement
+				// 6. Re-send unresolved fine stop and police encounter if preserved across 4408 replacement
+				if fs := h.police.ActiveFineStopFor(c.client.Username); fs != nil {
+					if fsMsg, err := msgpack.Marshal(*fs); err == nil {
+						select {
+						case c.client.send <- fsMsg:
+						default:
+							baselineFailed = true
+						}
+					}
+				}
+				if baselineFailed {
+					h.removeClientLocked(c.client, "slow consumer")
+					continue
+				}
+
 				if enc := h.police.ActiveEncounterFor(c.client.Username); enc != nil {
 					if encMsg, err := msgpack.Marshal(*enc); err == nil {
 						select {
@@ -819,6 +833,11 @@ func (h *Hub) run() {
 					continue
 				}
 
+				if h.police.IsUserInFineStop(c.sender.Username) {
+					// Keep detained player pinned at the fine-stop position until the encounter resolves
+					continue
+				}
+
 				// If user was previously driving a car, release that car as parked
 				var prevCar *CarState
 				if prev, ok := h.users[c.sender.Username]; ok && prev.Mode == ModeDriving && prev.CarID != "" {
@@ -847,7 +866,7 @@ func (h *Hub) run() {
 
 				if prevCar != nil {
 					h.broadcastCarStateLocked(prevCar)
-					chaseEvents := h.police.OnPlayerExitedVehicle(c.sender.Username, prevCar.CarID)
+					chaseEvents := h.police.OnPlayerExitedVehicle(c.sender.Username, prevCar.CarID, c.move.X, c.move.Z)
 					for _, ce := range chaseEvents {
 						h.broadcastChaseEventLocked(ce)
 					}
@@ -873,6 +892,85 @@ func (h *Hub) run() {
 
 				// 1. Validate vehicle ID against allowed world vehicles
 				if _, ok := h.allowedCars[c.move.CarID]; !ok {
+					continue
+				}
+
+				// 1b. Enforce police fine-stop detention, unresolved police dialog lock, and 5-minute vehicle bans
+				if h.police.IsUserInFineStop(c.sender.Username) {
+					if c.move.CarID == h.police.FineStopCarForUser(c.sender.Username) {
+						// Ignore stale in-flight driving frame right after forced exit
+						continue
+					}
+					errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+						Type:    TypeError,
+						Message: "нельзя сесть в машину во время общения с полицией",
+						Op:      TypeMove,
+					})
+					select {
+					case c.sender.send <- errMsg:
+					default:
+					}
+					continue
+				}
+				if h.police.ActiveEncounterFor(c.sender.Username) != nil {
+					errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+						Type:    TypeError,
+						Message: "нельзя сесть в машину во время общения с полицией",
+						Op:      TypeMove,
+					})
+					select {
+					case c.sender.send <- errMsg:
+					default:
+					}
+					continue
+				}
+				if h.police.IsCarInFineStop(c.move.CarID) {
+					errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+						Type:    TypeError,
+						Message: "машина на проверке у ДПС",
+						Op:      TypeMove,
+					})
+					select {
+					case c.sender.send <- errMsg:
+					default:
+					}
+					continue
+				}
+				if remSec := h.police.VehicleBanRemainingSec(c.move.CarID); remSec > 0 {
+					errMsg, _ := msgpack.Marshal(OutboundErrorMsg{
+						Type:    TypeError,
+						Message: fmt.Sprintf("%s (%s)", VehicleBanReasonText, formatDurationMMSS(remSec)),
+						Op:      TypeMove,
+					})
+					select {
+					case c.sender.send <- errMsg:
+					default:
+					}
+					if trackedCar, ok := h.cars[c.move.CarID]; ok && trackedCar != nil {
+						if carMsg, err := msgpack.Marshal(OutboundDrivingMoveMsg{
+							Username:     trackedCar.Driver,
+							Type:         TypeMove,
+							Mode:         ModeDriving,
+							CarID:        trackedCar.CarID,
+							X:            trackedCar.X,
+							Y:            trackedCar.Y,
+							Z:            trackedCar.Z,
+							Speed:        trackedCar.Speed,
+							VX:           trackedCar.VX,
+							VZ:           trackedCar.VZ,
+							YawRate:      trackedCar.YawRate,
+							Sequence:     trackedCar.Sequence,
+							SampleTimeMS: trackedCar.SampleTimeMS,
+							Yaw:          trackedCar.Yaw,
+							Drift:        trackedCar.Drift,
+							Lights:       trackedCar.Lights,
+						}); err == nil {
+							select {
+							case c.sender.send <- carMsg:
+							default:
+							}
+						}
+					}
 					continue
 				}
 
@@ -1019,23 +1117,40 @@ func (h *Hub) run() {
 				}
 				var newMoney int64
 				if res.Fine != 0 {
-					newMoney = h.applyBalanceDeltaLocked(c.sender.Username, -res.Fine, "police_fine", res.CopID)
+					balReason := "police_fine"
+					sourceID := res.CopID
+					if res.EncounterKind == EncounterKindTraffic {
+						balReason = "speeding_fine"
+						if res.PoliceCarID != "" {
+							sourceID = res.PoliceCarID
+						}
+					}
+					newMoney = h.applyBalanceDeltaLocked(c.sender.Username, -res.Fine, balReason, sourceID)
 				} else {
 					newMoney = h.ensureAccountLocked(c.sender.Username).Money
 				}
 				if resBytes, err := msgpack.Marshal(OutboundPoliceEncounterResultMsg{
-					Type:        TypePoliceEncounterResult,
-					EncounterID: res.EncounterID,
-					CopID:       res.CopID,
-					CopName:     res.CopName,
-					ScenarioID:  res.ScenarioID,
-					TargetUser:  res.TargetUser,
-					OptionIndex: res.OptionIndex,
-					ReplyText:   res.ReplyText,
-					Fine:        res.Fine,
-					Money:       newMoney,
+					Type:           TypePoliceEncounterResult,
+					EncounterID:    res.EncounterID,
+					CopID:          res.CopID,
+					CopName:        res.CopName,
+					ScenarioID:     res.ScenarioID,
+					TargetUser:     res.TargetUser,
+					OptionIndex:    res.OptionIndex,
+					ReplyText:      res.ReplyText,
+					Fine:           res.Fine,
+					Money:          newMoney,
+					CarID:          res.CarID,
+					VehicleBlocked: res.VehicleBlocked,
+					VehicleBanSec:  res.VehicleBanSec,
 				}); err == nil {
 					h.broadcastData(resBytes, nil)
+				}
+				if len(h.clients) > 0 {
+					h.policeSeq++
+					if stateData, err := msgpack.Marshal(h.police.StateMsg(h.policeSeq)); err == nil {
+						h.broadcastData(stateData, nil)
+					}
 				}
 
 			case *cmdBroadcast:
@@ -1227,11 +1342,51 @@ func (h *Hub) broadcastChaseEventLocked(ce PoliceChaseEvent) {
 	}
 }
 
+func formatDurationMMSS(sec float64) string {
+	total := int(math.Ceil(math.Max(0, sec)))
+	return fmt.Sprintf("%d:%02d", total/60, total%60)
+}
+
 func (h *Hub) stepSimulationLocked(dt float64) {
 	if dt <= 0 || !IsFinite(dt) {
 		return
 	}
 	res := h.police.Step(dt, h.users, h.cars)
+
+	for _, cid := range res.ForcedExitCars {
+		if car := h.cars[cid]; car != nil {
+			h.broadcastCarStateLocked(car)
+		}
+	}
+
+	for _, uname := range res.ForcedExitUsers {
+		if u := h.users[uname]; u != nil {
+			if userMsg, err := msgpack.Marshal(OutboundPedestrianMoveMsg{
+				Username: u.Username,
+				Type:     TypeMove,
+				Mode:     ModePedestrian,
+				X:        u.X,
+				Y:        u.Y,
+				Z:        u.Z,
+				VX:       u.VX,
+				VZ:       u.VZ,
+				Yaw:      u.Yaw,
+				Anim:     u.Anim,
+			}); err == nil {
+				h.broadcastData(userMsg, h.clients[uname])
+			}
+		}
+	}
+
+	for _, ce := range res.ChaseEvents {
+		h.broadcastChaseEventLocked(ce)
+	}
+
+	for _, fs := range res.FineStopEvents {
+		if data, err := msgpack.Marshal(fs); err == nil {
+			h.broadcastData(data, nil)
+		}
+	}
 
 	for _, ev := range res.EncounterStarts {
 		if targetClient, ok := h.clients[ev.Msg.TargetUser]; ok {
@@ -1242,10 +1397,6 @@ func (h *Hub) stepSimulationLocked(dt float64) {
 				}
 			}
 		}
-	}
-
-	for _, ce := range res.ChaseEvents {
-		h.broadcastChaseEventLocked(ce)
 	}
 
 	for _, ie := range res.ImpulseEvents {
